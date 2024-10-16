@@ -1,0 +1,5 @@
+.lsp/
+.clj-kondo/*/
+.calva/output-window/
+.cpcache/
+.nrepl*

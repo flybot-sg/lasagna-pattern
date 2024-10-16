@@ -1,0 +1,12 @@
+{:paths ["src" "resources"],
+ :deps {},
+ :aliases
+ {:dev
+  {:extra-deps {io.github.robertluo/rich-comment-tests {:git/tag "v1.1.1", :git/sha "3f65ecb"}}},
+  :debug
+  {:classpath-overrides {org.clojure/clojure nil},
+   :jvm-opts
+   ["-Dclojure.storm.instrumentEnable=true" "-Dclojure.storm.instrumentOnlyPrefixes=sg.flybot"],
+   :extra-deps
+   {com.github.jpmonettas/clojure {:mvn/version "RELEASE"},
+    com.github.jpmonettas/flow-storm-dbg {:mvn/version "RELEASE"}}}}}
