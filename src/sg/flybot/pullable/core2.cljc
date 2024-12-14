@@ -33,9 +33,9 @@
        (take-while #(not (zip/end? (first %))))))
 
 (defn either
-  "returns a predicate that accepts either `pred1` or `pred2`"
-  [pred1 pred2]
-  (fn [x] (or (pred1 x) (pred2 x))))
+  "returns a predicate that accepts either `preds`"
+  [& preds]
+  (fn [x] (reduce #(or %1 (%2 x)) false preds)))
 
 (defn elem-dir
   "returns a sequence of elements and directions from a `seq-loc-dir`"
@@ -57,7 +57,7 @@
   "returns a common zipper support sequence, maps (as sequence of MapEntry)"
   [data]
   (zip/zipper 
-   (either sequential? map?)
+   (either sequential? map? set?)
    seq
    (fn [node children]
      (with-meta children (meta node)))
@@ -65,9 +65,11 @@
 
 ^:rct/test
 (comment
-  (-> (comm-zip [1 2 (array-map :a 3 :b 4) '(5 6)])
+  (-> (comm-zip [1 2 (array-map :a 3 :b 4) '(5 6) (sorted-set 7 8)])
       (loc-dir-seq)
       (elem-dir)
       vec) ;=>
-  [[[1 2 {:a 3, :b 4} [5 6]] []] [1 [:down]] [2 [:right]] [{:a 3, :b 4} [:right]] [[:a 3] [:down]] [:a [:down]] [3 [:right]] [[:b 4] [:up :right]] [:b [:down]] [4 [:right]] [[5 6] [:up :up :right]] [5 [:down]] [6 [:right]]] 
+  [[[1 2 {:a 3, :b 4} [5 6] #{7 8}] []] [1 [:down]] [2 [:right]] [{:a 3, :b 4} [:right]] [[:a 3] [:down]] [:a [:down]] [3 [:right]] [[:b 4] [:up :right]] 
+   [:b [:down]] [4 [:right]] [[5 6] [:up :up :right]] [5 [:down]] [6 [:right]]
+   [#{7 8} [:up :right]] [7 [:down]] [8 [:right]]] 
   )
