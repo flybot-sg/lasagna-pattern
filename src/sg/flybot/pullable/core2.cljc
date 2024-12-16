@@ -93,8 +93,8 @@
 
 ^:rct/test
 (comment
-  (-> 5 data->mr mr->data) ;=> '{& 5}
-  (-> nil data->mr mr->data) ;=> {'& nil}
+  (-> 5 data->mr mr->data) ;=> {& 5}
+  (-> nil data->mr mr->data) ;=> {& nil}
   )
 
 (defn run-query
@@ -118,6 +118,17 @@
     (when (= val (zip/node loc))
       loc)))
 
+(defn- map-matcher
+  [m]
+  (fn [loc]
+    (zip/edit loc #(select-keys % (keys m)))))
+
+^:rct/test
+(comment
+  ((map-matcher {:a 1 :b 2}) [{:a 1 :b 2 :c 3} nil]) ;=>
+  [{:a 1 :b 2} {:changed? true}]
+  )
+
 (defn- with-move
   [matcher dirs]
   (fn [mr]
@@ -133,6 +144,7 @@
     (let [val (zip/node loc)
           matcher (cond
                     (sequential? val) (with-move identity dirs)
+                    (map? val) (with-move (map-matcher val) dirs)
                     :else
                     (with-move (literal-matcher val) dirs))]
       (matcher mr))))
@@ -154,9 +166,9 @@
 
 ^:rct/test
 (comment
-  (run-query (compile-pattern 5) 5) ;=> {'& 5}
+  (run-query (compile-pattern 5) 5) ;=> {& 5}
   (run-query (compile-pattern 5) 3) ;=> nil 
-  (run-query (compile-pattern '[1 2]) [1 2]) ;=> {'& [1 2]}
+  (run-query (compile-pattern '[1 2]) [1 2]) ;=> {& [1 2]}
   (run-query (compile-pattern '[1 2]) [2 3]) ;=> nil
-  (run-query (compile-pattern '{:a 1}) {:a 1 :b 2}) ;=> {:a 1}
+  (run-query (compile-pattern '{:a 1}) {:a 1 :b 2}) ;=> {& {:a 1}}
   )
