@@ -88,11 +88,13 @@
 (defn mr->data
   "returns data from a mr"
   [mr]
-  (when-let [loc (:loc mr)]
-    (zip/root loc)))
+  (when-let [v (some-> mr :loc)]
+    (assoc (:vars mr) '& (zip/root v))))
 
+^:rct/test
 (comment
-  (-> 5 data->mr mr->data) ;=> 5
+  (-> 5 data->mr mr->data) ;=> '{& 5}
+  (-> nil data->mr mr->data) ;=> {'& nil}
   )
 
 (defn run-query
@@ -100,12 +102,6 @@
   (-> data data->mr q mr->data))
 
 (def ^:private moves {:down zip/down :right zip/right :up zip/up})
-
-(defn- literal-matcher
-  [val]
-  (fn [data-val]
-    (when (= val data-val)
-      data-val)))
 
 (defn- zip-edit
   [loc f]
@@ -115,11 +111,20 @@
       (zip/replace loc new-v)
       loc)))
 
+;; a matcher is a function take a loc, returns a loc
+(defn- literal-matcher
+  [val]
+  (fn [loc]
+    (when (= val (zip/node loc))
+      loc)))
+
 (defn- with-move
   [matcher dirs]
   (fn [mr]
-    (update mr :loc (fn [l] (-> (reduce #((moves %2) %1) l dirs)
-                                (zip-edit matcher))))))
+    (let [loc (:loc mr)
+          new-loc (-> (reduce #((moves %2) %1) loc dirs)
+                      (matcher))]
+      (when new-loc (assoc mr :loc new-loc)))))
 
 (defn- element->fun
   "returns a function which takes a loc and dirs, returns a function which takes a mr returns a new mr"
@@ -145,11 +150,13 @@
                 (loc-dir-seq)
                 (map element->fun))]
     (fn [mr]
-      (reduce #(%2 %1) mr fs))))
+      (reduce #(or (%2 %1) (reduced nil)) mr fs))))
 
 ^:rct/test
 (comment
-  (run-query (compile-pattern 5) 5) ;=> 5
+  (run-query (compile-pattern 5) 5) ;=> {'& 5}
   (run-query (compile-pattern 5) 3) ;=> nil 
-  (run-query (compile-pattern '[1 2]) [1 2]) ;=> [1 2]
+  (run-query (compile-pattern '[1 2]) [1 2]) ;=> {'& [1 2]}
+  (run-query (compile-pattern '[1 2]) [2 3]) ;=> nil
+  (run-query (compile-pattern '{:a 1}) {:a 1 :b 2}) ;=> {:a 1}
   )
