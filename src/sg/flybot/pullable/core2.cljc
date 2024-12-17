@@ -1,7 +1,9 @@
 (ns sg.flybot.pullable.core2
   "Pull pattern for Clojure/script."
   (:require
-   [clojure.zip :as zip]))
+   [clojure.zip :as zip])
+  (:import
+   [clojure.lang MapEntry]))
 
 ;;----------------
 ;; zip utilities
@@ -61,10 +63,13 @@
   "returns a common zipper support sequence, maps (as sequence of MapEntry)"
   [data]
   (zip/zipper
-   parent-node?
-   seq
+   coll?
+   identity
    (fn [node children]
-     (with-meta children (meta node)))
+     (if (map-entry? node)
+       (MapEntry. (first children) (second children)) 
+       (-> (into (empty node) children)
+           (with-meta (meta node)))))
    data))
 
 ^:rct/test
@@ -75,7 +80,8 @@
       vec) ;=>
   [[[1 2 {:a 3, :b 4} [5 6] #{7 8}] []] [1 [:down]] [2 [:right]] [{:a 3, :b 4} [:right]] [[:a 3] [:down]] [:a [:down]] [3 [:right]] [[:b 4] [:up :right]]
    [:b [:down]] [4 [:right]] [[5 6] [:up :up :right]] [5 [:down]] [6 [:right]]
-   [#{7 8} [:up :right]] [7 [:down]] [8 [:right]]])
+   [#{7 8} [:up :right]] [7 [:down]] [8 [:right]]]
+  )
 
 ;;----------------
 ;; matching result (a.k.a mr)
@@ -129,6 +135,14 @@
   [{:a 1 :b 2} {:changed? true}]
   )
 
+(defn- matcher-of
+  [f dirs]
+  (fn [mr]
+    (let [loc (:loc mr)
+          new-loc (-> (reduce #((moves %2) %1) loc dirs)
+                      (f))]
+      (when new-loc (assoc mr :loc new-loc)))))
+
 (defn- with-move
   [matcher dirs]
   (fn [mr]
@@ -171,4 +185,6 @@
   (run-query (compile-pattern '[1 2]) [1 2]) ;=> {& [1 2]}
   (run-query (compile-pattern '[1 2]) [2 3]) ;=> nil
   (run-query (compile-pattern '{:a 1}) {:a 1 :b 2}) ;=> {& {:a 1}}
+  (run-query (compile-pattern '[1 (2 3) #{4} {5 6}]) '[1 (2 3) #{4} {5 6}]) ;=> {& [1 (2 3) #{4} {5 6}]}
+  (run-query (compile-pattern '[1 {:b {:c 3}}]) [1 {:a 1 :b {:c 3 :d 4}}]) ;=> {& [1 {:b {:c 3}}]}
   )
