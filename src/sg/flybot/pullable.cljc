@@ -67,5 +67,6 @@
   (run-query (compile-pattern '[1 2]) [2 3]) ;=> nil
   (run-query (compile-pattern '{:a ?a}) {:a 1 :b 2}) ;=> {a 1 & {:a 1}}
   (run-query (compile-pattern '[1 (2 3) #{4} {5 6}]) '[1 (2 3) #{4} {5 6}]) ;=> {& [1 (2 3) #{4} {5 6}]}
-  (run-query (compile-pattern '[1 {:b {:c ?c}}]) [1 {:a 1 :b {:c 3 :d 4}}]) ;=> {c 3 & [1 {:b {:c 3}}]}
+  (run-query (compile-pattern '[1 {:b {:c ?c}}]) [1 {:a 1 :b {:c 3 :d 4}}]) ;=> {c 3 & [1 {:b {:c 3}}]} 
+  (run-query (compile-pattern '[1 ?a {:a ?a}]) [1 2 {:a 2}]) ;=> {a 2 & [1 2 {:a 2}]}
   )

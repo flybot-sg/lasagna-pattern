@@ -8,7 +8,9 @@
 (defn pred-matcher
   [pred lvar]
   (fn [mr]
-    (let [v (some-> mr :loc zip/node)]
+    (let [v (some-> mr :loc zip/node)
+          pre-v (some-> mr :vars (get lvar)) 
+          pred (if pre-v (fn [v] (and (= pre-v v) (pred v))) pred)]
       (when (pred v)
         (cond-> mr
           lvar (assoc-in [:vars lvar] v))))))
@@ -21,4 +23,6 @@
 (comment
   ((pred-matcher even? 'a) {:loc [4 nil]}) ;=>  {:loc [4 nil], :vars {a 4}} 
   ((literal 4) {:loc [4 nil]}) ;=>  {:loc [4 nil]}
+  ; pred-matcher with lvar bound
+  ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}}) ;=>  nil
   )
