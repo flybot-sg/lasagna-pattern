@@ -33,9 +33,15 @@
   (fn [mr]
     (let [val (zip/node loc)
           matcher (cond
+                    (and (list? val) (lvar (first val))) 
+                    (apply matcher/list-matcher (lvar (first val)) (rest val))
+                    
                     (sequential? val) identity
                     (map? val) (map-matcher val)
-                    (lvar val) (matcher/pred-matcher (constantly true) (lvar val))
+                    
+                    (lvar val)
+                    (matcher/pred-matcher (constantly true) (lvar val))
+                    
                     :else
                     (matcher/literal val))]
       (matcher (update mr :loc move dirs)))))
@@ -49,7 +55,7 @@
 (defn compile-pattern
   "returns a sequence of functions which takes a mr returns a new mr"
   [pattern]
-  (let [fs (->> (core/comm-zip pattern)
+  (let [fs (->> (core/pattern-zip pattern)
                 (core/loc-dir-seq)
                 (map element->fun))]
     (fn [mr]
@@ -69,4 +75,5 @@
   (run-query (compile-pattern '[1 (2 3) #{4} {5 6}]) '[1 (2 3) #{4} {5 6}]) ;=> {& [1 (2 3) #{4} {5 6}]}
   (run-query (compile-pattern '[1 {:b {:c ?c}}]) [1 {:a 1 :b {:c 3 :d 4}}]) ;=> {c 3 & [1 {:b {:c 3}}]} 
   (run-query (compile-pattern '[1 ?a {:a ?a}]) [1 2 {:a 2}]) ;=> {a 2 & [1 2 {:a 2}]}
+  (run-query (compile-pattern [1 (list '?a :when even?)]) [1 2]) ;=> {a 2 & [1 2]}
   )

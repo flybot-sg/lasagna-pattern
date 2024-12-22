@@ -47,17 +47,10 @@
   [seq-loc-dir]
   (map (fn [[l d]] [(zip/node l) d]) seq-loc-dir))
 
-(defn dir-seq
-  "returns a sequence of directions from a `seq-loc-dir`"
-  [seq-loc-dir]
-  (map second seq-loc-dir))
-
 ^:rct/test
 (comment
   (-> (zip/vector-zip [1 2 [3 4] 5]) (loc-dir-seq) elem-dir) ;=> 
   [[[1 2 [3 4] 5] []] [1 [:down]] [2 [:right]] [[3 4] [:right]] [3 [:down]] [4 [:right]] [5 [:up :right]]])
-
-(def parent-node? (either sequential? map? set?))
 
 (defn comm-zip
   "returns a common zipper support sequence, maps (as sequence of MapEntry)"
@@ -72,6 +65,16 @@
            (with-meta (meta node)))))
    data))
 
+(defn pattern-zip
+  "returns a zipper for patterns"
+  [data]
+  (zip/zipper
+   (either vector? set? map?)
+   identity
+   (fn [node children]
+     (with-meta (into (empty node) children) (meta node)))
+   data))
+
 ^:rct/test
 (comment
   (-> (comm-zip [1 2 (array-map :a 3 :b 4) '(5 6) (sorted-set 7 8)])
@@ -81,6 +84,10 @@
   [[[1 2 {:a 3, :b 4} [5 6] #{7 8}] []] [1 [:down]] [2 [:right]] [{:a 3, :b 4} [:right]] [[:a 3] [:down]] [:a [:down]] [3 [:right]] [[:b 4] [:up :right]]
    [:b [:down]] [4 [:right]] [[5 6] [:up :up :right]] [5 [:down]] [6 [:right]]
    [#{7 8} [:up :right]] [7 [:down]] [8 [:right]]]
+  ;pattern zip
+  (-> (pattern-zip [1 2 '(?a :when odd?)])
+      (loc-dir-seq)
+      (elem-dir)) ;=> ([[1 2 (?a :when odd?)] []] [1 [:down]] [2 [:right]] [(?a :when odd?) [:right]])
   )
 
 ;;----------------

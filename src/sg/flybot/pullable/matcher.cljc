@@ -26,3 +26,14 @@
   ; pred-matcher with lvar bound
   ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}}) ;=>  nil
   )
+
+(defmulti keyword->func first)
+
+(defn list-matcher
+  "returns a matcher for a lvar with keyword `kw` and optional `args`"
+  [lvar & args]
+  (pred-matcher (keyword->func args) lvar))
+
+(defmethod keyword->func :when
+  [[_ pred]]
+  (fn [v] (pred v)))
