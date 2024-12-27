@@ -29,4 +29,7 @@
     (are [pattern data expected] (= expected (dissoc ((sut/ptn-fn pattern) data) '&))
       [1 (list '?a :when even?)] [1 2] '{a 2}
       [1 (list '?a :when even?)] [1 3] nil
-      )))
+      ))
+  (testing "map match preserve unmatched entries"
+    (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
+      '{:a ?a} {:a 1 :b 2 :c 3} '{a 1 & {:b 2 :c 3}})))

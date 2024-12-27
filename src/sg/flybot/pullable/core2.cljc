@@ -2,7 +2,7 @@
   "Pull pattern for Clojure/script."
   (:require
    [clojure.zip :as zip]
-   [sg.flybot.pullable.util :refer [either cond-let take-until]])
+   [sg.flybot.pullable.util :refer [either cond-let]])
   (:import
    [clojure.lang MapEntry]))
 
@@ -16,10 +16,10 @@
 
   Moves to the next loc in the hierarchy, depth-first. When reaching
   the end, returns a distinguished loc detectable via end?. If already
-  at the end, stays there."
+  at the end, returns nil."
   [loc]
   (cond-let
-   [_ (= :end (loc 1))] [loc nil]
+   [_ (= :end (loc 1))] nil
 
    [l (and (zip/branch? loc) (zip/down loc))] [l [:down]]
    
@@ -36,7 +36,7 @@
   "use zip-next to generate a sequence of locs and directions"
   [loc]
   (->> (iterate (fn [[l _]] (let [[new-l ds] (zip-next l)] [new-l ds])) [loc []])
-       (take-until #(not (zip/end? (first %))))))
+       (take-while (comp some? first))))
 
 (defn elem-dir
   "returns a sequence of elements and directions from a `seq-loc-dir`"

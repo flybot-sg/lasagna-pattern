@@ -2,19 +2,23 @@
   (:require 
    [clojure.zip :as zip]
    [sg.flybot.pullable.matcher :as matcher]
-   [sg.flybot.pullable.core2 :as core]))
+   [sg.flybot.pullable.core2 :as core]
+   [sg.flybot.pullable.util :refer [cond-let]]))
 
 (defn- move
-  [loc dirs]
-  (let [moves {:down zip/down :right zip/right :up zip/up}]
-    (reduce (fn [l dir] (when-not (and (= :up dir) (zip/right l)) ;make sure there is no remain data 
-                          ((moves dir) l)))
-            loc dirs)))
+  [mr dirs]
+  (let [moves {:down zip/down :right zip/right :up zip/up}
+        mv (fn [l dir]
+             (when-not (and (= :up dir) (zip/right l)) ;make sure there is no remain data 
+               ((moves dir) l)))]
+    (update mr :loc #(reduce mv % dirs))))
 
 (defn- map-matcher
   [m]
   (fn [mr]
-    (update mr :loc zip/edit #(select-keys % (keys m)))))
+    (-> mr
+        (update :loc zip/edit #(select-keys % (keys m)))
+        (assoc :temp-map m))))
 
 (defn- lvar
   "returns lvar symbol if v is a lvar"
@@ -34,19 +38,18 @@
   [[loc dirs]]
   (fn [mr]
     (let [val (zip/node loc)
-          matcher (cond
-                    (and (list? val) (lvar (first val)))
-                    (apply matcher/list-matcher (lvar (first val)) (rest val))
+          matcher (cond-let
+                    [lv (and (list? val) (lvar (first val)))]
+                    (apply matcher/list-matcher lv (rest val))
 
-                    (sequential? val) identity
-                    (map? val) (map-matcher val)
+                    [_ (sequential? val)] identity
+                    [_ (map? val)] (map-matcher val)
 
-                    (lvar val)
-                    (matcher/pred-matcher (constantly true) (lvar val)) 
+                    [lv (lvar val)]
+                    (matcher/pred-matcher (constantly true) lv) 
                     
-                    :else
                     (matcher/literal val))]
-      (matcher (update mr :loc move dirs)))))
+      (matcher (move mr dirs)))))
 
 ^:rct/test
 (comment
