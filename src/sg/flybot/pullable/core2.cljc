@@ -110,3 +110,32 @@
   (-> 5 data->mr mr->data) ;=> {& 5}
   (-> nil data->mr mr->data) ;=> {& nil}
   )
+
+;;----------------
+
+(defn move
+  [mr dirs]
+  (let [moves {:down zip/down :right zip/right :up zip/up}
+        mv (fn [l dir]
+             (when-not (and (= :up dir) (zip/right l)) ;make sure there is no remain data 
+               ((moves dir) l)))]
+    (update mr :loc #(reduce mv % dirs))))
+
+(defn map-matcher
+  [m]
+  (fn [mr]
+    (tap> (str "loc" (:loc mr)))
+    (update mr :loc zip/edit #(vary-meta (select-keys % (keys m)) assoc ::orig-map %))))
+
+(defn lvar
+  "returns lvar symbol if v is a lvar"
+  [v]
+  (when (symbol? v)
+    (when-let [[_ n] (re-matches #"\?(\w+)" (name v))]
+      (symbol n))))
+
+^:rct/test
+(comment
+  (lvar '?a2s) ;=> a2s
+  (lvar '6) ;=> nil
+  )

@@ -5,51 +5,23 @@
    [sg.flybot.pullable.core2 :as core]
    [sg.flybot.pullable.util :refer [cond-let]]))
 
-(defn- move
-  [mr dirs]
-  (let [moves {:down zip/down :right zip/right :up zip/up}
-        mv (fn [l dir]
-             (when-not (and (= :up dir) (zip/right l)) ;make sure there is no remain data 
-               ((moves dir) l)))]
-    (update mr :loc #(reduce mv % dirs))))
-
-(defn- map-matcher
-  [m]
-  (fn [mr]
-    (-> mr
-        (update :loc zip/edit #(select-keys % (keys m)))
-        (assoc :temp-map m))))
-
-(defn- lvar
-  "returns lvar symbol if v is a lvar"
-  [v]
-  (when (symbol? v)
-    (when-let [[_ n] (re-matches #"\?(\w+)" (name v))]
-      (symbol n))))
-
-^:rct/test
-(comment
-  (lvar '?a2s) ;=> a2s
-  (lvar '6) ;=> nil
-  )
-
 (defn- element->fun
   "returns a function which takes a loc and dirs, returns a function which takes a mr returns a new mr"
   [[loc dirs]]
   (fn [mr]
     (let [val (zip/node loc)
           matcher (cond-let
-                    [lv (and (list? val) (lvar (first val)))]
+                    [lv (and (list? val) (core/lvar (first val)))]
                     (apply matcher/list-matcher lv (rest val))
 
                     [_ (sequential? val)] identity
-                    [_ (map? val)] (map-matcher val)
+                    [_ (map? val)] (core/map-matcher val)
 
-                    [lv (lvar val)]
+                    [lv (core/lvar val)]
                     (matcher/pred-matcher (constantly true) lv) 
                     
                     (matcher/literal val))]
-      (matcher (move mr dirs)))))
+      (matcher (core/move mr dirs)))))
 
 ^:rct/test
 (comment
