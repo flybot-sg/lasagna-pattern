@@ -65,11 +65,6 @@
            (with-meta (meta node)))))
    data))
 
-(defn end-matcher
-  [mr]
-  (when-not (zip/right (:loc mr))
-    mr))
-
 (defn pattern-zip
   "returns a zipper for patterns"
   [data]
@@ -156,4 +151,35 @@
 (comment
   (lvar '?a2s) ;=> a2s
   (lvar '6) ;=> nil
+  )
+
+;;----------------
+;; CPS style 
+
+(defn pred-matcher
+  ([dirs val]
+   (pred-matcher dirs #(= % val) nil))
+  ([dirs pred sym]
+   (pred-matcher dirs pred sym identity))
+  ([dirs pred sym f-next]
+   (fn [mr]
+     (let [mr' (move mr dirs)
+           val (some-> mr' :loc zip/node)]
+       (when (pred val)
+         (cond-> mr'
+           sym (assoc-in [:vars sym] val)
+           true f-next))))))
+
+^:rct/test
+(comment
+  ;seq matcher
+  (def mat1 (pred-matcher [:down] even? 'a (pred-matcher [:right] odd? 'b)))
+  (mat1 {:loc (data-zip [2 3 4])}) ;=>>
+  {:vars {'a 2 'b 3}}
+  (mat1 {:loc (data-zip [2 4 3])}) ;=> nil
+  
+  ;map matcher
+  (def mat2 (pred-matcher [:down :down] #(= % :a) nil (pred-matcher [:right] 3)))
+  (mat2 {:loc (data-zip {:a 3})}) ;=>> some?
+  (mat2 {:loc (data-zip {:a 4})}) ;=> nil
   )
