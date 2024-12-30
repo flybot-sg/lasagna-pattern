@@ -6,8 +6,8 @@
    :jvm-opts
    ["-Dclojure.storm.instrumentEnable=true" "-Dclojure.storm.instrumentOnlyPrefixes=sg.flybot"],
    :extra-deps
-   {com.github.flow-storm/clojure {:mvn/version "RELEASE"},
-    com.github.flow-storm/flow-storm-dbg {:mvn/version "RELEASE"}}}
+   {com.github.flow-storm/clojure {:mvn/version "1.12.0-2"},
+    com.github.flow-storm/flow-storm-dbg {:mvn/version "4.1.0-beta3"}}}
   :test
   {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
                 io.github.robertluo/rich-comment-tests {:git/tag "v1.1.1", :git/sha "3f65ecb"}}

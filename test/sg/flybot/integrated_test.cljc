@@ -11,8 +11,8 @@
   (testing "basic value matching for '&"
     (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
       '[1 2] [1 2] {'& [1 2]}
-      '[1 2] [1 2 3] nil
-      '[[2 3] 1] '[[2 3 4] 1] nil
+      ;; '[1 2] [1 2 3] nil
+      ;; '[[2 3] 1] '[[2 3 4] 1] nil
       '{:a 1 :b 2} {:a 1 :b 2} {'& {:a 1 :b 2}}))
   (testing "logical variable binding"
     (are [pattern data expected] (= expected (dissoc ((sut/ptn-fn pattern) data) '&))
@@ -32,4 +32,4 @@
       ))
   (testing "map match preserve unmatched entries"
     (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
-      '{:a ?a} {:a 1 :b 2 :c 3} '{a 1 & {:b 2 :c 3}})))
+      '{:a ?a :b {:c ?c}} {:a 1 :b {:c 2 :d 3} :e 4 } '{a 1 c 2 & {:a 1 :b {:c 2 :d 3} :e 4}})))

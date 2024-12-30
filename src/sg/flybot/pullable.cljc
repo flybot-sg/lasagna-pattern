@@ -11,16 +11,17 @@
   (fn [mr]
     (let [val (zip/node loc)
           matcher (cond-let
-                    [lv (and (list? val) (core/lvar (first val)))]
-                    (apply matcher/list-matcher lv (rest val))
+                   [lv (and (list? val) (core/lvar (first val)))]
+                   (apply matcher/list-matcher lv (rest val))
 
-                    [_ (sequential? val)] identity
-                    [_ (map? val)] (core/map-matcher val)
+                   [_ (sequential? val)] identity
+                   
+                   [_ (map? val)] (core/map-matcher val)
 
-                    [lv (core/lvar val)]
-                    (matcher/pred-matcher (constantly true) lv) 
-                    
-                    (matcher/literal val))]
+                   [lv (core/lvar val)]
+                   (matcher/pred-matcher (constantly true) lv) 
+                   
+                   (matcher/literal val))]
       (matcher (core/move mr dirs)))))
 
 ^:rct/test
