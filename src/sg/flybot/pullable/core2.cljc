@@ -43,17 +43,8 @@
   [seq-loc-dir]
   (map (fn [[l d]] [(zip/node l) d]) seq-loc-dir))
 
-^:rct/test
-(comment
-  (-> (zip/vector-zip [1 2 [3 4] 5]) (loc-dir-seq) elem-dir) ;=> 
-  [[[1 2 [3 4] 5] []]
-   [1 [:down]] [2 [:right]] 
-   [[3 4] [:right]] [3 [:down]] [4 [:right]]
-   [5 [:up :right]]]
-  )
-
 (defn data-zip
-  "returns a common zipper support sequence, maps (as sequence of MapEntry)"
+  "returns a common data zipper support sequence, maps (as sequence of MapEntry)"
   [data]
   (zip/zipper
    coll?
@@ -77,34 +68,37 @@
 
 ^:rct/test
 (comment
+  ;data zip
   (-> (data-zip [1 2 (array-map :a 3 :b 4) '(5 6) (sorted-set 7 8)])
       (loc-dir-seq)
       (elem-dir)) ;=>
   [[[1 2 {:a 3, :b 4} [5 6] #{7 8}] []] [1 [:down]] [2 [:right]] [{:a 3, :b 4} [:right]] [[:a 3] [:down]] [:a [:down]] [3 [:right]] [[:b 4] [:up :right]]
    [:b [:down]] [4 [:right]] [[5 6] [:up :up :right]] [5 [:down]] [6 [:right]]
    [#{7 8} [:up :right]] [7 [:down]] [8 [:right]]]
+  
   ;pattern zip
   (-> (pattern-zip [1 2 '(?a :when odd?)])
       (loc-dir-seq)
       (elem-dir)) ;=> ([[1 2 (?a :when odd?)] []] [1 [:down]] [2 [:right]] [(?a :when odd?) [:right]])
   )
 
-;;----------------
-;; matching result (a.k.a mr)
 (defn zip-root
-  "copy and modified from `clojure.zip/root`, merge the orignal map data
-   in meta."
+  "copy and modified from `clojure.zip/root`, merge the orignal map data in meta."
   [loc]
   (letfn [(merged 
             [n]
             (if-let [orig (and (map? n) (some-> n meta ::orig-map))]
               (merge orig n)
               n))]
-    (if (= :end (loc 1))
+    (if (zip/end? loc)
       (merged (zip/node loc))
       (if-let [p (some-> loc (zip/up) (zip/edit merged))]
         (recur p)
         (merged (zip/node loc))))))
+
+;;------------------------------
+;; ## Matching result (a.k.a mr)
+;; Matching result is a context that contains the current state of the matching process.
 
 (defn data->mr
   "turns normal data to a mr"
@@ -126,19 +120,31 @@
 ;;----------------
 
 (defn move
+  "move `mr` in `dirs`, return a new mr"
   [mr dirs]
-  (let [moves {:down zip/down :right zip/right :up zip/up}]
+  (letfn [(moves [dir]
+            (get {:down zip/down :right zip/right :up zip/up} dir
+                 (constantly (ex-info "Unknown direction" {:dir dir}))))]
     (update mr :loc #(reduce (fn [l dir] ((moves dir) l)) % dirs))))
 
+;;---------------------
+;; ## Matcher factories
+;;
+;; A matcher is a function accept a `mr`, returns a new mr or nil if no match.
+
 (defn map-matcher
+  "A structure matcher factory for map data"
   [m]
   (fn [{:keys [loc] :as mr}]
-    (assoc mr :loc (let [[n p] loc]
-                     (with-meta
-                       [(-> (select-keys n (keys m))
-                            (with-meta (assoc (meta n) ::orig-map n)))
-                        (assoc p :changed? true)]
-                       (meta loc))))))
+    (assoc mr 
+           :loc
+           (let [[n p] loc]
+             ;modified version of `zip/replace`
+             (with-meta
+               [(-> (select-keys n (keys m))
+                    (with-meta (assoc (meta n) ::orig-map n)))
+                (assoc p :changed? true)]
+               (meta loc))))))
 
 (defn lvar
   "returns lvar symbol if v is a lvar"
@@ -153,33 +159,39 @@
   (lvar '6) ;=> nil
   )
 
-;;----------------
-;; CPS style 
-
 (defn pred-matcher
-  ([dirs val]
-   (pred-matcher dirs #(= % val) nil))
-  ([dirs pred sym]
-   (pred-matcher dirs pred sym identity))
-  ([dirs pred sym f-next]
+  "returns a matcher that accepts a predicate `pred` and a optional symbol `lvar`"
+  ([pred] (pred-matcher pred nil))
+  ([pred lvar]
    (fn [mr]
-     (let [mr' (move mr dirs)
-           val (some-> mr' :loc zip/node)]
-       (when (pred val)
-         (cond-> mr'
-           sym (assoc-in [:vars sym] val)
-           true f-next))))))
+     (let [v (some-> mr :loc zip/node)
+           pre-v (some-> mr :vars (get lvar))
+           pred (if pre-v (fn [v] (and (= pre-v v) (pred v))) pred)]
+       (when (pred v)
+         (cond-> mr
+           lvar (assoc-in [:vars lvar] v)))))))
+
+(defn literal
+  [val]
+  (pred-matcher #(= % val)))
 
 ^:rct/test
 (comment
-  ;seq matcher
-  (def mat1 (pred-matcher [:down] even? 'a (pred-matcher [:right] odd? 'b)))
-  (mat1 {:loc (data-zip [2 3 4])}) ;=>>
-  {:vars {'a 2 'b 3}}
-  (mat1 {:loc (data-zip [2 4 3])}) ;=> nil
-  
-  ;map matcher
-  (def mat2 (pred-matcher [:down :down] #(= % :a) nil (pred-matcher [:right] 3)))
-  (mat2 {:loc (data-zip {:a 3})}) ;=>> some?
-  (mat2 {:loc (data-zip {:a 4})}) ;=> nil
+  ((pred-matcher even? 'a) {:loc [4 nil]}) ;=>  {:loc [4 nil], :vars {a 4}} 
+  ((literal 4) {:loc [4 nil]}) ;=>  {:loc [4 nil]}
+  ; pred-matcher with lvar bound
+  ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}}) ;=>  nil
   )
+
+(defmulti keyword->func 
+  "returns a predict function. The argument is a sequence."
+  first)
+
+(defn list-matcher
+  "returns a list matcher with symbol `sym` and optional `args`"
+  [sym args]
+  (pred-matcher (keyword->func args) sym))
+
+(defmethod keyword->func :when
+  [[_ pred]]
+  (fn [v] (pred v)))
