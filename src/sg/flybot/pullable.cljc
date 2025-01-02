@@ -13,13 +13,13 @@
                    [lv (and (list? val) (core/lvar (first val)))]
                    (core/list-matcher lv (rest val))
 
-                   [_ (sequential? val)] identity
+                   [_ (or (vector? val) (= val '_))] identity
                    
                    [_ (map? val)] (core/map-matcher val)
 
                    [lv (core/lvar val)]
                    (core/pred-matcher (constantly true) lv) 
-                   
+                    
                    (core/literal val))]
       (matcher (core/move mr dirs)))))
 
