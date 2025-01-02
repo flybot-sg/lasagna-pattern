@@ -18,8 +18,10 @@
                    [_ (map? val)] (core/map-matcher val)
 
                    [lv (core/lvar val)]
-                   (core/pred-matcher (constantly true) lv) 
-                    
+                   (core/pred-matcher (constantly true) lv)
+                   
+                   [_ (= val '$)] (core/terminal-matcher)
+                   
                    (core/literal val))]
       (matcher (core/move mr dirs)))))
 

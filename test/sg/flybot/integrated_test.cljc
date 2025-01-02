@@ -33,4 +33,8 @@
       '{:a ?a :b {:c ?c}} {:a 1 :b {:c 2 :d 3} :e 4 } '{a 1 c 2 & {:a 1 :b {:c 2 :d 3} :e 4}}))
   (testing "placeholder"
     (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
-      '[_ 2 _ ?a] [1 2 3 4] '{a 4 & [1 2 3 4]})))
+      '[_ 2 _ ?a] [1 2 3 4] '{a 4 & [1 2 3 4]}))
+  (testing "terminal matcher"
+    (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
+      '[1 2 $] [1 2 3 4] nil
+      '[1 ?a $] [1 2 3] '{a 2 & [1 2 3]})))

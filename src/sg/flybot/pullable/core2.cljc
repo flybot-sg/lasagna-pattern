@@ -195,3 +195,10 @@
 (defmethod keyword->func :when
   [[_ pred]]
   (fn [v] (pred v)))
+
+(defn terminal-matcher
+  "A matcher that matches the end of a sequence"
+  []
+  (fn [mr]
+    (when-not (some-> mr :loc zip/right)
+      mr)))
