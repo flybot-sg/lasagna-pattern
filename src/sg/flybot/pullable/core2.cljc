@@ -163,13 +163,22 @@
   "returns a matcher that accepts a predicate `pred` and a optional symbol `lvar`"
   ([pred] (pred-matcher pred nil))
   ([pred lvar]
+   (pred-matcher pred lvar false))
+  ([pred lvar modify?]
    (fn [mr]
      (let [v (some-> mr :loc zip/node)
            pre-v (some-> mr :vars (get lvar))
-           pred (if pre-v (fn [v] (and (= pre-v v) (pred v))) pred)]
-       (when (pred v)
+           pred (if pre-v (fn [v] (and (= pre-v v) (pred v))) pred)
+           v' (pred v)]
+       (if (not modify?)
+         (when v' ;FIXME can not return nil
+           (cond-> mr
+             lvar (assoc-in [:vars lvar] v)))
          (cond-> mr
-           lvar (assoc-in [:vars lvar] v)))))))
+           lvar (assoc-in [:vars lvar] v')
+           true (update :loc (fn [loc] (if (= :sg.flybot.pullable/remove v')
+                                         (zip/remove loc)
+                                         (zip/replace loc v'))))))))))
 
 (defn literal
   [val]
@@ -190,11 +199,12 @@
 (defn list-matcher
   "returns a list matcher with symbol `sym` and optional `args`"
   [sym args]
-  (pred-matcher (keyword->func args) sym))
+  (let [[f modify?] [(keyword->func args) (-> args first name (.endsWith "!"))]]
+    (pred-matcher f sym modify?)))
 
-(defmethod keyword->func :when
-  [[_ pred]]
-  (fn [v] (pred v)))
+(comment
+  ((list-matcher 'a (list :when even?)) {:loc (data-zip 4)})
+  )
 
 (defn terminal-matcher
   "A matcher that matches the end of a sequence"
@@ -202,3 +212,14 @@
   (fn [mr]
     (when-not (some-> mr :loc zip/right)
       mr)))
+
+;-------------------
+; ## keyword dispatch
+
+(defmethod keyword->func :when
+  [[_ pred]]
+  (fn [v] (pred v)))
+
+(defmethod keyword->func :to!
+  [[_ val]]
+  (fn [_]  val))

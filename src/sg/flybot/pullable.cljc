@@ -10,8 +10,8 @@
   (fn [mr]
     (let [val (zip/node loc)
           matcher (cond-let
-                   [lv (and (list? val) (core/lvar (first val)))]
-                   (core/list-matcher lv (rest val))
+                   [_ (and (list? val))]
+                   (core/list-matcher (core/lvar (first val)) (rest val))
 
                    [_ (or (vector? val) (= val '_))] identity
                    
