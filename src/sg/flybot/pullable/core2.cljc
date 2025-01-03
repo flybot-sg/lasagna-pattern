@@ -223,3 +223,7 @@
 (defmethod keyword->func :to!
   [[_ val]]
   (fn [_]  val))
+
+(defmethod keyword->func :edit!
+  [[_ f]]
+  (fn [v] (f v)))

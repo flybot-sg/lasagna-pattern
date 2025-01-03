@@ -38,8 +38,11 @@
     (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
       '[1 2 $] [1 2 3 4] nil
       '[1 ?a $] [1 2 3] '{a 2 & [1 2 3]}))
-  (testing ":to option"
+  (testing ":to! option"
     (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
       '[1 (?a :to! 5)] [1 2 3 4] '{a 5 & [1 5 3 4]}
       '[1 (_ :to! ::sut/remove)] [1 2 3 4] '{& [1 3 4]}
-      )))
+      ))
+  (testing ":edit! option"
+    (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
+      [1 (list '?a :edit! inc)] [1 2 3 4] '{a 3 & [1 3 3 4]})))
