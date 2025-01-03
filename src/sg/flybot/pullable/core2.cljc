@@ -227,3 +227,10 @@
 (defmethod keyword->func :edit!
   [[_ f]]
   (fn [v] (f v)))
+
+(defmethod keyword->func :with!
+  [[_ val]]
+  (fn [f]
+    (if ((either fn? ifn?) f)
+      (f val)
+      (throw (ex-info "Expect a function" {:f f})))))

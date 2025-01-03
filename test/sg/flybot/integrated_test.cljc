@@ -45,4 +45,7 @@
       ))
   (testing ":edit! option"
     (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
-      [1 (list '?a :edit! inc)] [1 2 3 4] '{a 3 & [1 3 3 4]})))
+      [1 (list '?a :edit! inc)] [1 2 3 4] '{a 3 & [1 3 3 4]}))
+  (testing ":with! option"
+    (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
+      '[1 (_ :with! 5)] [1 #(* 2 %) 3] '{& [1 10 3]})))
