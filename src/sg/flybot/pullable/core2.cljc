@@ -147,15 +147,17 @@
       (-> mr (move dirs) (update :loc replace)))))
 
 (defn lvar
-  "returns lvar symbol if v is a lvar"
+  "returns a pair of lvar symbol and modify flag if v is a lvar, otherwise nil.
+   A lvar starts with a question mark '?' or '!', '?' means the value is not modified."
   [v]
   (when (symbol? v)
-    (when-let [[_ n] (re-matches #"\?(\w+)" (name v))]
-      (symbol n))))
+    (when-let [[_ flag n] (re-matches #"([\?\!])(\w+)" (name v))]
+      [(symbol n) (= flag "!")])))
 
 ^:rct/test
 (comment
-  (lvar '?a2s) ;=> a2s
+  (lvar '?a2s) ;=> [a2s, false]
+  (lvar '!a2s) ;=> [a2s, true]
   (lvar '6) ;=> nil
   )
 
@@ -199,12 +201,12 @@
 
 (defn list-matcher
   "returns a list matcher with symbol `sym` and optional `args`"
-  [sym args]
-  (let [[f modify?] [(keyword->func args) (-> args first name (.endsWith "!"))]]
+  [sym modify? args]
+  (let [f (keyword->func args)]
     (pred-matcher f sym modify?)))
 
 (comment
-  ((list-matcher 'a (list :when even?)) {:loc (data-zip 4)})
+  ((list-matcher 'a false [:when even?]) {:loc (data-zip 4)} [])
   )
 
 (defn terminal-matcher
@@ -221,17 +223,17 @@
   [[_ pred]]
   (fn [v] (pred v)))
 
-(defmethod keyword->func :to!
+(defmethod keyword->func :to
   [[_ val]]
   (fn [_]  val))
 
-(defmethod keyword->func :edit!
+(defmethod keyword->func :edit
   [[_ f]]
   (fn [v] (f v)))
 
-(defmethod keyword->func :with!
-  [[_ val]]
+(defmethod keyword->func :with
+  [[_ args]]
   (fn [f]
     (if ((either fn? ifn?) f)
-      (f val)
+      (apply f args)
       (throw (ex-info "Expect a function" {:f f})))))

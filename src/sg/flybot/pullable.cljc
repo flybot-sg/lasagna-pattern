@@ -11,7 +11,8 @@
     (let [val (zip/node loc)
           matcher (cond-let
                    [_ (list? val)]
-                   (core/list-matcher (core/lvar (first val)) (rest val))
+                   (let [[sym modify?] (core/lvar (first val))]
+                     (core/list-matcher (when-not (= sym '_) sym) modify? (rest val)))
                    
                    [_ (map? val)] (core/map-matcher val)
 
@@ -19,8 +20,8 @@
 
                    [_ (= val '$)] (core/terminal-matcher)
 
-                   [lv (core/lvar val)]
-                   (core/pred-matcher (constantly true) lv)
+                   [[sym modify?] (core/lvar val)]
+                   (core/pred-matcher (constantly true) sym modify?)
 
                    (core/literal val))]
       (matcher mr dirs))))
