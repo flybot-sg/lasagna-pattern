@@ -1,8 +1,8 @@
 (ns sg.flybot.pullable 
-  (:require 
-   [clojure.zip :as zip] 
+  (:require
+   [clojure.zip :as zip]
    [sg.flybot.pullable.core2 :as core]
-   [sg.flybot.pullable.util :refer [cond-let]]))
+   [sg.flybot.pullable.util :refer [cond-let either]]))
 
 (defn- element->fun
   "returns a function which takes a loc and dirs, returns a function which takes a mr returns a new mr"
@@ -22,6 +22,9 @@
 
                    [[sym modify?] (core/lvar val)]
                    (core/pred-matcher (constantly true) sym modify?)
+                   
+                   [_ (fn? val)]
+                   (core/pred-matcher val nil false)
 
                    (core/literal val))]
       (matcher mr dirs))))
