@@ -131,20 +131,20 @@
 ;; ## Matcher factories
 ;;
 ;; A matcher is a function accept a `mr`, returns a new mr or nil if no match.
+;; Matchers also need `dirs` to traverse the target data.
 
 (defn map-matcher
   "A structure matcher factory for map data"
   [m]
-  (fn [{:keys [loc] :as mr}]
-    (assoc mr 
-           :loc
-           (let [[n p] loc]
-             ;modified version of `zip/replace`
-             (with-meta
-               [(-> (select-keys n (keys m))
-                    (with-meta (assoc (meta n) ::orig-map n)))
-                (assoc p :changed? true)]
-               (meta loc))))))
+  (fn [mr dirs]
+    (letfn [(replace 
+              [[n p :as loc]]
+              (with-meta
+                [(-> (select-keys n (keys m))
+                     (with-meta (assoc (meta n) ::orig-map n)))
+                 (assoc p :changed? true)]
+                (meta loc)))]
+      (-> mr (move dirs) (update :loc replace)))))
 
 (defn lvar
   "returns lvar symbol if v is a lvar"
@@ -165,8 +165,9 @@
   ([pred lvar]
    (pred-matcher pred lvar false))
   ([pred lvar modify?]
-   (fn [mr]
-     (let [v (some-> mr :loc zip/node)
+   (fn [mr dirs]
+     (let [mr (move mr dirs)
+           v (some-> mr :loc zip/node)
            pre-v (some-> mr :vars (get lvar))
            pred (if pre-v (fn [v] (and (= pre-v v) (pred v))) pred)
            v' (pred v)]
@@ -186,10 +187,10 @@
 
 ^:rct/test
 (comment
-  ((pred-matcher even? 'a) {:loc [4 nil]}) ;=>  {:loc [4 nil], :vars {a 4}} 
-  ((literal 4) {:loc [4 nil]}) ;=>  {:loc [4 nil]}
+  ((pred-matcher even? 'a) {:loc [4 nil]} []) ;=>  {:loc [4 nil], :vars {a 4}} 
+  ((literal 4) {:loc [4 nil]} []) ;=>  {:loc [4 nil]}
   ; pred-matcher with lvar bound
-  ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}}) ;=>  nil
+  ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}} []) ;=>  nil
   )
 
 (defmulti keyword->func 
@@ -209,8 +210,8 @@
 (defn terminal-matcher
   "A matcher that matches the end of a sequence"
   []
-  (fn [mr]
-    (when-not (some-> mr :loc zip/right)
+  (fn [mr dirs]
+    (when-not (some-> mr (move dirs) :loc)
       mr)))
 
 ;-------------------

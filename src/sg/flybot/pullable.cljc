@@ -10,20 +10,20 @@
   (fn [mr]
     (let [val (zip/node loc)
           matcher (cond-let
-                   [_ (and (list? val))]
+                   [_ (list? val)]
                    (core/list-matcher (core/lvar (first val)) (rest val))
-
-                   [_ (or (vector? val) (= val '_))] identity
                    
                    [_ (map? val)] (core/map-matcher val)
 
+                   [_ (or (vector? val) (= val '_))] core/move
+
+                   [_ (= val '$)] (core/terminal-matcher)
+
                    [lv (core/lvar val)]
                    (core/pred-matcher (constantly true) lv)
-                   
-                   [_ (= val '$)] (core/terminal-matcher)
-                   
+
                    (core/literal val))]
-      (matcher (core/move mr dirs)))))
+      (matcher mr dirs))))
 
 ^:rct/test
 (comment
