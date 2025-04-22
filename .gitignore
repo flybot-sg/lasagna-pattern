@@ -3,3 +3,4 @@
 .calva/output-window/
 .cpcache/
 .nrepl*
+.rebel*

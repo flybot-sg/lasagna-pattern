@@ -22,5 +22,4 @@
 
 ^:rct/test
 (comment
-  (take-until odd? [1 1 3 4 5 6]) ;=> [1 1 3 4]
-  )
+  (take-until odd? [1 1 3 4 5 6])) ;=> [1 1 3 4]

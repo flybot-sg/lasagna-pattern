@@ -22,7 +22,7 @@
    [_ (= :end (loc 1))] nil
 
    [l (and (zip/branch? loc) (zip/down loc))] [l [:down]]
-   
+
    [l (zip/right loc)] [(zip/right loc) [:right]]
 
    (loop [p loc d []]
@@ -75,17 +75,16 @@
   [[[1 2 {:a 3, :b 4} [5 6] #{7 8}] []] [1 [:down]] [2 [:right]] [{:a 3, :b 4} [:right]] [[:a 3] [:down]] [:a [:down]] [3 [:right]] [[:b 4] [:up :right]]
    [:b [:down]] [4 [:right]] [[5 6] [:up :up :right]] [5 [:down]] [6 [:right]]
    [#{7 8} [:up :right]] [7 [:down]] [8 [:right]]]
-  
+
   ;pattern zip
   (-> (pattern-zip [1 2 '(?a :when odd?)])
       (loc-dir-seq)
-      (elem-dir)) ;=> ([[1 2 (?a :when odd?)] []] [1 [:down]] [2 [:right]] [(?a :when odd?) [:right]])
-  )
+      (elem-dir))) ;=> ([[1 2 (?a :when odd?)] []] [1 [:down]] [2 [:right]] [(?a :when odd?) [:right]])
 
 (defn zip-root
   "copy and modified from `clojure.zip/root`, merge the orignal map data in meta."
   [loc]
-  (letfn [(merged 
+  (letfn [(merged
             [n]
             (if-let [orig (and (map? n) (some-> n meta ::orig-map))]
               (merge orig n)
@@ -114,8 +113,7 @@
 ^:rct/test
 (comment
   (-> 5 data->mr mr->data) ;=> {& 5}
-  (-> nil data->mr mr->data) ;=> {& nil}
-  )
+  (-> nil data->mr mr->data)) ;=> {& nil}
 
 ;;----------------
 
@@ -137,7 +135,7 @@
   "A structure matcher factory for map data"
   [m]
   (fn [mr dirs]
-    (letfn [(replace 
+    (letfn [(replace
               [[n p :as loc]]
               (with-meta
                 [(-> (select-keys n (keys m))
@@ -158,8 +156,7 @@
 (comment
   (lvar '?a2s) ;=> [a2s, false]
   (lvar '!a2s) ;=> [a2s, true]
-  (lvar '6) ;=> nil
-  )
+  (lvar '6)) ;=> nil
 
 (defn pred-matcher
   "returns a matcher that accepts a predicate `pred` and a optional symbol `lvar`"
@@ -189,13 +186,12 @@
 
 ^:rct/test
 (comment
-  ((pred-matcher even? 'a) {:loc [4 nil]} []) ;=>  {:loc [4 nil], :vars {a 4}} 
+  ((pred-matcher even? 'a) {:loc [4 nil]} []) ;=>  {:loc [4 nil], :vars {a 4}}
   ((literal 4) {:loc [4 nil]} []) ;=>  {:loc [4 nil]}
   ; pred-matcher with lvar bound
-  ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}} []) ;=>  nil
-  )
+  ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}} [])) ;=>  nil
 
-(defmulti keyword->func 
+(defmulti keyword->func
   "returns a predict function. The argument is a sequence."
   first)
 
@@ -206,8 +202,7 @@
     (pred-matcher f sym modify?)))
 
 (comment
-  ((list-matcher 'a false [:when even?]) {:loc (data-zip 4)} [])
-  )
+  ((list-matcher 'a false [:when even?]) {:loc (data-zip 4)} []))
 
 (defn terminal-matcher
   "A matcher that matches the end of a sequence"
