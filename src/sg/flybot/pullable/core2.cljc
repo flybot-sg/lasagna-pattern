@@ -23,7 +23,7 @@
 
    [l (and (zip/branch? loc) (zip/down loc))] [l [:down]]
 
-   [l (zip/right loc)] [(zip/right loc) [:right]]
+   [_ (zip/right loc)] [(zip/right loc) [:right]]
 
    (loop [p loc d []]
      (if-let [up (zip/up p)]
