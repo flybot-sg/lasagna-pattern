@@ -13,13 +13,3 @@
             (second clauses)
             (cons 'cond-let (nnext clauses)))
       (first clauses))))
-
-(defn take-until
-  [pred coll]
-  (let [[h [t]] (split-with pred coll)]
-    (cond-> h t (concat [t]))))
-
-^:rct/test
-(comment
-  (take-until odd? [1 1 3 4 5 6])  ;=> [1 1 3 4]
-  )

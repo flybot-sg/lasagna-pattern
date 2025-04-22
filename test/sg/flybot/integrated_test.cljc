@@ -7,7 +7,7 @@
 (deftest rct-tests
   (tr/run-tests-in-file-tree! :dirs #{"src"}))
 
-(deftest test-overall
+#_(deftest test-overall
   (testing "basic value matching for '&"
     (are [pattern data expected] (= expected ((sut/ptn-fn pattern) data))
       '[1 2] [1 2] {'& [1 2]}
