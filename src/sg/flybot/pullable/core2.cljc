@@ -79,7 +79,8 @@
   ;pattern zip
   (-> (pattern-zip [1 2 '(?a :when odd?)])
       (loc-dir-seq)
-      (elem-dir))) ;=> ([[1 2 (?a :when odd?)] []] [1 [:down]] [2 [:right]] [(?a :when odd?) [:right]])
+      (elem-dir)) ;=> ([[1 2 (?a :when odd?)] []] [1 [:down]] [2 [:right]] [(?a :when odd?) [:right]])
+  )
 
 (defn zip-root
   "copy and modified from `clojure.zip/root`, merge the orignal map data in meta."
@@ -113,7 +114,8 @@
 ^:rct/test
 (comment
   (-> 5 data->mr mr->data) ;=> {& 5}
-  (-> nil data->mr mr->data)) ;=> {& nil}
+  (-> nil data->mr mr->data)  ;=> {& nil}
+  )
 
 ;;----------------
 
@@ -122,27 +124,16 @@
   [mr dirs]
   (letfn [(moves [dir]
             (get {:down zip/down :right zip/right :up zip/up} dir
-                 (constantly (ex-info "Unknown direction" {:dir dir}))))]
-    (update mr :loc #(reduce (fn [l dir] ((moves dir) l)) % dirs))))
+                 (constantly (ex-info "Unknown direction" {:dir dir}))))
+          (go [loc dir]
+            (if (some? loc) ((moves dir) loc) (reduced nil)))]
+    (update mr :loc #(reduce go % dirs))))
 
 ;;---------------------
 ;; ## Matcher factories
 ;;
 ;; A matcher is a function accept a `mr`, returns a new mr or nil if no match.
 ;; Matchers also need `dirs` to traverse the target data.
-
-(defn map-matcher
-  "A structure matcher factory for map data"
-  [m]
-  (fn [mr dirs]
-    (letfn [(replace
-              [[n p :as loc]]
-              (with-meta
-                [(-> (select-keys n (keys m))
-                     (with-meta (assoc (meta n) ::orig-map n)))
-                 (assoc p :changed? true)]
-                (meta loc)))]
-      (-> mr (move dirs) (update :loc replace)))))
 
 (defn lvar
   "returns a pair of lvar symbol and modify flag if v is a lvar, otherwise nil.
@@ -156,7 +147,8 @@
 (comment
   (lvar '?a2s) ;=> [a2s, false]
   (lvar '!a2s) ;=> [a2s, true]
-  (lvar '6)) ;=> nil
+  (lvar '6)  ;=> nil
+  )
 
 (defn pred-matcher
   "returns a matcher that accepts a predicate `pred` and a optional symbol `lvar`"
@@ -189,7 +181,8 @@
   ((pred-matcher even? 'a) {:loc [4 nil]} []) ;=>  {:loc [4 nil], :vars {a 4}}
   ((literal 4) {:loc [4 nil]} []) ;=>  {:loc [4 nil]}
   ; pred-matcher with lvar bound
-  ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}} [])) ;=>  nil
+  ((pred-matcher even? 'a) {:loc [4 nil] :vars '{a 2}} [])  ;=>  nil
+  )
 
 (defmulti keyword->func
   "returns a predict function. The argument is a sequence."
@@ -201,8 +194,10 @@
   (let [f (keyword->func args)]
     (pred-matcher f sym modify?)))
 
+^:rct/test
 (comment
-  ((list-matcher 'a false [:when even?]) {:loc (data-zip 4)} []))
+  ((list-matcher 'a false [:when even?]) {:loc (data-zip 4)} []) ;=> {:loc [4 nil], :vars {a 4}}
+  )
 
 (defn terminal-matcher
   "A matcher that matches the end of a sequence"
@@ -210,6 +205,28 @@
   (fn [mr dirs]
     (when-not (some-> mr (move dirs) :loc)
       mr)))
+
+^:rct/test
+(comment
+  ((terminal-matcher) {:loc (-> (data-zip [1 2]) zip/down) :vars {}} [:right :right]) ;=>> some?
+  ((terminal-matcher) {:loc (-> (data-zip [1 2]) zip/down) :vars {}} [:right]) ;=> nil
+  )
+
+(defn map-matcher
+  "A structure matcher factory for map data"
+  [m]
+  (fn [mr dirs]
+    (letfn [(replace
+              [[n p :as loc]]
+              (with-meta
+                [(-> (select-keys n (keys m))
+                     (with-meta (assoc (meta n) ::orig-map n)))
+                 (assoc p :changed? true)]
+                (meta loc)))]
+      (-> mr (move dirs) (update :loc replace)))))
+
+(comment
+  ((map-matcher {:a '?}) {:loc {:a 1 :b 2} :vars {}} []))
 
 ;-------------------
 ; ## keyword dispatch

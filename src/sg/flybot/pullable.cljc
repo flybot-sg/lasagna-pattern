@@ -2,7 +2,7 @@
   (:require
    [clojure.zip :as zip]
    [sg.flybot.pullable.core2 :as core]
-   [sg.flybot.pullable.util :refer [cond-let either]]))
+   [sg.flybot.pullable.util :refer [cond-let]]))
 
 (defn- element->fun
   "returns a function which takes a loc and dirs, returns a function which takes a mr returns a new mr"
@@ -34,7 +34,8 @@
   ((element->fun [[[1 2] nil] []]) {:loc [[1 2] nil]}) ;=> {:loc [[1 2] nil]}
   ((element->fun [['?a nil] []]) {:loc [3 nil]}) ;=> {:loc [3 nil] :vars {a 3}}
   ((element->fun [[2 {:l [1] :pnodes [[1 2]] :r []}] [:up]])
-   {:loc [2 {:l [1] :pnodes [[1 2 3]] :r [3]}]})) ;=> nil
+   {:loc [2 {:l [1] :pnodes [[1 2 3]] :r [3]}]}) ;=> nil
+  )
 
 (defn ptn-fn*
   "returns a sequence of functions which takes a mr returns a new mr"

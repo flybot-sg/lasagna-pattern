@@ -36,7 +36,7 @@ The library is organized into these main components:
 This project uses [Kaocha](https://github.com/lambdaisland/kaocha) for testing. To run the tests:
 
 ```shell
-clojure -X:test
+clojure -X:test :watch\? true ;:watch? if you want the watch mode
 ```
 
 ## License

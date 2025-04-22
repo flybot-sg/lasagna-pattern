@@ -1,12 +1,11 @@
-(ns sg.flybot.pullable.util)
+(ns ^:util-ns sg.flybot.pullable.util)
 
 (defn either
   "returns a predicate that accepts either `preds`"
   [& preds]
   (fn [x] (reduce #(or %1 (%2 x)) false preds)))
 
-(defmacro cond-let
-  {:clj-kondo/ignore [:unresolved-symbol :type-mismatch]}
+(defmacro cond-let 
   [& clauses]
   (when clauses
     (if (next clauses)
@@ -22,4 +21,5 @@
 
 ^:rct/test
 (comment
-  (take-until odd? [1 1 3 4 5 6])) ;=> [1 1 3 4]
+  (take-until odd? [1 1 3 4 5 6])  ;=> [1 1 3 4]
+  )
