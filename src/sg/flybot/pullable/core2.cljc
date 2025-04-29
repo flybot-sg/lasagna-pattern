@@ -8,7 +8,11 @@
    [clojure.lang MapEntry]))
 
 ;;----------------
-;; zip utilities
+;; Chapter 1: zip utilities
+;; 
+;; The design is to treat pull patterns as maps to the data, using
+;; clojure.zip is the idea. The library provides many "move" functions
+;; like zip/next to traverse the data, but we need "directions".
 
 (defn zip-next
   "Modified version of zip/next, returns a tuple [loc direction],
@@ -33,6 +37,14 @@
          (recur up (conj d :up)))
        [[(zip/node p) :end] d]))))
 
+(defn zip-visit
+  "visit zip `node` returns a lazy sequence of pairs of node data and directions to the node"
+  [node]
+  (->> [node]
+       (iterate (fn [[loc]] (zip-next loc)))
+       (eduction (comp (halt-when (fn [[loc]] (zip/end? loc)))
+                       (map (fn [[loc dirs]] [(zip/node loc) dirs]))))))
+
 (defn data-zip
   "returns a common data zipper support sequence, maps (as sequence of MapEntry)"
   [data]
@@ -46,21 +58,19 @@
            (with-meta (meta node)))))
    data))
 
-(defn zip-visit
-  "visit zip `node` returns a lazy sequence of pairs of node data and directions to the node"
-  [node]
-  (->> [node]
-       (iterate (fn [[loc]] (zip-next loc)))
-       (eduction (comp (halt-when (fn [[loc]] (zip/end? loc)))
-                       (map (fn [[loc dirs]] [(zip/node loc) dirs]))))))
-
 ^:rct/test
 (comment
-  ;data zip
+  ;visit a data zip
   (zip-visit (data-zip [1 2 (array-map :a 3 :b 4) '(5 6) (sorted-set 7 8)])) ;=>
   [[[1 2 {:a 3, :b 4} [5 6] #{7 8}] nil] [1 [:down]] [2 [:right]] [{:a 3, :b 4} [:right]] [[:a 3] [:down]] [:a [:down]] [3 [:right]] [[:b 4] [:up :right]]
    [:b [:down]] [4 [:right]] [[5 6] [:up :up :right]] [5 [:down]] [6 [:right]]
    [#{7 8} [:up :right]] [7 [:down]] [8 [:right]]])
+
+;; Chapter 1.1
+;;
+;; Handle maps inside data specially. The trick for map is to store original
+;; map into the metadata while we shrinking the map, and only restore the original
+;; map when we want to go back to the root.
 
 (defn zip-root
   "copy and modified from `clojure.zip/root`, merge the orignal map data in meta."
@@ -76,12 +86,13 @@
         (recur p)
         (merged (zip/node loc))))))
 
-;;------------------------------
-;; ## Matching result (a.k.a mr)
+;;------------------------------ 
+;; ## Chapter 2: Matching result (a.k.a mr)
+;;
 ;; Matching result is a context that contains the current state of the matching process.
 
 (defn data->mr
-  "turns normal data to a mr"
+  "turns normal data to mrs"
   [data]
   {:loc (data-zip data)})
 
@@ -96,20 +107,14 @@
   (-> 5 data->mr mr->data) ;=> {& 5}
   (-> nil data->mr mr->data))  ;=> {& nil}
 
-;;----------------
-
-(defn comp-matchers
-  "returns a matcher that composes a list of matchers and dirs pairs"
-  [matcher-dir-pairs]
-  (fn [mr _]
-    (reduce (fn [mr [matcher dirs]] (or (matcher mr dirs) (reduced nil))) mr matcher-dir-pairs)))
-
-(defn apply-ms
-  "apply a matcher to data, returns a mr or nil if no match"
-  [f data]
-  (-> (data->mr data)
-      (f nil)
-      (mr->data)))
+;;---------------------
+;; ## Chapter 3: Matcher
+;;
+;; A matcher is a multi-arity function accept a `mr`, returns a new mr or nil if no match.
+;; Matchers also need `dirs` to traverse the target data.
+;;
+;;  - 1 arity, returns a value if used as a key of a map
+;;  - 2 arity, match on a mr and directions to the matcher
 
 (defn move
   "move `mr` in `dirs`, return a new mr"
@@ -121,62 +126,14 @@
             (if (some? loc) ((moves dir) loc) (reduced nil)))]
     (update mr :loc #(reduce go % dirs))))
 
-(defn m-map
-  "A structure matcher factory for map data"
-  [key-matchers]
-  (fn [mr dirs]
-    (letfn [(replace
-              [[n p :as loc]]
-              (with-meta
-                [(-> (select-keys n (map #(% mr) key-matchers))
-                     (with-meta (assoc (meta n) ::orig-map n)))
-                 (assoc p :changed? true)]
-                (meta loc)))]
-      (-> mr (move dirs) (update :loc replace)))))
-
-^:rct/test
-(comment
-  ;;m-map 
-  (apply-ms (comp-matchers [[(m-map [(constantly :a) (constantly :b)])]
-                            [(m-lvar 'k (m-wildcard)) [:down :down]]
-                            [(m-lvar 'v (m-wildcard)) [:right]]])
-            {:a 1 :b 2 :c 3})  ;=> {& {:a 1, :b 2, :c 3}, k :a, v 1}
-  )
-
-(defn pattern-zip
-  "returns a zipper for the pattern"
-  [pattern]
-  (zip/zipper
-   (either vector? map?)
-   vec
-   (fn [node children]
-     (with-meta (vec children) (meta node)))
-   pattern))
+;; ### Chapter 3.1: Implementation of matchers
+;;
+;; We will expand the library of matchers later.
 
 (defn m-noop
+  "A most basic matcher just move."
   [mr dirs]
   (move mr dirs))
-
-(defn elem-conv
-  [[elem dirs]]
-  [(cond
-     (map? elem) (m-map (keys elem))
-     (nil? dirs) m-noop
-     (map-entry? elem) m-noop
-     :else elem)
-   dirs])
-
-(defn ptn->m
-  [pattern]
-  (->> pattern pattern-zip zip-visit (map elem-conv) comp-matchers))
-
-;;---------------------
-;; ## Matcher factories
-;;
-;; A matcher is a multi-arity function accept a `mr`, returns a new mr or nil if no match.
-;; Matchers also need `dirs` to traverse the target data.
-;;  - 1 arity, returns a value if used as a key of a map
-;;  - 2 arity, match on a mr and dirs to this pred
 
 (defn m-pred
   "A matcher that matches a predicate on the current node."
@@ -205,12 +162,6 @@
   ;;common m-pred
   ((m-pred even?) {:loc [4 nil]} nil) ;=> {:loc [4 nil]}
   ((m-pred even?) {:loc [3 nil]} nil) ;=> nil
-  ;;apply-ms
-  (apply-ms (m-pred even?) 3) ;=> nil
-  ;;comp-matchers
-  (apply-ms (m-wildcard) 4)  ;=> {& 4}
-  (apply-ms (ptn->m [(m-wildcard) {(m-val :b) (m-lvar 'b (m-wildcard))}])
-            [2 {:a 3 :b 4}]) ;=>> '{b 4}
   )
 
 (defn m-lvar
@@ -237,11 +188,7 @@
   ;;m-lvar with joining
   ((m-lvar 'a (m-pred even?)) {:loc [4 nil] :vars {'a 3}} nil) ;=> nil
   ((m-lvar 'a (m-pred even?)) {:loc [4 nil] :vars {'a 4}} nil) ;=>>
-  {:vars {'a 4}}
-  ;;m-lvar as a key
-  (apply-ms (ptn->m [(m-lvar 'a (m-val :a)) {(m-lvar 'a) (m-lvar 'b)}])
-            [:a {:a 3}]) ;=>
-  '{a :a, b 3 & [:a {:a 3}]})
+  {:vars {'a 4}})
 
 (defn m-term
   "A matcher that matches the end of a sequence"
@@ -256,19 +203,65 @@
   ((m-term) {:loc (-> (data-zip [1 2]) zip/down) :vars {}} [:right])  ;=> nil
   )
 
+;;-----------------------
+;; ## Matcher composition
+
+(defn comp-matchers
+  "returns a matcher that composes a list of matchers and dirs pairs"
+  [matcher-dir-pairs]
+  (fn [mr _]
+    (reduce (fn [mr [matcher dirs]] (or (matcher mr dirs) (reduced nil))) mr matcher-dir-pairs)))
+
+(defn apply-ms
+  "apply a matcher to data, returns a mr or nil if no match"
+  [f data]
+  (-> (data->mr data)
+      (f nil)
+      (mr->data)))
+
+(defn m-map
+  "A structure matcher factory for map data"
+  [key-matchers]
+  (fn [mr dirs]
+    (letfn [(replace
+              [[n p :as loc]]
+              (with-meta
+                [(-> (select-keys n (map #(% mr) key-matchers))
+                     (with-meta (assoc (meta n) ::orig-map n)))
+                 (assoc p :changed? true)]
+                (meta loc)))]
+      (-> mr (move dirs) (update :loc replace)))))
+
+^:rct/test
+(comment
+  ;;m-map 
+  (apply-ms (comp-matchers [[(m-map [(constantly :a) (constantly :b)])]
+                            [(m-lvar 'k (m-wildcard)) [:down :down]]
+                            [(m-lvar 'v (m-wildcard)) [:right]]])
+            {:a 1 :b 2 :c 3})  ;=> {& {:a 1, :b 2, :c 3}, k :a, v 1}
+  )
+
+(def ^:dynamic *matcher-types*
+  "known matcher types"
+  {:wild m-wildcard,
+   :val m-val,
+   :lvar m-lvar,
+   :term m-term,
+   :pred m-pred})
+
+(defn matcher-form?
+  "predict if `v` is a matcher form, aka like (? ...)"
+  [v]
+  (and (list? v) (#{'? '?? '! '!!} (first v))))
+
 (defn spec->matchers
-  "turns a `spec-vec` vector into a matcher function"
+  "turns a `spec-vec` list into a matcher function"
   [coll]
   (walk/postwalk
    (fn [x]
-     (if (vector? x)
-       (let [[key & args] x
-             matcher-types {:wild m-wildcard,
-                            :val m-val,
-                            :lvar m-lvar,
-                            :term m-term,
-                            :pred m-pred}
-             f (or (get matcher-types key) 
+     (if (matcher-form? x)
+       (let [[_ key & args] x
+             f (or (get *matcher-types* key)
                    (throw (ex-info "unknown key for matcher spec" {:key key})))]
          (apply f args))
        x))
@@ -276,10 +269,37 @@
 
 ^:rct/test
 (comment
-  ((spec->matchers [:wild]) {:loc [4 nil]} []) ;=>>some?
-  ((spec->matchers [:val 3]) {:loc [3 nil]} []) ;=>>some? 
-  ((spec->matchers [:pred odd?]) {:loc [3 nil]} []) ;=>>some? 
-  (apply-ms (ptn->m [(spec->matchers [:term])]) []) ;=>>some? 
-  ((spec->matchers [:lvar 'a [:wild]]) {:loc [3 nil]} []) ;=>>
-  {:vars {'a 3}}
+  ((spec->matchers '(? :wild)) {:loc [4 nil]} []) ;=>>some?
+  ((spec->matchers '(? :val 3)) {:loc [3 nil]} []) ;=>>some? 
+  ((spec->matchers (list '? :pred odd?)) {:loc [3 nil]} []) ;=>>some? 
+  )
+
+(defn pattern-zip
+  "returns a zipper for the pattern"
+  [pattern]
+  (zip/zipper
+   (either vector? map?)
+   vec
+   (fn [node children]
+     (with-meta (vec children) (meta node)))
+   pattern))
+
+(defn elem-conv
+  ([elem-dirs-pair]
+   (elem-conv elem-dirs-pair spec->matchers))
+  ([[elem dirs] f]
+   [(cond
+      (map? elem) (m-map (keys elem))
+      (nil? dirs) m-noop
+      (map-entry? elem) m-noop
+      :else (f elem))
+    dirs]))
+
+(defn ptn->m
+  ([pattern]
+   (->> pattern pattern-zip zip-visit (map elem-conv) comp-matchers)))
+
+^:rct/test
+(comment
+  (apply-ms (ptn->m ['(? :wild) '(? :lvar a (? :wild))]) [4 3]) ;=> {a 3 & [4 3]}
   )
