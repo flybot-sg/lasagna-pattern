@@ -1,6 +1,7 @@
 (ns sg.flybot.pullable.core2
   "Pull pattern for Clojure/script."
   (:require
+   [clojure.walk :as walk]
    [clojure.zip :as zip]
    [sg.flybot.pullable.util :refer [cond-let either]])
   (:import
@@ -137,8 +138,8 @@
 (comment
   ;;m-map 
   (apply-ms (comp-matchers [[(m-map [(constantly :a) (constantly :b)])]
-                            [(m-lvar 'k m-wildcard) [:down :down]]
-                            [(m-lvar 'v m-wildcard) [:right]]])
+                            [(m-lvar 'k (m-wildcard)) [:down :down]]
+                            [(m-lvar 'v (m-wildcard)) [:right]]])
             {:a 1 :b 2 :c 3})  ;=> {& {:a 1, :b 2, :c 3}, k :a, v 1}
   )
 
@@ -194,8 +195,9 @@
   [v]
   (m-pred #(= % v) (constantly v)))
 
-(def m-wildcard
+(defn m-wildcard
   "a wildcard matcher, always returns true"
+  []
   (m-pred (constantly true)))
 
 ^:rct/test
@@ -206,15 +208,15 @@
   ;;apply-ms
   (apply-ms (m-pred even?) 3) ;=> nil
   ;;comp-matchers
-  (apply-ms m-wildcard 4)  ;=> {& 4}
-  (apply-ms (ptn->m [m-wildcard {(m-val :b) (m-lvar 'b m-wildcard)}])
+  (apply-ms (m-wildcard) 4)  ;=> {& 4}
+  (apply-ms (ptn->m [(m-wildcard) {(m-val :b) (m-lvar 'b (m-wildcard))}])
             [2 {:a 3 :b 4}]) ;=>> '{b 4}
   )
 
 (defn m-lvar
   "A matcher that binds a symbol to a value in the mr"
   ([sym]
-   (m-lvar sym m-wildcard))
+   (m-lvar sym (m-wildcard)))
   ([sym m]
    (letfn [(get-v [mr] (get-in mr [:vars sym] ::not-found))]
      (fn
@@ -230,17 +232,16 @@
 ^:rct/test
 (comment
   ;;common m-lvar
-  ((m-lvar 'a m-wildcard) {:loc [4 nil]} nil) ;=>>
+  ((m-lvar 'a (m-wildcard)) {:loc [4 nil]} nil) ;=>>
   {:vars {'a 4}}
   ;;m-lvar with joining
   ((m-lvar 'a (m-pred even?)) {:loc [4 nil] :vars {'a 3}} nil) ;=> nil
   ((m-lvar 'a (m-pred even?)) {:loc [4 nil] :vars {'a 4}} nil) ;=>>
   {:vars {'a 4}}
   ;;m-lvar as a key
-  (apply-ms (ptn->m [(m-lvar 'a (m-val :a)) {(m-lvar 'a) (m-lvar 'b m-wildcard)}])
+  (apply-ms (ptn->m [(m-lvar 'a (m-val :a)) {(m-lvar 'a) (m-lvar 'b)}])
             [:a {:a 3}]) ;=>
-  '{a :a, b 3 & [:a {:a 3}]}
-  )
+  '{a :a, b 3 & [:a {:a 3}]})
 
 (defn m-term
   "A matcher that matches the end of a sequence"
@@ -254,4 +255,31 @@
   ((m-term) {:loc (-> (data-zip [1 2]) zip/down) :vars {}} [:right :right]) ;=>> some?
   ((m-term) {:loc (-> (data-zip [1 2]) zip/down) :vars {}} [:right])  ;=> nil
   )
-  
+
+(defn spec->matchers
+  "turns a `spec-vec` vector into a matcher function"
+  [coll]
+  (walk/postwalk
+   (fn [x]
+     (if (vector? x)
+       (let [[key & args] x
+             matcher-types {:wild m-wildcard,
+                            :val m-val,
+                            :lvar m-lvar,
+                            :term m-term,
+                            :pred m-pred}
+             f (or (get matcher-types key) 
+                   (throw (ex-info "unknown key for matcher spec" {:key key})))]
+         (apply f args))
+       x))
+   coll))
+
+^:rct/test
+(comment
+  ((spec->matchers [:wild]) {:loc [4 nil]} []) ;=>>some?
+  ((spec->matchers [:val 3]) {:loc [3 nil]} []) ;=>>some? 
+  ((spec->matchers [:pred odd?]) {:loc [3 nil]} []) ;=>>some? 
+  (apply-ms (ptn->m [(spec->matchers [:term])]) []) ;=>>some? 
+  ((spec->matchers [:lvar 'a [:wild]]) {:loc [3 nil]} []) ;=>>
+  {:vars {'a 3}}
+  )
