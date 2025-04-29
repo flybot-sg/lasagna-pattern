@@ -93,8 +93,7 @@
 ^:rct/test
 (comment
   (-> 5 data->mr mr->data) ;=> {& 5}
-  (-> nil data->mr mr->data)  ;=> {& nil}
-  )
+  (-> nil data->mr mr->data))  ;=> {& nil}
 
 ;;----------------
 
@@ -123,12 +122,12 @@
 
 (defn m-map
   "A structure matcher factory for map data"
-  [keys]
+  [key-matchers]
   (fn [mr dirs]
     (letfn [(replace
               [[n p :as loc]]
               (with-meta
-                [(-> (select-keys n keys)
+                [(-> (select-keys n (map #(% mr) key-matchers))
                      (with-meta (assoc (meta n) ::orig-map n)))
                  (assoc p :changed? true)]
                 (meta loc)))]
@@ -137,10 +136,10 @@
 ^:rct/test
 (comment
   ;;m-map 
-  (apply-ms (comp-matchers [[(m-map [:a :b])]
+  (apply-ms (comp-matchers [[(m-map [(constantly :a) (constantly :b)])]
                             [(m-lvar 'k m-wildcard) [:down :down]]
                             [(m-lvar 'v m-wildcard) [:right]]])
-            {:a 1 :b 2 :c 3}) ;=> {& {:a 1, :b 2, :c 3}, k :a, v 1}
+            {:a 1 :b 2 :c 3})  ;=> {& {:a 1, :b 2, :c 3}, k :a, v 1}
   )
 
 (defn pattern-zip
@@ -159,7 +158,7 @@
 
 (defn elem-conv
   [[elem dirs]]
-  [(cond 
+  [(cond
      (map? elem) (m-map (keys elem))
      (nil? dirs) m-noop
      (map-entry? elem) m-noop
@@ -170,29 +169,30 @@
   [pattern]
   (->> pattern pattern-zip zip-visit (map elem-conv) comp-matchers))
 
-(comment
-  (->> {(m-pred #(= % :a)) (m-lvar 'a m-wildcard)} (pattern-zip) zip-visit (map elem-conv))
-  (apply-ms (ptn->m {(m-pred #(= % :a)) (m-lvar 'a m-wildcard)})
-            {:a 3 :b 4})
-
-  (->> [{(m-pred #(= % :a)) (m-lvar 'a m-wildcard)}] (pattern-zip) zip-visit (map elem-conv)) 
-  (apply-ms (ptn->m [{(m-pred #(= % :a)) (m-lvar 'a m-wildcard)}])
-            [{:a 3 :b 4}])
-  )
-
 ;;---------------------
 ;; ## Matcher factories
 ;;
-;; A matcher is a function accept a `mr`, returns a new mr or nil if no match.
+;; A matcher is a multi-arity function accept a `mr`, returns a new mr or nil if no match.
 ;; Matchers also need `dirs` to traverse the target data.
+;;  - 1 arity, returns a value if used as a key of a map
+;;  - 2 arity, match on a mr and dirs to this pred
 
 (defn m-pred
   "A matcher that matches a predicate on the current node."
-  [pred]
-  (fn [mr dirs]
-    (let [mr (move mr dirs)
-          v (some-> mr :loc zip/node)]
-      (when (pred v) mr))))
+  ([pred]
+   (m-pred pred nil))
+  ([pred kf]
+   (fn
+     ([mr] (or (kf mr) (throw (ex-info "no key specified for m-pred" {}))))
+     ([mr dirs]
+      (let [mr (move mr dirs)
+            v (some-> mr :loc zip/node)]
+        (when (pred v) mr))))))
+
+(defn m-val
+  "a matcher can match a value `v`"
+  [v]
+  (m-pred #(= % v) (constantly v)))
 
 (def m-wildcard
   "a wildcard matcher, always returns true"
@@ -206,19 +206,26 @@
   ;;apply-ms
   (apply-ms (m-pred even?) 3) ;=> nil
   ;;comp-matchers
-  (apply-ms m-wildcard 4) ;=> {& 4}
+  (apply-ms m-wildcard 4)  ;=> {& 4}
+  (apply-ms (ptn->m [m-wildcard {(m-val :b) (m-lvar 'b m-wildcard)}])
+            [2 {:a 3 :b 4}]) ;=>> '{b 4}
   )
 
 (defn m-lvar
   "A matcher that binds a symbol to a value in the mr"
-  [sym m]
-  (fn [mr dirs]
-    (when-let [mr' (m mr dirs)]
-      (let [old-v (get-in mr' [:vars sym] ::not-found)
-            v (some-> mr' :loc zip/node)]
-        (if (= old-v ::not-found)
-          (assoc-in mr' [:vars sym] v)
-          (when (= old-v v) mr'))))))
+  ([sym]
+   (m-lvar sym m-wildcard))
+  ([sym m]
+   (letfn [(get-v [mr] (get-in mr [:vars sym] ::not-found))]
+     (fn
+       ([mr] (let [v (get-v mr)] (when-not (= ::not-found v) v)))
+       ([mr dirs]
+        (when-let [mr' (m mr dirs)]
+          (let [old-v (get-v mr')
+                v (some-> mr' :loc zip/node)]
+            (if (= old-v ::not-found)
+              (assoc-in mr' [:vars sym] v)
+              (when (= old-v v) mr')))))))))
 
 ^:rct/test
 (comment
@@ -228,7 +235,12 @@
   ;;m-lvar with joining
   ((m-lvar 'a (m-pred even?)) {:loc [4 nil] :vars {'a 3}} nil) ;=> nil
   ((m-lvar 'a (m-pred even?)) {:loc [4 nil] :vars {'a 4}} nil) ;=>>
-  {:vars {'a 4}})
+  {:vars {'a 4}}
+  ;;m-lvar as a key
+  (apply-ms (ptn->m [(m-lvar 'a (m-val :a)) {(m-lvar 'a) (m-lvar 'b m-wildcard)}])
+            [:a {:a 3}]) ;=>
+  '{a :a, b 3 & [:a {:a 3}]}
+  )
 
 (defn m-term
   "A matcher that matches the end of a sequence"
@@ -240,5 +252,6 @@
 ^:rct/test
 (comment
   ((m-term) {:loc (-> (data-zip [1 2]) zip/down) :vars {}} [:right :right]) ;=>> some?
-  ((m-term) {:loc (-> (data-zip [1 2]) zip/down) :vars {}} [:right]) ;=> nil
+  ((m-term) {:loc (-> (data-zip [1 2]) zip/down) :vars {}} [:right])  ;=> nil
   )
+  
