@@ -99,13 +99,8 @@
 (defn mr->data
   "returns data from a mr"
   [mr]
-  (when-let [v (some-> mr :loc)]
-    (assoc (:vars mr) '& (zip-root v))))
-
-^:rct/test
-(comment
-  (-> 5 data->mr mr->data) ;=> {& 5}
-  (-> nil data->mr mr->data))  ;=> {& nil}
+  (when (some-> mr :loc)
+    (:vars mr)))
 
 ;;---------------------
 ;; ## Chapter 3: Matcher
@@ -238,7 +233,7 @@
   (apply-ms (comp-matchers [[(m-map [(constantly :a) (constantly :b)])]
                             [(m-lvar 'k (m-wildcard)) [:down :down]]
                             [(m-lvar 'v (m-wildcard)) [:right]]])
-            {:a 1 :b 2 :c 3})  ;=> {& {:a 1, :b 2, :c 3}, k :a, v 1}
+            {:a 1 :b 2 :c 3})  ;=> {k :a, v 1}
   )
 
 (def ^:dynamic *matcher-types*
@@ -301,5 +296,5 @@
 
 ^:rct/test
 (comment
-  (apply-ms (ptn->m ['(? :wild) '(? :lvar a (? :wild))]) [4 3]) ;=> {a 3 & [4 3]}
+  (apply-ms (ptn->m ['(? :wild) '(? :lvar a (? :wild))]) [4 3]) ;=> {a 3}
   )
