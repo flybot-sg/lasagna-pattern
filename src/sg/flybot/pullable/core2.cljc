@@ -66,26 +66,6 @@
    [:b [:down]] [4 [:right]] [[5 6] [:up :up :right]] [5 [:down]] [6 [:right]]
    [#{7 8} [:up :right]] [7 [:down]] [8 [:right]]])
 
-;; Chapter 1.1
-;;
-;; Handle maps inside data specially. The trick for map is to store original
-;; map into the metadata while we shrinking the map, and only restore the original
-;; map when we want to go back to the root.
-
-(defn zip-root
-  "copy and modified from `clojure.zip/root`, merge the orignal map data in meta."
-  [loc]
-  (letfn [(merged
-            [n]
-            (if-let [orig (and (map? n) (some-> n meta ::orig-map))]
-              (merge orig n)
-              n))]
-    (if (zip/end? loc)
-      (merged (zip/node loc))
-      (if-let [p (some-> loc (zip/up) (zip/edit merged))]
-        (recur p)
-        (merged (zip/node loc))))))
-
 ;;------------------------------ 
 ;; ## Chapter 2: Matching result (a.k.a mr)
 ;;
