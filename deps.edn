@@ -1,8 +1,9 @@
 {:paths ["src"],
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}},
  :aliases
- {:test
+ {:dev
   {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
-                io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}}
-   :exec-fn kaocha.runner/exec-fn
-   :exec-args {}}}}
+                io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}}}
+  :test
+  {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
+   :exec-args {:dirs #{"src"}}}}}

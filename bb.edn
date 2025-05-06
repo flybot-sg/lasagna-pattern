@@ -1,0 +1,7 @@
+{:tasks
+ {clean {:doc "Clean"
+         :task (shell "rm -rf target")}
+  dev {:doc "Start a development repl"
+       :task (clojure "-M:dev")}
+  test {:doc "Run tests"
+        :task (clojure "-X:dev:test")}}}
