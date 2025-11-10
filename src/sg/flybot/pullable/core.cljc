@@ -1,16 +1,16 @@
 (ns sg.flybot.pullable.core)
 
-(defn pred-matcher
+(defn mpred
   [pred]
   (fn [mr]
     (when (pred (:val mr))
       mr)))
 
-(defn val-matcher [v] (pred-matcher #(= v %)))
+(defn mval [v] (mpred #(= v %)))
 
-(def wildcard (pred-matcher (constantly true)))
+(def wildcard (mpred (constantly true)))
 
-(defn var-matcher
+(defn mvar
   [sym child]
   (fn [mr]
     (when-let [mr (child mr)]
@@ -23,19 +23,19 @@
 
 ^:rct/test
 (comment
-  ((pred-matcher even?) {:val 4}) ;=> {:val 4}
-  ((pred-matcher even?) {:val 3}) ;=> nil
-  ((val-matcher 3) {:val 3}) ;=> {:val 3}
+  ((mpred even?) {:val 4}) ;=> {:val 4}
+  ((mpred even?) {:val 3}) ;=> nil
+  ((mval 3) {:val 3}) ;=> {:val 3}
   (wildcard {:val 3}) ;=> {:val 3}
 
-  ((var-matcher 'a (val-matcher 3)) {:val 3}) ;=>
+  ((mvar 'a (mval 3)) {:val 3}) ;=>
   {:val 3 :vars {'a 3}}
-  ((var-matcher 'a (val-matcher 3)) {:val 3 :vars {'a 3}}) ;=>>
+  ((mvar 'a (mval 3)) {:val 3 :vars {'a 3}}) ;=>>
   {:val 3}
-  ((var-matcher 'a (val-matcher 3)) {:val 3 :vars {'a 2}}) ;=> nil
+  ((mvar 'a (mval 3)) {:val 3 :vars {'a 2}}) ;=> nil
   )
 
-(defn map-matcher
+(defn mmap
   [k-matchers]
   (fn [mr]
     (reduce
@@ -51,9 +51,34 @@
 
 ^:rct/test
 (comment
-  (def mm (map-matcher [[:a (var-matcher 'a (val-matcher 4))] [:b (pred-matcher even?)]]))
+  (def mm (mmap [[:a (mvar 'a (mval 4))] [:b (mpred even?)]]))
   (mm {:val {:a 4 :b 0}})  ;=>
   {:val {:a 4 :b 0} :vars {'a 4}}
   (mm {:val {:a 4 :b 3}}) ;=> nil
   (mm {:val {:a 4 :b 0} :vars {'a 0}}) ;=> nil
   )
+
+(defn mone
+  [child]
+  (fn [mr]
+    (when-let [mr' (child (assoc mr :val (-> mr :rest first)))]
+      (some-> mr (update :vars merge (:vars mr')) (update :rest rest)))))
+
+(defn mseq
+  [matchers]
+  (fn [mr]
+    (some->> matchers
+             (reduce (fn [mr' mch]
+                       (or
+                        (mch mr')
+                        (reduced nil)))
+                     (assoc mr :rest (:val mr)))
+             )))
+
+^:rct/test
+(comment
+  (def mo (mone (mvar 'a (mval 1))))
+  (mo {:val [1] :rest [1]}) ;=>> {:vars {'a 1} :rest []}
+  (mo {:val [2] :rest [2]}) ;=> nil
+  (def sm (mseq [mo (mone (mpred zero?)) (mone (mpred odd?))]))
+  (sm {:val [1 0 3]}))
