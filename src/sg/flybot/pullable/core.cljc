@@ -21,11 +21,19 @@
    (merge-mr {:vars {'a 1 'b 2}} {:vars {'a [2]}})) ;=> true
   )
 
+(defn matcher [f t] (with-meta f {::matcher-type t}))
+
+(defn matcher?
+  [x]
+  (and (fn? x) (some-> x meta ::matcher-type)))
+
 (defn mpred
   [pred]
-  (fn [mr]
-    (when (pred (:val mr))
-      mr)))
+  (matcher
+   (fn [mr]
+     (when (pred (:val mr))
+       mr))
+   :pred))
 
 (defn mval [v] (mpred #(= v %)))
 
@@ -33,15 +41,17 @@
 
 (defn mvar
   [sym child]
-  (fn [mr]
-    (when-let [mr (child mr)]
-      (let [new-v (or (:captured mr) (:val mr))
-            old-v (get-in mr [:vars sym] ::not-found)
-            mr (dissoc mr :captured)]
-        (cond
-          (= old-v ::not-found) (assoc-in mr [:vars sym] new-v)
-          (= old-v new-v) mr
-          :else nil)))))
+  (matcher
+   (fn [mr]
+     (when-let [mr (child mr)]
+       (let [new-v (or (:captured mr) (:val mr))
+             old-v (get-in mr [:vars sym] ::not-found)
+             mr (dissoc mr :captured)]
+         (cond
+           (= old-v ::not-found) (assoc-in mr [:vars sym] new-v)
+           (= old-v new-v) mr
+           :else nil))))
+   :var))
 
 ^:rct/test
 (comment
@@ -59,17 +69,19 @@
 
 (defn mmap
   [k-matchers]
-  (fn [mr]
-    (reduce
-     (fn [mr' [k mch]]
-       (if-let [vmr (update mr' :val get k)]
-         (if-let [vmr (mch vmr)]
-           (-> mr'
-               (update :val conj [k (:val vmr)])
-               (update :vars merge (:vars vmr)))
-           (reduced nil))
-         (reduced nil)))
-     mr k-matchers)))
+  (matcher
+   (fn [mr]
+     (reduce
+      (fn [mr' [k mch]]
+        (if-let [vmr (update mr' :val get k)]
+          (if-let [vmr (mch vmr)]
+            (-> mr'
+                (update :val conj [k (:val vmr)])
+                (update :vars merge (:vars vmr)))
+            (reduced nil))
+          (reduced nil)))
+      mr k-matchers))
+   :map))
 
 ^:rct/test
 (comment
@@ -82,29 +94,42 @@
 
 (defn mone
   [child]
-  (fn [mr]
-    (when-let [mr' (child (assoc mr :val (-> mr :rest first)))]
-      (some-> mr (update :vars merge (:vars mr')) (update :rest rest)))))
+  (matcher
+   (fn [mr]
+     (when-let [mr' (child (assoc mr :val (-> mr :rest first)))]
+       (some-> mr (update :vars merge (:vars mr')) (update :rest rest))))
+   :one))
 
 (defn mrest
   [child]
-  (fn [mr]
-    (let [melems (->> (:rest mr) (map #(child (assoc mr :val %))) (take-while identity))]
-      (-> mr
-          (assoc :rest (->> (:rest mr) (drop (count melems))))
-          (assoc :captured (->> melems (map :val) (reduce conj [])))))))
+  (matcher
+   (fn [mr]
+     (let [melems (->> (:rest mr) (map #(child (assoc mr :val %))) (take-while identity))]
+       (-> mr
+           (assoc :rest (->> (:rest mr) (drop (count melems))))
+           (assoc :captured (->> melems (map :val) (reduce conj []))))))
+   :rest))
+
+(defn msubseq
+  [& matchers]
+  (matcher
+   (fn [mr]
+     (reduce (fn [mr' mch] (or (mch mr') (reduced nil))) mr matchers))
+   :subseq))
 
 (defn mseq
   [matchers]
-  (fn [mr]
-    (let [mr (reduce (fn [mr' mch]
-                    (or
-                     (mch mr')
-                     (reduced nil)))
-                  (assoc mr :rest (:val mr))
-                  matchers)]
-      (when-not (some-> mr :rest seq)
-        (dissoc mr :rest)))))
+  (matcher
+   (fn [mr]
+     (let [mr (reduce (fn [mr' mch]
+                        (or
+                         (mch mr')
+                         (reduced nil)))
+                      (assoc mr :rest (:val mr))
+                      matchers)]
+       (when-not (some-> mr :rest seq)
+         (dissoc mr :rest))))
+   :seq))
 
 ^:rct/test
 (comment
@@ -125,40 +150,56 @@
   (def sm (mseq [(mone (mvar 'b (mval 1))) (mone (mpred zero?)) (mvar 'a (mrest (mpred odd?)))]))
   (sm {:val [1 0 1 3 5]}) ;=>> {:vars {'a [1 3 5]}}
   (sm {:val [1 0 1 3 5 2]}) ;=> nil
-  )
+
+  (def sm2 (mseq [(mone (mvar 'b (mval 1))) (msubseq (mone (mpred zero?)))]))
+  (sm2 {:val [1 0]}))
 
 (defn msub
   [f child]
-  (fn [mr]
-    (when-let [mr (child mr)]
-      (let [v (f (:val mr))]
-        (assoc mr :val v)))))
+  (matcher
+   (fn [mr]
+     (when-let [mr (child mr)]
+       (let [v (f (:val mr))]
+         (assoc mr :val v))))
+   :sub))
 
 (defn mor
   [& kms]
   (let [km-pair (partition 2 kms)]
-    (fn [mr]
-      (when-let [[t mr'] (->> km-pair
-                              (map (fn [[k mch]] [k (mch mr)]))
-                              (filter second)
-                              first)]
-        (assoc mr' :captured t)))))
+    (matcher
+     (fn [mr]
+       (when-let [[t mr'] (->> km-pair
+                               (map (fn [[k mch]] [k (mch mr)]))
+                               (filter second)
+                               first)]
+         (assoc mr' :captured t)))
+     :or)))
 
 (defn mwalk
   [& pms]
   (let [pm-pair (partition 2 pms)]
-    (fn [mr]
-      (update mr :val
-              (fn [v]
-                (walk/postwalk
-                 (fn [x]
-                   (or
-                    (->> pm-pair
-                         (map (fn [[pred mch]] (when (pred x) (:val (mch (assoc mr :val x))))))
-                         (filter identity)
-                         first)
-                    x))
-                 v))))))
+    (matcher
+     (fn [mr]
+       (update mr :val
+               (fn [v]
+                 (walk/postwalk
+                  (fn [x]
+                    (or
+                     (->> pm-pair
+                          (map (fn [[pred mch]] (when (pred x) (:val (mch (assoc mr :val x))))))
+                          (filter identity)
+                          first)
+                     x))
+                  v))))
+     :walk)))
+
+(defn mmulti
+  [f sym]
+  (matcher
+   (fn [mr]
+     (let [v (get-in mr [:vars sym])]
+       ((f v) mr)))
+   :multi))
 
 ^:rct/test
 (comment
@@ -181,13 +222,17 @@
 (defmethod make-matcher :val [[_ v]] (mval v))
 (defmethod make-matcher :var [[_ sym child]] (mvar sym child))
 
+(defmulti matcher-args identity)
+(defmethod matcher-args :pred [_] (mone (mpred ifn?)))
+(defmethod matcher-args :val [_] (mone wildcard))
+(defmethod matcher-args :var [_] (msubseq (mone (mpred symbol?)) (mone (mpred matcher?))))
+
 (defn ptn->fn
   [ptn]
   (let [mf (mwalk list? (msub (fn [v] (make-matcher (rest v)))
-                              (mseq [(mone (mval '?)) (mone (mvar 'type (mpred keyword?))) (mrest wildcard)])))
+                              (mseq [(mone (mval '?)) (mone (mvar 'type (mpred keyword?))) (mmulti matcher-args 'type)])))
         rslt (mf {:val ptn})]
-    (when rslt
-      (with-meta (:val rslt) {:matcher/type (get-in rslt [:vars 'type])}))))
+    (when rslt (:val rslt))))
 
 ^:rct/test
 (comment
