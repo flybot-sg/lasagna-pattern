@@ -35,7 +35,8 @@
        mr))
    :pred))
 
-(defn mval [v] (matcher (mpred #(= v %)) :val :value v))
+(defn mval [v] (matcher (mpred #(= v %)) :val ::value v))
+(defn value-of [v] (if (matcher? v) (some-> v meta ::value) v))
 
 (def wildcard (mpred (constantly true)))
 
@@ -51,7 +52,7 @@
            (= old-v ::not-found) (assoc-in mr [:vars sym] new-v)
            (= old-v new-v) mr
            :else nil))))
-   :var :symbol sym))
+   :var ::symbol sym))
 
 ^:rct/test
 (comment
@@ -98,7 +99,7 @@
    (fn [mr]
      (when-let [mr' (child (assoc mr :val (-> mr :rest first)))]
        (some-> mr (update :vars merge (:vars mr')) (update :rest rest))))
-   :subseq :length [1 1]))
+   :subseq ::length [1 1]))
 
 (defn mrest
   [child]
@@ -108,7 +109,7 @@
        (-> mr
            (assoc :rest (->> (:rest mr) (drop (count melems))))
            (assoc :captured (->> melems (map :val) (reduce conj []))))))
-   :subseq :length [0]))
+   :subseq ::length [0]))
 
 (defn msubseq
   [& matchers]
@@ -222,7 +223,7 @@
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
 (defmethod make-matcher :val [[_ v]] (mval v))
 (defmethod make-matcher :var [[_ sym child]] (mvar sym child))
-(defmethod make-matcher :seq [[_ & children]] (mseq (map #(if (= (-> % meta ::type) :subseq) % (mone %)) children)))
+(defmethod make-matcher :seq [[_ & children]] (mseq (map #(if (= (-> % meta ::matcher-type) :subseq) % (mone %)) children)))
 (defmethod make-matcher :map [[_ & kvs]] (mmap (partition 2 kvs)))
 
 (defmulti matcher-args identity)
@@ -232,28 +233,46 @@
 (defmethod matcher-args :val [_] (mone wildcard))
 (defmethod matcher-args :var [_] (msubseq (mone (mpred symbol?)) (mone (mpred matcher?))))
 
+(defn named-var?
+  [v]
+  (and (symbol? v) (re-matches #"\?([a-zA-Z][a-zA-Z0-9_-]*)" (name v))))
+
+(comment
+  (named-var? '?x3)
+  )
+
 (defn ptn->fn
   [ptn]
   (let [mf (mwalk
             list?
             (msub (fn [v] (make-matcher (rest v)))
                   (mseq [(mone (mval '?)) (mone (mvar 'type (mpred keyword?))) (mmulti matcher-args 'type)]))
-            vector?
+
+            map?
+            (msub (fn [v] (mmap v)) wildcard)
+
+            (fn [x] (and (vector? x) (not (map-entry? x))))
             (msub (fn [v] (make-matcher (cons :seq v))) wildcard)
+
             #(= % '?_)
-            (msub (constantly wildcard) wildcard))
+            (msub (constantly wildcard) wildcard)
+
+            named-var?
+            (msub (fn [v] (let [[_ var-name] (named-var? v)] (mvar (symbol var-name) wildcard))) wildcard))
         rslt (mf {:val ptn})]
     (when rslt (:val rslt))))
 
 ^:rct/test
 (comment
-  ;introduce pattern
+                                        ;introduce pattern
   (def pf (ptn->fn '(? :var a (? :val 20))))
-  (pf {:val 20}) ;=>> {:val 20}
+  (pf {:val 20})                        ;=>> {:val 20}
   (def pf2 (ptn->fn '(? :seq (? :var a (? :val 20)))))
   (pf2 {:val [20]})
   (def pf3 (ptn->fn '(? :map :a (? :var a (? :val 20)))))
   (pf3 {:val {:a 20}})
-  ((ptn->fn '?_) {:val 23}) ;=>> {:val 23}
-  ;; ((ptn->fn '[?_ 1]) {:val [2 1]}) ;=>> {:val [2 1]}
+  ((ptn->fn '?_) {:val 23})             ;=>> {:val 23}
+  ((ptn->fn '[?_ ?_]) {:val [2 1]})     ;=>> {:val [2 1]}
+  ((ptn->fn '[?a ?b]) {:val [3 4]})     ;=>> {:vars '{a 3 b 4}}
+  ((ptn->fn '{:a ?a}) {:val {:a 5}})    ;=>> {:vars '{a 5}}
   )
