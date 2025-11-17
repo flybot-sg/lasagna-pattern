@@ -21,7 +21,7 @@
    (merge-mr {:vars {'a 1 'b 2}} {:vars {'a [2]}})) ;=> true
   )
 
-(defn matcher [f t] (with-meta f {::matcher-type t}))
+(defn matcher [f t & {:as more}] (with-meta f (merge more {::matcher-type t})))
 
 (defn matcher?
   [x]
@@ -35,7 +35,7 @@
        mr))
    :pred))
 
-(defn mval [v] (mpred #(= v %)))
+(defn mval [v] (matcher (mpred #(= v %)) :val :value v))
 
 (def wildcard (mpred (constantly true)))
 
@@ -51,7 +51,7 @@
            (= old-v ::not-found) (assoc-in mr [:vars sym] new-v)
            (= old-v new-v) mr
            :else nil))))
-   :var))
+   :var :symbol sym))
 
 ^:rct/test
 (comment
@@ -98,7 +98,7 @@
    (fn [mr]
      (when-let [mr' (child (assoc mr :val (-> mr :rest first)))]
        (some-> mr (update :vars merge (:vars mr')) (update :rest rest))))
-   :one))
+   :subseq :length [1 1]))
 
 (defn mrest
   [child]
@@ -108,7 +108,7 @@
        (-> mr
            (assoc :rest (->> (:rest mr) (drop (count melems))))
            (assoc :captured (->> melems (map :val) (reduce conj []))))))
-   :rest))
+   :subseq :length [0]))
 
 (defn msubseq
   [& matchers]
@@ -212,25 +212,36 @@
                            :number (msub str (mpred number?)))))
   (mo {:val 3}) ;=>> {:vars {'type :number}}
 
-  (def mw (mwalk list? (msub #(apply * %) (mseq [(mone wildcard) (mone (mpred number?))]))))
-  (mw {:val '(2 5)}) ;=>> {:val 10}
-  (mw {:val '(4 (2 5))}) ;=>> {:val 40}
+  (def mw (mwalk list? (msub #(apply * %) (mseq [(mone wildcard) (mone (mpred number?))]))
+                 number? (msub #(* 2 %) (mpred number?))))
+  (mw {:val '(2 5)}) ;=>> {:val 40}
+  (mw {:val '(4 (2 5))}) ;=>> {:val 320}
   )
 
 (defmulti make-matcher first)
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
 (defmethod make-matcher :val [[_ v]] (mval v))
 (defmethod make-matcher :var [[_ sym child]] (mvar sym child))
+(defmethod make-matcher :seq [[_ & children]] (mseq (map #(if (= (-> % meta ::type) :subseq) % (mone %)) children)))
+(defmethod make-matcher :map [[_ & kvs]] (mmap (partition 2 kvs)))
 
 (defmulti matcher-args identity)
+(defmethod matcher-args :default [_] (mrest wildcard))
+(defmethod matcher-args :seq [_] (mrest (mpred matcher?)))
 (defmethod matcher-args :pred [_] (mone (mpred ifn?)))
 (defmethod matcher-args :val [_] (mone wildcard))
 (defmethod matcher-args :var [_] (msubseq (mone (mpred symbol?)) (mone (mpred matcher?))))
 
 (defn ptn->fn
   [ptn]
-  (let [mf (mwalk list? (msub (fn [v] (make-matcher (rest v)))
-                              (mseq [(mone (mval '?)) (mone (mvar 'type (mpred keyword?))) (mmulti matcher-args 'type)])))
+  (let [mf (mwalk
+            list?
+            (msub (fn [v] (make-matcher (rest v)))
+                  (mseq [(mone (mval '?)) (mone (mvar 'type (mpred keyword?))) (mmulti matcher-args 'type)]))
+            vector?
+            (msub (fn [v] (make-matcher (cons :seq v))) wildcard)
+            #(= % '?_)
+            (msub (constantly wildcard) wildcard))
         rslt (mf {:val ptn})]
     (when rslt (:val rslt))))
 
@@ -239,4 +250,10 @@
   ;introduce pattern
   (def pf (ptn->fn '(? :var a (? :val 20))))
   (pf {:val 20}) ;=>> {:val 20}
+  (def pf2 (ptn->fn '(? :seq (? :var a (? :val 20)))))
+  (pf2 {:val [20]})
+  (def pf3 (ptn->fn '(? :map :a (? :var a (? :val 20)))))
+  (pf3 {:val {:a 20}})
+  ((ptn->fn '?_) {:val 23}) ;=>> {:val 23}
+  ;; ((ptn->fn '[?_ 1]) {:val [2 1]}) ;=>> {:val [2 1]}
   )
