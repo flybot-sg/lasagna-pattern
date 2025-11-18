@@ -22,7 +22,6 @@
   )
 
 (defn matcher [f t & {:as more}] (with-meta f (merge more {::matcher-type t})))
-
 (defn matcher?
   [x]
   (and (fn? x) (some-> x meta ::matcher-type)))
@@ -177,21 +176,22 @@
      :or)))
 
 (defn mwalk
-  [& pms]
+  [final-f & pms]
   (let [pm-pair (partition 2 pms)]
     (matcher
      (fn [mr]
        (update mr :val
                (fn [v]
-                 (walk/postwalk
-                  (fn [x]
-                    (or
-                     (->> pm-pair
-                          (map (fn [[pred mch]] (when (pred x) (:val (mch (assoc mr :val x))))))
-                          (filter identity)
-                          first)
-                     x))
-                  v))))
+                 (final-f
+                  (walk/postwalk
+                   (fn [x]
+                     (or
+                      (->> pm-pair
+                           (map (fn [[pred mch]] (when (pred x) (:val (mch (assoc mr :val x))))))
+                           (filter identity)
+                           first)
+                      x))
+                   v)))))
      :walk)))
 
 (defn mmulti
@@ -213,8 +213,10 @@
                            :number (msub str (mpred number?)))))
   (mo {:val 3}) ;=>> {:vars {'type :number}}
 
-  (def mw (mwalk list? (msub #(apply * %) (mseq [(mone wildcard) (mone (mpred number?))]))
-                 number? (msub #(* 2 %) (mpred number?))))
+  (def mw (mwalk
+           identity
+           list? (msub #(apply * %) (mseq [(mone wildcard) (mone (mpred number?))]))
+           number? (msub #(* 2 %) (mpred number?))))
   (mw {:val '(2 5)}) ;=>> {:val 40}
   (mw {:val '(4 (2 5))}) ;=>> {:val 320}
   )
@@ -223,8 +225,10 @@
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
 (defmethod make-matcher :val [[_ v]] (mval v))
 (defmethod make-matcher :var [[_ sym child]] (mvar sym child))
-(defmethod make-matcher :seq [[_ & children]] (mseq (map #(if (= (-> % meta ::matcher-type) :subseq) % (mone %)) children)))
-(defmethod make-matcher :map [[_ & kvs]] (mmap (partition 2 kvs)))
+(defmethod make-matcher :seq [[_ & children]]
+  (mseq (map (fn [item] (let [mt (matcher? item)] (cond-> item (false? mt) mval (not= mt :subseq) mone))) children)))
+(defmethod make-matcher :map [[_ & kvs]]
+  (mmap (map (fn [[k mch]] [k (cond-> mch (not (matcher? mch)) mval)]) (partition 2 kvs))))
 
 (defmulti matcher-args identity)
 (defmethod matcher-args :default [_] (mrest wildcard))
@@ -244,35 +248,51 @@
 (defn ptn->fn
   [ptn]
   (let [mf (mwalk
+            ;;if returns plan value, make it a val matcher
+            (fn [v] (if (matcher? v) v (mval v)))
+
+            ;; support general matcher syntax
             list?
             (msub (fn [v] (make-matcher (rest v)))
                   (mseq [(mone (mval '?)) (mone (mvar 'type (mpred keyword?))) (mmulti matcher-args 'type)]))
 
+            ;; map is a shortcut for :map matcher
             map?
-            (msub (fn [v] (mmap v)) wildcard)
+            (msub (fn [v] (make-matcher (cons :map (flatten (vec v))))) wildcard)
 
+            ;; vector is a shortcut for :seq matcher
             (fn [x] (and (vector? x) (not (map-entry? x))))
             (msub (fn [v] (make-matcher (cons :seq v))) wildcard)
 
+            ;; wildcard is ?_
             #(= % '?_)
             (msub (constantly wildcard) wildcard)
 
+            ;; named var is a shortcut for var wildcard
             named-var?
             (msub (fn [v] (let [[_ var-name] (named-var? v)] (mvar (symbol var-name) wildcard))) wildcard))
         rslt (mf {:val ptn})]
-    (when rslt (:val rslt))))
+    (fn [data]
+      (when rslt ((:val rslt) {:val data})))))
 
 ^:rct/test
 (comment
-                                        ;introduce pattern
   (def pf (ptn->fn '(? :var a (? :val 20))))
-  (pf {:val 20})                        ;=>> {:val 20}
+  (pf 20)                        ;=>> {:val 20}
   (def pf2 (ptn->fn '(? :seq (? :var a (? :val 20)))))
-  (pf2 {:val [20]})
+  (pf2 [20]) ;=>> {:val [20] :vars {'a 20}}
   (def pf3 (ptn->fn '(? :map :a (? :var a (? :val 20)))))
-  (pf3 {:val {:a 20}})
-  ((ptn->fn '?_) {:val 23})             ;=>> {:val 23}
-  ((ptn->fn '[?_ ?_]) {:val [2 1]})     ;=>> {:val [2 1]}
-  ((ptn->fn '[?a ?b]) {:val [3 4]})     ;=>> {:vars '{a 3 b 4}}
-  ((ptn->fn '{:a ?a}) {:val {:a 5}})    ;=>> {:vars '{a 5}}
+  (pf3 {:a 20}) ;=>> {:val {:a 20} :vars {'a 20}}
+  ((ptn->fn '?_) 23)             ;=>> {:val 23}
+  ((ptn->fn '[?_ ?_]) [2 1])     ;=>> {:val [2 1]}
+  ((ptn->fn '[?a ?b]) [3 4])     ;=>> {:vars '{a 3 b 4}}
+  ((ptn->fn '{:a ?a :b 3}) {:a 5 :b 3})    ;=>> {:vars '{a 5}}
+  ((ptn->fn '[5 ?a]) [5 -1])     ;=>> {:vars '{a -1}}
+  ((ptn->fn 5) 5) ;=> {:val 5}
+
+  ;; complex pattern unification
+  (mapv (ptn->fn '{:a ?x :b {:c ?x}}) [{:a 3 :b {:c 3}} {:a 2 :b {:c 3}}]) ;=>>
+  [{:vars {'x 3}} nil]
+  (mapv (ptn->fn '[?x 5 ?_ {:a ?x}]) [[3 5 nil {:a 3}] [3 1]]) ;=>>
+  [{:vars {'x 3}} nil]
   )
