@@ -1,28 +1,8 @@
 (ns sg.flybot.pullable.core
   (:require [clojure.walk :as walk]))
 
-(defn merge-mr
-  [mr1 mr2]
-  (let [sconj (fn [v1 v2] ((if (vector? v2) into conj) (if (vector? v1) v1 [v1]) v2))
-        update-if (fn [m k f & args] (let [v (apply f (get m k) args)]
-                                       (if (nil? v) m (assoc m k v))))]
-    (-> mr1
-        (update-if :val (fn [v1] (let [v2 (:val mr2)]
-                                   (if (and (map? v1) (map-entry? v2)) (conj v1 v2) v2))))
-        (update-if :vars #(merge-with sconj % (:vars mr2))))))
-
-^:rct/test
-(comment
-  (merge-mr {:val 3} {:val 4}) ;=> {:val 4}
-  (merge-mr {:val {:a 1}} (:val (first {:b 2})))
-  (= {:vars {'a [1 2] 'b 2}}
-   (merge-mr {:vars {'a 1 'b 2}} {:vars {'a 2}})
-   (merge-mr {:vars {'a [1]}} {:vars {'a 2 'b 2}})
-   (merge-mr {:vars {'a 1 'b 2}} {:vars {'a [2]}})) ;=> true
-  )
-
 (defn matcher [f t & {:as more}] (with-meta f (merge more {::matcher-type t})))
-(defn matcher?
+(defn matcher-type
   [x]
   (and (fn? x) (some-> x meta ::matcher-type)))
 
@@ -34,8 +14,7 @@
        mr))
    :pred))
 
-(defn mval [v] (matcher (mpred #(= v %)) :val ::value v))
-(defn value-of [v] (if (matcher? v) (some-> v meta ::value) v))
+(defn mval [v] (mpred #(= v %)))
 
 (def wildcard (mpred (constantly true)))
 
@@ -51,7 +30,7 @@
            (= old-v ::not-found) (assoc-in mr [:vars sym] new-v)
            (= old-v new-v) mr
            :else nil))))
-   :var ::symbol sym))
+   (matcher-type child) ::symbol sym))
 
 ^:rct/test
 (comment
@@ -163,15 +142,16 @@
          (assoc mr :val v))))
    :sub))
 
+(def find-first (comp first filter))
+
 (defn mor
-  [& kms]
+  [kms]
   (let [km-pair (partition 2 kms)]
     (matcher
      (fn [mr]
        (when-let [[t mr'] (->> km-pair
                                (map (fn [[k mch]] [k (mch mr)]))
-                               (filter second)
-                               first)]
+                               (find-first second))]
          (assoc mr' :captured t)))
      :or)))
 
@@ -188,8 +168,7 @@
                      (or
                       (->> pm-pair
                            (map (fn [[pred mch]] (when (pred x) (:val (mch (assoc mr :val x))))))
-                           (filter identity)
-                           first)
+                           (find-first identity))
                       x))
                    v)))))
      :walk)))
@@ -209,8 +188,8 @@
   (ms {:val 1}) ;=>> {:val 2}
 
   ;mor find the first matched branch of patterns and capture the type
-  (def mo (mvar 'type (mor :keyword (mpred keyword?)
-                           :number (msub str (mpred number?)))))
+  (def mo (mvar 'type (mor [:keyword (mpred keyword?)
+                            :number (msub str (mpred number?))])))
   (mo {:val 3}) ;=>> {:vars {'type :number}}
 
   (def mw (mwalk
@@ -225,36 +204,50 @@
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
 (defmethod make-matcher :val [[_ v]] (mval v))
 (defmethod make-matcher :var [[_ sym child]] (mvar sym child))
+(defn wrap-element
+  ([item]
+   (let [mt (matcher-type item)] (cond-> item (false? mt) mval (not= mt :subseq) mone))))
+
 (defmethod make-matcher :seq [[_ & children]]
-  (mseq (map (fn [item] (let [mt (matcher? item)] (cond-> item (false? mt) mval (not= mt :subseq) mone))) children)))
+  (mseq (map wrap-element children)))
 (defmethod make-matcher :map [[_ & kvs]]
-  (mmap (map (fn [[k mch]] [k (cond-> mch (not (matcher? mch)) mval)]) (partition 2 kvs))))
+  (mmap (map (fn [[k mch]] [k (cond-> mch (not (matcher-type mch)) mval)]) (partition 2 kvs))))
+(defmethod make-matcher :sub [[_ f child]] (msub f child))
+(defmethod make-matcher :or [[_ & conditions]] (mor conditions))
+(defmethod make-matcher :rest [[_ child]] (mrest (or child wildcard)))
 
 (defmulti matcher-args identity)
 (defmethod matcher-args :default [_] (mrest wildcard))
-(defmethod matcher-args :seq [_] (mrest (mpred matcher?)))
+(defmethod matcher-args :seq [_] (mrest (mpred matcher-type)))
 (defmethod matcher-args :pred [_] (mone (mpred ifn?)))
 (defmethod matcher-args :val [_] (mone wildcard))
-(defmethod matcher-args :var [_] (msubseq (mone (mpred symbol?)) (mone (mpred matcher?))))
+(defmethod matcher-args :var [_] (msubseq (mone (mpred symbol?)) (mone (mpred matcher-type))))
+(defmethod matcher-args :sub [_] (msubseq (mone (mpred ifn?)) (mone (mpred matcher-type))))
 
 (defn named-var?
   [v]
-  (and (symbol? v) (re-matches #"\?([a-zA-Z][a-zA-Z0-9_-]*)" (name v))))
+  (when (symbol? v)
+    (when-let [[_ s n] (re-matches #"(\?[\?]?)([a-zA-Z][a-zA-Z0-9_-]*)" (name v))]
+      [(symbol n) (= s "??")])))
 
+^:rct/test
 (comment
-  (named-var? '?x3)
+  (named-var? '?x3) ;=>> ['x3 false]
+  (named-var? '??x) ;=>> ['x true]
   )
 
 (defn ptn->fn
+  "compiles a ptn syntax to a function matches any data, returns a matching result"
   [ptn]
-  (let [mf (mwalk
+  (let [var? #{'? '??}
+        mf (mwalk
             ;;if returns plan value, make it a val matcher
-            (fn [v] (if (matcher? v) v (mval v)))
+            (fn [v] (if (matcher-type v) v (mval v)))
 
             ;; support general matcher syntax
-            list?
-            (msub (fn [v] (make-matcher (rest v)))
-                  (mseq [(mone (mval '?)) (mone (mvar 'type (mpred keyword?))) (mmulti matcher-args 'type)]))
+            (fn [v] (and (list? v) (var? (first v))))
+            (msub (fn [v] (cond-> (make-matcher (rest v)) (= '?? (first v)) mrest))
+                  (mseq [(mone (mpred var?)) (mone (mvar 'type (mpred keyword?))) (mmulti matcher-args 'type)]))
 
             ;; map is a shortcut for :map matcher
             map?
@@ -270,29 +263,35 @@
 
             ;; named var is a shortcut for var wildcard
             named-var?
-            (msub (fn [v] (let [[_ var-name] (named-var? v)] (mvar (symbol var-name) wildcard))) wildcard))
+            (msub (fn [v] (let [[var-name s?] (named-var? v)]
+                            (mvar var-name (cond-> wildcard s? mrest))))
+                  wildcard))
         rslt (mf {:val ptn})]
     (fn [data]
       (when rslt ((:val rslt) {:val data})))))
 
 ^:rct/test
 (comment
-  (def pf (ptn->fn '(? :var a (? :val 20))))
-  (pf 20)                        ;=>> {:val 20}
-  (def pf2 (ptn->fn '(? :seq (? :var a (? :val 20)))))
-  (pf2 [20]) ;=>> {:val [20] :vars {'a 20}}
-  (def pf3 (ptn->fn '(? :map :a (? :var a (? :val 20)))))
-  (pf3 {:a 20}) ;=>> {:val {:a 20} :vars {'a 20}}
+  ((ptn->fn '(? :var a (? :val 20))) 20)                        ;=>> {:val 20}
+  ((ptn->fn '[(? :var a (?? :val 20))]) [20 20]) ;=>> {:vars {'a [20 20]}}
+  ((ptn->fn '(? :seq (? :var a (? :val 20)))) [20]) ;=>> {:val [20] :vars {'a 20}}
+  ((ptn->fn '(? :map :a (? :var a (? :val 20)))) {:a 20}) ;=>> {:val {:a 20} :vars {'a 20}}
   ((ptn->fn '?_) 23)             ;=>> {:val 23}
   ((ptn->fn '[?_ ?_]) [2 1])     ;=>> {:val [2 1]}
   ((ptn->fn '[?a ?b]) [3 4])     ;=>> {:vars '{a 3 b 4}}
   ((ptn->fn '{:a ?a :b 3}) {:a 5 :b 3})    ;=>> {:vars '{a 5}}
   ((ptn->fn '[5 ?a]) [5 -1])     ;=>> {:vars '{a -1}}
   ((ptn->fn 5) 5) ;=> {:val 5}
+  ((ptn->fn (list '? :sub #(* % %) (list '? :pred number?))) 8) ;=> {:val 64}
+  ((ptn->fn (list '? :pred odd?)) 3) ;=> {:val 3}
+  ((ptn->fn (list '? :var 'type (list '? :or :number (list '? :pred number?) :string (list '? :pred string?)))) 3) ;=>>
+  {:val 3 :vars {'type :number}}
+  ((mseq [(mone (mval 1)) (mone (mval 2)) (mone (mval 3)) (mvar 'a (mrest wildcard))]) {:val [1 2 3 4 5]})
+  (= (mseq [(mone (mval 1)) (mone (mval 2)) (mone (mval 3)) (mvar 'a (mrest wildcard))]) (ptn->fn '[1 2 3 ??a]))
+  ((ptn->fn '[1 2 3 ??end]) [1 2 3 4 5]) ;=>> {:vars {'end [4 5]}}
 
   ;; complex pattern unification
   (mapv (ptn->fn '{:a ?x :b {:c ?x}}) [{:a 3 :b {:c 3}} {:a 2 :b {:c 3}}]) ;=>>
   [{:vars {'x 3}} nil]
   (mapv (ptn->fn '[?x 5 ?_ {:a ?x}]) [[3 5 nil {:a 3}] [3 1]]) ;=>>
-  [{:vars {'x 3}} nil]
-  )
+  [{:vars {'x 3}} nil])
