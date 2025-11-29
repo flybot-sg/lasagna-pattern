@@ -26,10 +26,10 @@
        (let [new-v (or (:captured mr) (:val mr))
              old-v (get-in mr [:vars sym] ::not-found)
              mr (dissoc mr :captured)]
-         (cond
-           (= old-v ::not-found) (assoc-in mr [:vars sym] new-v)
-           (= old-v new-v) mr
-           :else nil))))
+         (condp = old-v
+           ::not-found (assoc-in mr [:vars sym] new-v)
+           new-v mr
+           nil))))
    (matcher-type child) ::symbol sym))
 
 ^:rct/test
@@ -43,8 +43,7 @@
   {:val 3 :vars {'a 3}}
   ((mvar 'a (mval 3)) {:val 3 :vars {'a 3}}) ;=>>
   {:val 3}
-  ((mvar 'a (mval 3)) {:val 3 :vars {'a 2}}) ;=> nil
-  )
+  ((mvar 'a (mval 3)) {:val 3 :vars {'a 2}})) ;=> nil
 
 (defn mmap
   [k-matchers]
@@ -52,12 +51,10 @@
    (fn [mr]
      (reduce
       (fn [mr' [k mch]]
-        (if-let [vmr (update mr' :val get k)]
-          (if-let [vmr (mch vmr)]
-            (-> mr'
+        (if-let [vmr (some-> (update mr' :val get k) (mch))]
+          (-> mr'
                 (update :val conj [k (:val vmr)])
                 (update :vars merge (:vars vmr)))
-            (reduced nil))
           (reduced nil)))
       mr k-matchers))
    :map))
@@ -68,8 +65,8 @@
   (mm {:val {:a 4 :b 0}})  ;=>
   {:val {:a 4 :b 0} :vars {'a 4}}
   (mm {:val {:a 4 :b 3}}) ;=> nil
-  (mm {:val {:a 4 :b 0} :vars {'a 0}}) ;=> nil
-  )
+  (mm {:val {:a 4 :b 0} :vars {'a 0}})) ;=> nil
+  
 
 (defn mone
   [child]
@@ -197,8 +194,8 @@
            list? (msub #(apply * %) (mseq [(mone wildcard) (mone (mpred number?))]))
            number? (msub #(* 2 %) (mpred number?))))
   (mw {:val '(2 5)}) ;=>> {:val 40}
-  (mw {:val '(4 (2 5))}) ;=>> {:val 320}
-  )
+  (mw {:val '(4 (2 5))})) ;=>> {:val 320}
+  
 
 (defmulti make-matcher first)
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
@@ -233,8 +230,8 @@
 ^:rct/test
 (comment
   (named-var? '?x3) ;=>> ['x3 false]
-  (named-var? '??x) ;=>> ['x true]
-  )
+  (named-var? '??x)) ;=>> ['x true]
+  
 
 (defn ptn->fn
   "compiles a ptn syntax to a function matches any data, returns a matching result"
