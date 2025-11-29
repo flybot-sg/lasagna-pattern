@@ -66,13 +66,17 @@
   {:val {:a 4 :b 0} :vars {'a 4}}
   (mm {:val {:a 4 :b 3}}) ;=> nil
   (mm {:val {:a 4 :b 0} :vars {'a 0}})) ;=> nil
-  
+
+(defn mnone []
+  (matcher
+    identity
+    :subseq ::length [0 0]))
 
 (defn mone
   [child]
   (matcher
    (fn [mr]
-     (when-let [mr' (child (assoc mr :val (-> mr :rest first)))]
+     (when-let [mr' (some->> (:rest mr) first (assoc mr :val) child)]
        (some-> mr (update :vars merge (:vars mr')) (update :rest rest))))
    :subseq ::length [1 1]))
 
@@ -113,6 +117,7 @@
   (def mo (mone (mvar 'a (mval 1))))
   (mo {:val [1] :rest [1]}) ;=>> {:vars {'a 1} :rest []}
   (mo {:val [2] :rest [2]}) ;=> nil
+  (mo {:val [] :rest []}) ;=> nil
 
   (def mr (mvar 'a (mrest (mpred even?))))
   (mr {:val [2 4 6 1] :rest [2 4 6 1]}) ;=>> {:vars {'a [2 4 6]} :rest [1]}
@@ -178,6 +183,13 @@
        ((f v) mr)))
    :multi))
 
+(defn moption
+  ([child]
+   (moption child wildcard))
+  ([child more]
+   (mor [:one (msubseq (mone child) more)
+         :none (msubseq (mnone) more)])))
+
 ^:rct/test
 (comment
   ;msub substitute :val and :captured
@@ -188,6 +200,11 @@
   (def mo (mvar 'type (mor [:keyword (mpred keyword?)
                             :number (msub str (mpred number?))])))
   (mo {:val 3}) ;=>> {:vars {'type :number}}
+
+  ((moption (mvar 'a wildcard) wildcard) {:rest []}) ;=>> {:captured :none}
+  ((moption (mvar 'a wildcard) wildcard) {:val [1] :rest [1]}) ;=>> {:captured :one}
+  (map (mseq [(moption (mvar 'a (mval 0)) (mone (mvar 'b (mval 1))))]) [{:val [1]} {:val [0 1]}]) ;=>>
+  [{:vars {'b 1}} {:vars {'a 0 'b 1}}]
 
   (def mw (mwalk
            identity
@@ -212,6 +229,7 @@
 (defmethod make-matcher :sub [[_ f child]] (msub f child))
 (defmethod make-matcher :or [[_ & conditions]] (mor conditions))
 (defmethod make-matcher :rest [[_ child]] (mrest (or child wildcard)))
+(defmethod make-matcher :? [[_ child more]] (moption child more))
 
 (defmulti matcher-args identity)
 (defmethod matcher-args :default [_] (mrest wildcard))
@@ -224,14 +242,14 @@
 (defn named-var?
   [v]
   (when (symbol? v)
-    (when-let [[_ s n] (re-matches #"(\?[\?]?)([a-zA-Z][a-zA-Z0-9_-]*)" (name v))]
-      [(symbol n) (= s "??")])))
+    (when-let [[_ s n ?] (re-matches #"(\?[\?]?)([a-zA-Z][a-zA-Z0-9_-]*)(\??)" (name v))]
+      [(symbol n) (= s "??") (= ? "?")])))
 
 ^:rct/test
 (comment
   (named-var? '?x3) ;=>> ['x3 false]
-  (named-var? '??x)) ;=>> ['x true]
-  
+  (named-var? '??x?) ;=>>
+  ['x true])
 
 (defn ptn->fn
   "compiles a ptn syntax to a function matches any data, returns a matching result"
@@ -260,8 +278,9 @@
 
             ;; named var is a shortcut for var wildcard
             named-var?
-            (msub (fn [v] (let [[var-name s?] (named-var? v)]
-                            (mvar var-name (cond-> wildcard s? mrest))))
+            (msub (fn [v] (let [[var-name s? optional?] (named-var? v)]
+                           (cond-> (mvar var-name (cond-> wildcard s? mrest))
+                             optional? (moption))))
                   wildcard))
         rslt (mf {:val ptn})]
     (fn [data]
@@ -284,11 +303,14 @@
   ((ptn->fn (list '? :var 'type (list '? :or :number (list '? :pred number?) :string (list '? :pred string?)))) 3) ;=>>
   {:val 3 :vars {'type :number}}
   ((mseq [(mone (mval 1)) (mone (mval 2)) (mone (mval 3)) (mvar 'a (mrest wildcard))]) {:val [1 2 3 4 5]})
-  (= (mseq [(mone (mval 1)) (mone (mval 2)) (mone (mval 3)) (mvar 'a (mrest wildcard))]) (ptn->fn '[1 2 3 ??a]))
   ((ptn->fn '[1 2 3 ??end]) [1 2 3 4 5]) ;=>> {:vars {'end [4 5]}}
+
+  ;;optional pattern
+  (map (ptn->fn '[?a? 2]) [[0 2] [2]]) ;=>>
+  ;; [{:vars {'a 1}} {}]
 
   ;; complex pattern unification
   (mapv (ptn->fn '{:a ?x :b {:c ?x}}) [{:a 3 :b {:c 3}} {:a 2 :b {:c 3}}]) ;=>>
   [{:vars {'x 3}} nil]
-  (mapv (ptn->fn '[?x 5 ?_ {:a ?x}]) [[3 5 nil {:a 3}] [3 1]]) ;=>>
+  (mapv (ptn->fn '[?x 5 ?_ {:a ?x}]) [[3 5 6 {:a 3}] [3 1]]) ;=>>
   [{:vars {'x 3}} nil])
