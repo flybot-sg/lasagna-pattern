@@ -292,116 +292,90 @@
 ;;
 ;; Pattern is a mini language using common clojure data, it can translate to matcher functions.
 
+(defn named-var?
+  "Parse a symbol as a named pattern variable.
+   Returns `[base-name seq?]` when `v` has the `?x`, `??x` or
+   forms, otherwise `nil`."
+  [v]
+  (when (symbol? v)
+    (when-let [[_ s n optional?] (re-matches #"(\?[\?]?)(\p{Alnum}*)(\??)" (name v))]
+      [(symbol n) (= s "??") (= optional? "?")])))
+
+^:rct/test
+(comment
+  (named-var? '?x3) ;=>> ['x3 false false]
+  (named-var? '??x?) ;=>>
+  ['x true true]
+  )
+
+(defn prefix [sym]
+  (when-let [[_ nm] (re-matches #"\?:?(\p{Alnum}*)" (str sym))]
+    (if (= nm "") :none (keyword nm))))
+
 (defmulti make-matcher
   "Compile a low level pattern description like `[:pred pred]` or
    `[:seq ...]` into a concrete matcher function."
   first)
+
+(defmacro cond-let
+  "Like cond, but each test is an if-let binding vector."
+  [& clauses]
+  (when clauses
+    (let [h (first clauses)]
+      (if (next clauses)
+        (list (if (vector? h) 'if-let 'if) h
+              (second clauses) 
+              (cons 'cond-let (nnext clauses)))
+        h))))
+
+(defn- scalar-element [x]
+  (cond
+    (matcher-type x) x
+    (fn? x) (mpred x)
+    :else (mval x)))
+
+(defn- wrap-element [x]
+  (let [mt (matcher-type x)] (cond-> x (not mt) scalar-element (not= mt :subseq) mone)))
+
+(defn- seq-matcher [x]
+  (-> (map wrap-element x) mseq))
+
+(defn- map-matcher [x]
+  (->> (map (fn [[k v]] [k (scalar-element v)]) x)
+       mmap))
+
+(defn ptn->matcher
+  [ptn]
+  (->> ptn
+       (walk/postwalk
+        (fn [x]
+          (cond-let
+            [nm (and (list? x) (prefix (first x)))] (make-matcher (cons nm (rest x)))
+            (= x '?_) wildcard
+            (map? x) (map-matcher x)
+            (and (vector? x) (not (map-entry? x))) (seq-matcher x) 
+            [[var-name _ optional?] (named-var? x)] (make-matcher [:var var-name wildcard])
+            x)))
+       scalar-element))
+
+^:rct/test
+(comment
+  ;;test some basic pattern
+  ((ptn->matcher [{:a '?a, :b '?b, :c {:d '?a}}, '?a, neg?, ['?c]])
+   {:val [{:a 4, :b 5, :c {:d 4}}, 4, -1, ["Hello"]]}) ;=>>
+  {:vars '{a 4, b 5 c "Hello"}}
+  (map (ptn->matcher '[?option? 1 2]) [{:val [1 2]} {:val [0 1 2]}])
+  )
+
+(defmethod make-matcher :none [[_ sym pred]]
+  (cond->> (mpred pred) (not= '_ sym) (mvar sym)))
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
 (defmethod make-matcher :val [[_ v]] (mval v))
 (defmethod make-matcher :var [[_ sym child]] (mvar sym child))
-(defn wrap-element
-  "Ensure a pattern element behaves like a subsequence matcher.
-   Plain values become `mval` matchers and non-subseq matchers are
-   wrapped with `mone` so they consume exactly one element."
-  ([item]
-   (let [mt (matcher-type item)] (cond-> item (false? mt) mval (not= mt :subseq) mone))))
 
-(defmethod make-matcher :seq [[_ & children]]
-  (mseq (map wrap-element children)))
-(defmethod make-matcher :map [[_ & kvs]]
-  (mmap (map (fn [[k mch]] [k (cond-> mch (not (matcher-type mch)) mval)]) (partition 2 kvs))))
+(defmethod make-matcher :1 [[_ child]] (mone child))
+
 (defmethod make-matcher :sub [[_ f child]] (msub f child))
 (defmethod make-matcher :or [[_ & conditions]] (mor conditions))
 (defmethod make-matcher :rest [[_ child]] (mrest (or child wildcard)))
 (defmethod make-matcher :? [[_ child more]] (moption child more))
-
-(defmulti matcher-args
-  "Describe how many and what kinds of arguments a matcher form expects.
-   The dispatch value is the matcher type keyword, e.g. `:seq` or
-   `:pred`."
-  identity)
-(defmethod matcher-args :default [_] (mrest wildcard))
-(defmethod matcher-args :seq [_] (mrest (mpred matcher-type)))
-(defmethod matcher-args :pred [_] (mone (mpred ifn?)))
-(defmethod matcher-args :val [_] (mone wildcard))
-(defmethod matcher-args :var [_] (msubseq (mone (mpred symbol?)) (mone (mpred matcher-type))))
-(defmethod matcher-args :sub [_] (msubseq (mone (mpred ifn?)) (mone (mpred matcher-type))))
-
-(defn named-var?
-  "Parse a symbol as a named pattern variable.
-   Returns `[base-name multi? optional?]` when `v` has the `?x`, `??x` or
-   `?x?` forms, otherwise `nil`."
-  [v]
-  (when (symbol? v)
-    (when-let [[_ s n ?] (re-matches #"(\?[\?]?)([a-zA-Z][a-zA-Z0-9_-]*)(\??)" (name v))]
-      [(symbol n) (= s "??") (= ? "?")])))
-
-^:rct/test
-(comment
-  (named-var? '?x3) ;=>> ['x3 false]
-  (named-var? '??x?) ;=>>
-  ['x true])
-
-(defn ptn->fn
-  "compiles a ptn syntax to a function matches any data, returns a matching result"
-  [ptn]
-  (let [var? #{'? '??}
-        mf (mwalk
-            ;;if returns plan value, make it a val matcher
-            (fn [v] (if (matcher-type v) v (mval v)))
-
-            ;; support general matcher syntax
-            (fn [v] (and (list? v) (var? (first v))))
-            (msub (fn [v] (cond-> (make-matcher (rest v)) (= '?? (first v)) mrest))
-                  (mseq [(mone (mpred var?)) (mone (mvar 'type (mpred keyword?))) (mmulti matcher-args 'type)]))
-
-            ;; map is a shortcut for :map matcher
-            map?
-            (msub (fn [v] (make-matcher (cons :map (flatten (vec v))))) wildcard)
-
-            ;; vector is a shortcut for :seq matcher
-            (fn [x] (and (vector? x) (not (map-entry? x))))
-            (msub (fn [v] (make-matcher (cons :seq v))) wildcard)
-
-            ;; wildcard is ?_
-            #(= % '?_)
-            (msub (constantly wildcard) wildcard)
-
-            ;; named var is a shortcut for var wildcard
-            named-var?
-            (msub (fn [v] (let [[var-name s? optional?] (named-var? v)]
-                           (cond-> (mvar var-name (cond-> wildcard s? mrest))
-                             optional? (moption))))
-                  wildcard))
-        rslt (mf {:val ptn})]
-    (fn [data]
-      (when rslt ((:val rslt) {:val data})))))
-
-^:rct/test
-(comment
-  ((ptn->fn '(? :var a (? :val 20))) 20)                        ;=>> {:val 20}
-  ((ptn->fn '[(? :var a (?? :val 20))]) [20 20]) ;=>> {:vars {'a [20 20]}}
-  ((ptn->fn '(? :seq (? :var a (? :val 20)))) [20]) ;=>> {:val [20] :vars {'a 20}}
-  ((ptn->fn '(? :map :a (? :var a (? :val 20)))) {:a 20}) ;=>> {:val {:a 20} :vars {'a 20}}
-  ((ptn->fn '?_) 23)             ;=>> {:val 23}
-  ((ptn->fn '[?_ ?_]) [2 1])     ;=>> {:val [2 1]}
-  ((ptn->fn '[?a ?b]) [3 4])     ;=>> {:vars '{a 3 b 4}}
-  ((ptn->fn '{:a ?a :b 3}) {:a 5 :b 3})    ;=>> {:vars '{a 5}}
-  ((ptn->fn '[5 ?a]) [5 -1])     ;=>> {:vars '{a -1}}
-  ((ptn->fn 5) 5) ;=> {:val 5}
-  ((ptn->fn (list '? :sub #(* % %) (list '? :pred number?))) 8) ;=> {:val 64}
-  ((ptn->fn (list '? :pred odd?)) 3) ;=> {:val 3}
-  ((ptn->fn (list '? :var 'type (list '? :or :number (list '? :pred number?) :string (list '? :pred string?)))) 3) ;=>>
-  {:val 3 :vars {'type :number}}
-  ((mseq [(mone (mval 1)) (mone (mval 2)) (mone (mval 3)) (mvar 'a (mrest wildcard))]) {:val [1 2 3 4 5]})
-  ((ptn->fn '[1 2 3 ??end]) [1 2 3 4 5]) ;=>> {:vars {'end [4 5]}}
-
-  ;;optional pattern
-  ;;(map (ptn->fn '[?a? 2]) [[0 2] [2]]) ;=>>
-  ;; [{:vars {'a 1}} {}]
-
-  ;; complex pattern unification
-  (mapv (ptn->fn '{:a ?x :b {:c ?x}}) [{:a 3 :b {:c 3}} {:a 2 :b {:c 3}}]) ;=>>
-  [{:vars {'x 3}} nil]
-  (mapv (ptn->fn '[?x 5 ?_ {:a ?x}]) [[3 5 6 {:a 3}] [3 1]]) ;=>>
-  [{:vars {'x 3}} nil])
