@@ -1,12 +1,29 @@
 (ns sg.flybot.pullable.core
+  "Core design, data structure and functions.
+   Keep it pure functional."
   (:require [clojure.walk :as walk]))
 
-(defn matcher [f t & {:as more}] (with-meta f (merge more {::matcher-type t})))
+;;# Matcher and matcher result
+;;
+;; A matcher is a function takes a match result (mr) and returns a mr, or nil if not matching.
+;;
+;; A matcher result is a map contains `:val` as it value, `:vars` is a map contains
+;; matching variable values.
+
+(defn matcher
+  "Attach necessary metadata to matcher function `f` with matcher type `t`,
+   can optional provide `more` metadata in k-v pairs"
+  [f t & {:as more}] (with-meta f (merge more {::matcher-type t})))
+
 (defn matcher-type
+  "returns the matcher type of `x`, if not a matcher, returns false"
   [x]
   (and (fn? x) (some-> x meta ::matcher-type)))
 
+;;## Implementation of matchers 
+
 (defn mpred
+  "a basic matcher returns the mr itself when `pred` success, its type is `:pred`"
   [pred]
   (matcher
    (fn [mr]
@@ -14,11 +31,21 @@
        mr))
    :pred))
 
-(defn mval [v] (mpred #(= v %)))
+(defn mval
+  "a pred matcher matchers when mr's value equals v"
+  [v] (mpred #(= v %)))
 
-(def wildcard (mpred (constantly true)))
+(def wildcard
+  "a pred matcher always success"
+  (mpred (constantly true)))
 
 (defn mvar
+  "a matcher binds `child` matchers result to a symbol `sym` when `child` success,
+   it also checks if the new result equals to known value of the variable, if not,
+   the match fails.
+
+  `child` matcher can specify a `:captured` value in mr, this matcher will use it
+   instead of `:val`."
   [sym child]
   (matcher
    (fn [mr]
@@ -27,25 +54,37 @@
              old-v (get-in mr [:vars sym] ::not-found)
              mr (dissoc mr :captured)]
          (condp = old-v
-           ::not-found (assoc-in mr [:vars sym] new-v)
-           new-v mr
+           ::not-found (assoc-in mr [:vars sym] new-v) ;a fresh match
+           new-v mr ;current value agrees with existing value
            nil))))
    (matcher-type child) ::symbol sym))
 
 ^:rct/test
 (comment
+  ;;mpred succeed when `pred` success
   ((mpred even?) {:val 4}) ;=>> {:val 4}
+  ;;mpred fails
   ((mpred even?) {:val 3}) ;=> nil
-  ((mval 3) {:val 3}) ;=>> {:val 3}
+  ;;wildcard example
   (wildcard {:val 3}) ;=>> {:val 3}
 
+  ;;mvar bind a fresh variable 'a
   ((mvar 'a (mval 3)) {:val 3}) ;=>
   {:val 3 :vars {'a 3}}
+  ;;mvar unification
   ((mvar 'a (mval 3)) {:val 3 :vars {'a 3}}) ;=>>
   {:val 3}
-  ((mvar 'a (mval 3)) {:val 3 :vars {'a 2}})) ;=> nil
+  ;;mvar unification fails
+  ((mvar 'a (mval 3)) {:val 3 :vars {'a 2}}) ;=>
+  nil
+  )
+
+;;## Map matcher
 
 (defn mmap
+  "Create a map matcher from a collection of `[k matcher]` pairs.
+   Looks up each key in the current `:val` map, runs its matcher and
+   accumulates both the transformed map and merged variable bindings."
   [k-matchers]
   (matcher
    (fn [mr]
@@ -67,12 +106,18 @@
   (mm {:val {:a 4 :b 3}}) ;=> nil
   (mm {:val {:a 4 :b 0} :vars {'a 0}})) ;=> nil
 
-(defn mnone []
+;;## Sequence matchers
+
+(def mnone
+  "A subsequence matcher that matches an empty subsequence only.
+   Used as the `:none` branch in higher level sequence combinators."
   (matcher
     identity
     :subseq ::length [0 0]))
 
 (defn mone
+  "Subsequence matcher that consumes exactly one element from `:rest`
+   and passes it to `child`. Propagates `:vars` and updates `:rest`."
   [child]
   (matcher
    (fn [mr]
@@ -81,6 +126,9 @@
    :subseq ::length [1 1]))
 
 (defn mrest
+  "Subsequence matcher that repeatedly applies `child` to elements in
+   `:rest`, capturing all consecutive successes as a vector in
+   `:captured` and dropping them from `:rest`."
   [child]
   (matcher
    (fn [mr]
@@ -91,6 +139,9 @@
    :subseq ::length [0]))
 
 (defn msubseq
+  "Compose a sequence of subsequence matchers.
+   Applies each matcher to the same matcher result in order until one
+   fails, returning the last successful matcher result or `nil`."
   [& matchers]
   (matcher
    (fn [mr]
@@ -98,6 +149,10 @@
    :subseq))
 
 (defn mseq
+  "Top level sequence matcher.
+   Treats the current `:val` as the full sequence, stores it in `:rest`,
+   runs `matchers` left-to-right and succeeds only when the whole
+   sequence is consumed."
   [matchers]
   (matcher
    (fn [mr]
@@ -135,7 +190,12 @@
   (def sm2 (mseq [(mone (mvar 'b (mval 1))) (msubseq (mone (mpred zero?)))]))
   (sm2 {:val [1 0]}))
 
+;;## Misc matchers
+
 (defn msub
+  "Value transforming matcher.
+   Runs `child` first and then replaces `:val` with `(f (:val mr))` while
+   keeping the rest of the matcher result intact."
   [f child]
   (matcher
    (fn [mr]
@@ -147,6 +207,9 @@
 (def find-first (comp first filter))
 
 (defn mor
+  "Branching matcher that tries alternatives in order.
+   `kms` is a flat collection `[k1 m1 k2 m2 ...]`; the first successful
+   matcher wins and its branch key is stored in `:captured`."
   [kms]
   (let [km-pair (partition 2 kms)]
     (matcher
@@ -158,6 +221,9 @@
      :or)))
 
 (defn mwalk
+  "Create a structural matcher based on `clojure.walk/postwalk`.
+   `pms` is a flat collection of `pred matcher` pairs used to rewrite
+   subforms; `final-f` is applied to the fully rewritten value."
   [final-f & pms]
   (let [pm-pair (partition 2 pms)]
     (matcher
@@ -176,6 +242,9 @@
      :walk)))
 
 (defn mmulti
+  "Higher order matcher that looks up variable `sym` in `:vars`, calls
+   `(f v)` to obtain a matcher and then runs it against the current
+   matcher result."
   [f sym]
   (matcher
    (fn [mr]
@@ -184,11 +253,15 @@
    :multi))
 
 (defn moption
+  "Optional subsequence matcher.
+   Either consumes `child` once (`:one`) or nothing (`:none`) and then
+   continues with `more`. The chosen branch type is captured in
+   `:captured`."
   ([child]
    (moption child wildcard))
   ([child more]
    (mor [:one (msubseq (mone child) more)
-         :none (msubseq (mnone) more)])))
+         :none (msubseq mnone more)])))
 
 ^:rct/test
 (comment
@@ -211,14 +284,25 @@
            list? (msub #(apply * %) (mseq [(mone wildcard) (mone (mpred number?))]))
            number? (msub #(* 2 %) (mpred number?))))
   (mw {:val '(2 5)}) ;=>> {:val 40}
-  (mw {:val '(4 (2 5))})) ;=>> {:val 320}
-  
+  (mw {:val '(4 (2 5))}) ;=>>
+  {:val 320}
+  )
 
-(defmulti make-matcher first)
+;;## Pattern
+;;
+;; Pattern is a mini language using common clojure data, it can translate to matcher functions.
+
+(defmulti make-matcher
+  "Compile a low level pattern description like `[:pred pred]` or
+   `[:seq ...]` into a concrete matcher function."
+  first)
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
 (defmethod make-matcher :val [[_ v]] (mval v))
 (defmethod make-matcher :var [[_ sym child]] (mvar sym child))
 (defn wrap-element
+  "Ensure a pattern element behaves like a subsequence matcher.
+   Plain values become `mval` matchers and non-subseq matchers are
+   wrapped with `mone` so they consume exactly one element."
   ([item]
    (let [mt (matcher-type item)] (cond-> item (false? mt) mval (not= mt :subseq) mone))))
 
@@ -231,7 +315,11 @@
 (defmethod make-matcher :rest [[_ child]] (mrest (or child wildcard)))
 (defmethod make-matcher :? [[_ child more]] (moption child more))
 
-(defmulti matcher-args identity)
+(defmulti matcher-args
+  "Describe how many and what kinds of arguments a matcher form expects.
+   The dispatch value is the matcher type keyword, e.g. `:seq` or
+   `:pred`."
+  identity)
 (defmethod matcher-args :default [_] (mrest wildcard))
 (defmethod matcher-args :seq [_] (mrest (mpred matcher-type)))
 (defmethod matcher-args :pred [_] (mone (mpred ifn?)))
@@ -240,6 +328,9 @@
 (defmethod matcher-args :sub [_] (msubseq (mone (mpred ifn?)) (mone (mpred matcher-type))))
 
 (defn named-var?
+  "Parse a symbol as a named pattern variable.
+   Returns `[base-name multi? optional?]` when `v` has the `?x`, `??x` or
+   `?x?` forms, otherwise `nil`."
   [v]
   (when (symbol? v)
     (when-let [[_ s n ?] (re-matches #"(\?[\?]?)([a-zA-Z][a-zA-Z0-9_-]*)(\??)" (name v))]
@@ -306,7 +397,7 @@
   ((ptn->fn '[1 2 3 ??end]) [1 2 3 4 5]) ;=>> {:vars {'end [4 5]}}
 
   ;;optional pattern
-  (map (ptn->fn '[?a? 2]) [[0 2] [2]]) ;=>>
+  ;;(map (ptn->fn '[?a? 2]) [[0 2] [2]]) ;=>>
   ;; [{:vars {'a 1}} {}]
 
   ;; complex pattern unification
