@@ -148,23 +148,64 @@
      (reduce (fn [mr' mch] (or (mch mr') (reduced nil))) mr matchers))
    :subseq))
 
+(def find-first (comp first filter))
+
+(defn mor
+  "Branching matcher that tries alternatives in order.
+   `kms` is a flat collection `[k1 m1 k2 m2 ...]`; the first successful
+   matcher wins and its branch key is stored in `:captured`."
+  ([kms]
+   (mor kms false))
+  ([kms capture?]
+   (let [km-pair (partition 2 kms)]
+     (matcher
+      (fn [mr]
+        (when-let [[t mr'] (->> km-pair
+                                (map (fn [[k mch]] [k (mch mr)]))
+                                (find-first second))]
+          (cond-> mr' capture? (assoc :captured t))))
+      :or))))
+
+(defn branching
+  [pred f coll]
+  (loop [fst [] lst (reverse coll)]
+    (let [[fst' [h & lst']] (split-with (complement pred) lst)]
+      (if h
+        (let [v (f h (reverse fst'))]
+          (recur (concat fst [v]) lst'))
+        (reverse (concat fst lst))))))
+
+^:rct/test
+(comment
+  (def bf (partial branching #(zero? (mod % 5)) #(apply str % %2)))
+  (bf (range 1 8)) ;=> [1 2 3 4 "567"]
+  (bf (range 1 3)) ;=> [1 2]
+  (bf [1 5 6 8 10 11]) ;=>
+  [1 "568" "1011"])
+
+(defn moption
+  "Optional subsequence matcher"
+  ([child]
+   (matcher child :subseq ::optional? true)))
+
 (defn mseq
   "Top level sequence matcher.
    Treats the current `:val` as the full sequence, stores it in `:rest`,
    runs `matchers` left-to-right and succeeds only when the whole
    sequence is consumed."
   [matchers]
-  (matcher
-   (fn [mr]
-     (let [mr (reduce (fn [mr' mch]
-                        (or
-                         (mch mr')
-                         (reduced nil)))
-                      (assoc mr :rest (:val mr))
-                      matchers)]
-       (when-not (some-> mr :rest seq)
-         (dissoc mr :rest))))
-   :seq))
+  (let [matchers (branching #(some-> % meta ::optional?)
+                            (fn [c nxt] (mor [:0 (apply msubseq nxt) :1 (apply msubseq (mone c) nxt)]))
+                            matchers)]
+    (matcher
+     (fn [mr]
+       (let [mr (reduce (fn [mr' mch]
+                          (or (mch mr') (reduced nil)))
+                        (assoc mr :rest (:val mr))
+                        matchers)]
+         (when-not (some-> mr :rest seq)
+           (dissoc mr :rest))))
+     :seq)))
 
 ^:rct/test
 (comment
@@ -188,7 +229,13 @@
   (sm {:val [1 0 1 3 5 2]}) ;=> nil
 
   (def sm2 (mseq [(mone (mvar 'b (mval 1))) (msubseq (mone (mpred zero?)))]))
-  (sm2 {:val [1 0]}))
+  (sm2 {:val [1 0]})
+  (map (mseq [(moption (mvar 'opt (mval 2))) (mone (mval 1))]) [{:val [1]} {:val [2 1]}]) ;=>>
+  [{} {:vars {'opt 2}}]
+
+  ((mseq [(mone (mval 0)) (mvar 'a (mrest (mpred neg?))) (mone (mval 4))]) {:val [0 -1 -3 4]}) ;=>>
+  {:vars {'a [-1 -3]}}
+  )
 
 ;;## Misc matchers
 
@@ -203,22 +250,6 @@
        (let [v (f (:val mr))]
          (assoc mr :val v))))
    :sub))
-
-(def find-first (comp first filter))
-
-(defn mor
-  "Branching matcher that tries alternatives in order.
-   `kms` is a flat collection `[k1 m1 k2 m2 ...]`; the first successful
-   matcher wins and its branch key is stored in `:captured`."
-  [kms]
-  (let [km-pair (partition 2 kms)]
-    (matcher
-     (fn [mr]
-       (when-let [[t mr'] (->> km-pair
-                               (map (fn [[k mch]] [k (mch mr)]))
-                               (find-first second))]
-         (assoc mr' :captured t)))
-     :or)))
 
 (defn mwalk
   "Create a structural matcher based on `clojure.walk/postwalk`.
@@ -252,17 +283,6 @@
        ((f v) mr)))
    :multi))
 
-(defn moption
-  "Optional subsequence matcher.
-   Either consumes `child` once (`:one`) or nothing (`:none`) and then
-   continues with `more`. The chosen branch type is captured in
-   `:captured`."
-  ([child]
-   (moption child wildcard))
-  ([child more]
-   (mor [:one (msubseq (mone child) more)
-         :none (msubseq mnone more)])))
-
 ^:rct/test
 (comment
   ;msub substitute :val and :captured
@@ -271,13 +291,8 @@
 
   ;mor find the first matched branch of patterns and capture the type
   (def mo (mvar 'type (mor [:keyword (mpred keyword?)
-                            :number (msub str (mpred number?))])))
+                            :number (msub str (mpred number?))] true)))
   (mo {:val 3}) ;=>> {:vars {'type :number}}
-
-  ((moption (mvar 'a wildcard) wildcard) {:rest []}) ;=>> {:captured :none}
-  ((moption (mvar 'a wildcard) wildcard) {:val [1] :rest [1]}) ;=>> {:captured :one}
-  (map (mseq [(moption (mvar 'a (mval 0)) (mone (mvar 'b (mval 1))))]) [{:val [1]} {:val [0 1]}]) ;=>>
-  [{:vars {'b 1}} {:vars {'a 0 'b 1}}]
 
   (def mw (mwalk
            identity
@@ -298,19 +313,23 @@
    forms, otherwise `nil`."
   [v]
   (when (symbol? v)
-    (when-let [[_ s n optional?] (re-matches #"(\?[\?]?)(\p{Alnum}*)(\??)" (name v))]
+    (when-let [[_ s n optional?] (re-matches #"(\?[\?]?)([\p{Alnum}-_]*)(\??)" (name v))]
       [(symbol n) (= s "??") (= optional? "?")])))
 
-^:rct/test
+(defn prefix [sym]
+  (when-let [[_ seq? nm] (re-matches #"(\?[\?]?):?([\p{Alnum}-_]*)" (str sym))]
+    [(if (= nm "") :none (keyword nm)) (= seq? "??")]))
+
+:rct/test
 (comment
   (named-var? '?x3) ;=>> ['x3 false false]
   (named-var? '??x?) ;=>>
   ['x true true]
+  (prefix '??:ok);=>>
+  [:ok true]
+  (prefix '??) ;=>>
+  [:none true]
   )
-
-(defn prefix [sym]
-  (when-let [[_ nm] (re-matches #"\?:?(\p{Alnum}*)" (str sym))]
-    (if (= nm "") :none (keyword nm))))
 
 (defmulti make-matcher
   "Compile a low level pattern description like `[:pred pred]` or
@@ -324,7 +343,7 @@
     (let [h (first clauses)]
       (if (next clauses)
         (list (if (vector? h) 'if-let 'if) h
-              (second clauses) 
+              (second clauses)
               (cons 'cond-let (nnext clauses)))
         h))))
 
@@ -350,12 +369,12 @@
        (walk/postwalk
         (fn [x]
           (cond-let
-            [nm (and (list? x) (prefix (first x)))] (make-matcher (cons nm (rest x)))
-            (= x '?_) wildcard
-            (map? x) (map-matcher x)
-            (and (vector? x) (not (map-entry? x))) (seq-matcher x) 
-            [[var-name _ optional?] (named-var? x)] (make-matcher [:var var-name wildcard])
-            x)))
+           [[nm] (and (list? x) (prefix (first x)))] (make-matcher (cons nm (rest x)))
+           (= x '?_) wildcard
+           (map? x) (map-matcher x)
+           (and (vector? x) (not (map-entry? x))) (seq-matcher x)
+           [[var-name _ optional?] (named-var? x)] (cond-> (make-matcher [:var var-name wildcard]) optional? moption)
+           x)))
        scalar-element))
 
 ^:rct/test
@@ -364,7 +383,10 @@
   ((ptn->matcher [{:a '?a, :b '?b, :c {:d '?a}}, '?a, neg?, ['?c]])
    {:val [{:a 4, :b 5, :c {:d 4}}, 4, -1, ["Hello"]]}) ;=>>
   {:vars '{a 4, b 5 c "Hello"}}
-  (map (ptn->matcher '[?option? 1 2]) [{:val [1 2]} {:val [0 1 2]}])
+  (map (ptn->matcher '[?option? 1 2 ?opt? 3]) [{:val [1 2 3]} {:val [:ok 1 2 :foo 3]}]) ;=>>
+  [{} {:vars '{option :ok, opt :foo}}]
+  ((ptn->matcher [0 (list '??:pred neg?) 5]) {:val [0 -1 -5 7 5]}) ;=>>
+  nil
   )
 
 (defmethod make-matcher :none [[_ sym pred]]
@@ -378,4 +400,3 @@
 (defmethod make-matcher :sub [[_ f child]] (msub f child))
 (defmethod make-matcher :or [[_ & conditions]] (mor conditions))
 (defmethod make-matcher :rest [[_ child]] (mrest (or child wildcard)))
-(defmethod make-matcher :? [[_ child more]] (moption child more))
