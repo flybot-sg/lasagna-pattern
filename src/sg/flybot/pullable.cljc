@@ -1,2 +1,0 @@
-(ns sg.flybot.pullable)
-
