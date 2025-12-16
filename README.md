@@ -1,42 +1,44 @@
 # flybot.pullable
 
-A Clojure/ClojureScript library providing flexible, extensible pull-based data transformation operations. This library allows for declarative data access patterns similar to GraphQL and Datomic's pull API.
+Work-in-progress pull-based data transformation engine for Clojure/ClojureScript. The goal is a declarative pattern/matcher system in the spirit of Datomic pull/GraphQL, with a small, composable core.
+
+## Status
+- Active development; APIs are unstable.
+- Implemented: internal engine in `sg.flybot.pullable.core`.
+- Planned: stable public API in `sg.flybot.pullable`, utilities in `sg.flybot.pullable.util`, and advanced features in `sg.flybot.pullable.core2`.
 
 ## Installation
+Not yet released to a registry. Once a public API is stabilized, a git or tag-based dependency will be provided here.
 
-Add the following dependency to your `deps.edn` file:
+## Features (targeted)
+- Cross-platform (Clojure/JVM and ClojureScript)
+- Extensible pull/pattern implementation
+- Composable matchers and transformation primitives
 
-```clojure
-{:deps
- {sg.flybot/pullable #:git{:url "https://github.com/flybot-sg/pullable"
-                           :sha "current-sha-here"}}}
-```
-
-## Features
-
-- Cross-platform support (works in both Clojure and ClojureScript)
-- Extensible pull pattern implementation
-- Utility functions for common pull operations
-- Advanced data transformation capabilities
-
-The library is organized into these main components:
-
-- `sg.flybot.pullable`: Main namespace with the primary API
-- `sg.flybot.pullable.util`: Utility functions to support pull operations
-- `sg.flybot.pullable.core2`: Enhanced pull functionality
+## Components
+- `sg.flybot.pullable.core` (internal): core matchers and transformation primitives.
+- Planned: `sg.flybot.pullable` (public API), `sg.flybot.pullable.util` (helpers), `sg.flybot.pullable.core2` (advanced).
 
 ## Development
 
 ### Prerequisites
-
 - [Clojure CLI tools](https://clojure.org/guides/deps_and_cli)
 
-### Running Tests
+### Workflow
+- Follow CODE_STYLE.md for conventions.
+- Use the `clojure-mcp` server for evaluation during development.
 
-This project uses [Kaocha](https://github.com/lambdaisland/kaocha) for testing. To run the tests:
+### Running Tests
+This project uses [Kaocha](https://github.com/lambdaisland/kaocha) and rich-comment-tests. Run regression tests with:
 
 ```shell
-clojure -X:test :watch\? true ;:watch? if you want the watch mode
+clojure -X:dev:test
+```
+
+You can also use the Babashka task:
+
+```shell
+bb test
 ```
 
 ## License
