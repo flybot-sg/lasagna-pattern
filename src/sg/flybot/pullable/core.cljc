@@ -1,6 +1,22 @@
+;; Design decisions (internal module)
+;; - Internal namespace; not a stable public API. Promote select fns via sg.flybot.pullable.
+;; - Favor pure transformations on persistent data; namespaced map keys for domain data.
+;; - Signal errors with ex-info + data; return nil for "not found" conditions.
+;; - Prefer cond-> and threading to reduce nesting; use project cond-let where clearer.
+;; - Co-locate ^:rct/test rich-comment-tests near functions.
+
 (ns sg.flybot.pullable.core
-  "Core design, data structure and functions.
-   Keep it pure functional."
+  "Internal core of the pullable engine.
+
+   Scope
+   - Houses core transformation primitives used by higher-level APIs in sg.flybot.pullable.
+   - Internal module; may evolve without stable API. Prefer sg.flybot.pullable for public entry points.
+
+   Conventions
+   - Pure, small functions; namespaced map keys.
+   - Use ex-info with data for errors; return nil for not-found.
+   - Prefer cond-> / threading; use project cond-let when it improves clarity.
+   - Co-locate ^:rct/test rich-comment-tests near functions."
   (:require [clojure.walk :as walk]))
 
 ;;# Matcher and matcher result
