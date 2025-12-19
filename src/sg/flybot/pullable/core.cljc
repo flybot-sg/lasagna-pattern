@@ -243,14 +243,14 @@
   (sm2 {:val [1 0]})
   (map (mseq [(moption (mvar 'opt (mval 2))) (mone (mval 1))]) [{:val [1]} {:val [2 1]}]) ;=>>
   [{} {:vars {'opt 2}}]
+  ((mseq [(mone (mval 4)) (moption (mval 2))]) {:val [4]}) ;=>> {:val [4]}
 
   ((mseq [(mone (mval 0)) (mvar 'a (mrest (mpred neg?))) (mone (mval 4))]) {:val [0 -1 -3 4]}) ;=>>
   {:vars {'a [-1 -3]}}
 
   ;mrest support len
   (map (mseq [(mrest (mpred even?) 2)]) [{:val [0]} {:val [0 2]} {:val [0 2 4]}]) ;=>>
-  [nil {} nil]
-  )
+  [nil {} nil])
 
 
 ;;## Misc matchers
@@ -294,22 +294,18 @@
    forms, otherwise `nil`."
   [v]
   (when (symbol? v)
-    (when-let [[_ s n optional?] (re-matches #"(\?[\?]?)([\p{Alnum}-_]*)(\??)" (name v))]
+    (when-let [[_ s n optional?] (re-matches #"(\?[\?]?)([\p{Alnum}-_]+)(\??)" (name v))]
       [(symbol n) (= s "??") (= optional? "?")])))
 
 (defn prefix [sym]
   (when-let [[_ seq? nm] (re-matches #"(\?[\?]?):?([\p{Alnum}-_]*)" (str sym))]
-    [(if (= nm "") :none (keyword nm)) (= seq? "??")]))
+    [(when-not (= nm "") (keyword nm)) (= seq? "??")]))
 
 :rct/test
 (comment
   (named-var? '?x3) ;=>> ['x3 false false]
   (named-var? '??x?) ;=>>
   ['x true true]
-  (prefix '??:ok);=>>
-  [:ok true]
-  (prefix '??) ;=>>
-  [:none true]
   )
 
 (defmulti make-matcher
@@ -357,6 +353,15 @@
                (mone (mvar 'type (mpred keyword?)))
                (mvar 'args (mrest wildcard))])))
 
+(def rule-named
+  (msub (fn [sym] (when-let [[var-name _ optional?] (named-var? sym)]
+                   (cond->> (mvar var-name wildcard) optional? moption)))
+        (mpred named-var?)))
+
+(def rule-wc (msub (fn [_] '(? :*)) (mval '?_)))
+(def rule-seq (msub seq-matcher (mpred #(and (vector? %) (not (map-entry? %))))))
+(def rule-map (msub map-matcher (mpred map?)))
+
 (defn ptn->matcher
   ([rules ptn]
    (let [srules (mscanner rules)]
@@ -365,7 +370,7 @@
            (fn [x] (if-let [mr (srules {:val x})] (:val mr) x)))
           scalar-element))))
 
-(def basic-pattern (partial ptn->matcher [rule-basic]))
+(def matcher-of (partial ptn->matcher [rule-map rule-seq rule-wc rule-named rule-basic]))
 
 ^:rct/test
 (comment
@@ -374,8 +379,9 @@
 
   ((vr '(* x 5)) {:vars {'x 5}}) ;=>
   '(* 5 5)
-  ((basic-pattern '(? :var a (? :val 3))) {:val 3}) ;=>>
+  ((matcher-of '(? :var a (? :val 3))) {:val 3}) ;=>>
   {:vars {'a 3}}
+  ((matcher-of '[5 ?_ ?a {:a ?c :b {:c ?c}} ?d?]) {:val [5 8 6 {:a 5 :b {:c 5}}]}) ;=>> {:val [5 8] :vars {'a 6}}
   )
 
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
