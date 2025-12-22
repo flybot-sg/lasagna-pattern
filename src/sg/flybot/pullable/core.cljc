@@ -295,17 +295,15 @@
   [v]
   (when (symbol? v)
     (when-let [[_ s n optional?] (re-matches #"(\?[\?]?)([\p{Alnum}-_]+)(\??)" (name v))]
-      [(symbol n) (= s "??") (= optional? "?")])))
-
-(defn prefix [sym]
-  (when-let [[_ seq? nm] (re-matches #"(\?[\?]?):?([\p{Alnum}-_]*)" (str sym))]
-    [(when-not (= nm "") (keyword nm)) (= seq? "??")]))
+      [(when-not (= "_" n) (symbol n)) (cond-> #{} (= optional? "?") (conj :optional) (= s "??") (conj :seq))])))
 
 :rct/test
 (comment
-  (named-var? '?x3) ;=>> ['x3 false false]
-  (named-var? '??x?) ;=>>
-  ['x true true]
+  (named-var? '?x3) ;=>>
+  ['x3 #{}]
+  (named-var? '?x?) ;=>>
+  ['x #{:optional}]
+  (named-var? '?_)
   )
 
 (defmulti make-matcher
@@ -354,11 +352,13 @@
                (mvar 'args (mrest wildcard))])))
 
 (def rule-named
-  (msub (fn [sym] (when-let [[var-name _ optional?] (named-var? sym)]
-                   (cond->> (mvar var-name wildcard) optional? moption)))
+  (msub (fn [sym] (when-let [[var-name flags] (named-var? sym)]
+                    (cond->> wildcard
+                      (flags :seq) mrest
+                      var-name (mvar var-name)
+                      (flags :optional) moption)))
         (mpred named-var?)))
 
-(def rule-wc (msub (fn [_] '(? :*)) (mval '?_)))
 (def rule-seq (msub seq-matcher (mpred #(and (vector? %) (not (map-entry? %))))))
 (def rule-map (msub map-matcher (mpred map?)))
 
@@ -370,7 +370,7 @@
            (fn [x] (if-let [mr (srules {:val x})] (:val mr) x)))
           scalar-element))))
 
-(def matcher-of (partial ptn->matcher [rule-map rule-seq rule-wc rule-named rule-basic]))
+(def matcher-of (partial ptn->matcher [rule-map rule-seq rule-named rule-basic]))
 
 ^:rct/test
 (comment
@@ -381,8 +381,11 @@
   '(* 5 5)
   ((matcher-of '(? :var a (? :val 3))) {:val 3}) ;=>>
   {:vars {'a 3}}
-  ((matcher-of '[5 ?_ ?a {:a ?c :b {:c ?c}} ?d?]) {:val [5 8 6 {:a 5 :b {:c 5}}]}) ;=>> {:val [5 8] :vars {'a 6}}
-  )
+  ((matcher-of '[?a ??b]) {:val [1 2 3]}) ;=>>
+  {:vars {'a 1 'b [2 3]}}
+  (map (matcher-of '[5 ?_ ?a {:a ?c :b {:c ?c}} ?d?])
+       [{:val [5 8 6 {:a 5 :b {:c 5}}]} {:val [5 1 3 {:a 0 :b {:c 0}} 2]}]) ;=>>
+  [{:val [5 8] :vars {'a 6}} {:vars {'d 2}}])
 
 (defmethod make-matcher :pred [[_ pred]] (mpred pred))
 (defmethod make-matcher :val [[_ v]] (mval v))
