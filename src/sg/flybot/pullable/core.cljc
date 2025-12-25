@@ -1,23 +1,6 @@
-;; Design decisions (internal module)
-;; - Internal namespace; not a stable public API. Promote select fns via sg.flybot.pullable.
-;; - Favor pure transformations on persistent data; namespaced map keys for domain data.
-;; - Signal errors with ex-info + data; return nil for "not found" conditions.
-;; - Prefer cond-> and threading to reduce nesting; use project cond-let where clearer.
-;; - Co-locate ^:rct/test rich-comment-tests near functions.
-
 (ns sg.flybot.pullable.core
-  "Internal core of the pullable engine.
-
-   Scope
-   - Houses core transformation primitives used by higher-level APIs in sg.flybot.pullable.
-   - Internal module; may evolve without stable API. Prefer sg.flybot.pullable for public entry points.
-
-   Conventions
-   - Pure, small functions; namespaced map keys.
-   - Use ex-info with data for errors; return nil for not-found.
-   - Prefer cond-> / threading; use project cond-let when it improves clarity.
-   - Co-locate ^:rct/test rich-comment-tests near functions."
-  (:require [clojure.walk :as walk]))
+  (:require
+   [clojure.zip :as zip]))
 
 ;;# Matcher and matcher result
 ;;
@@ -26,152 +9,143 @@
 ;; A matcher result is a map contains `:val` as it value, `:vars` is a map contains
 ;; matching variable values.
 
-(defn matcher
-  "Attach necessary metadata to matcher function `f` with matcher type `t`,
-   can optional provide `more` metadata in k-v pairs"
-  [f t & {:as more}] (with-meta f (merge more {::matcher-type t})))
+(defprotocol IMatchResult
+  (-apply [mr f]
+    "apply `f` to `mr`, returns a mr of the result")
+  (-bind [mr sym v]
+    "bind symbol `sym` with `v` in the result"))
 
-(defn matcher-type
-  "returns the matcher type of `x`, if not a matcher, returns false"
-  [x]
-  (and (fn? x) (some-> x meta ::matcher-type)))
+(defrecord ValMatchResult [val vars]
+  IMatchResult
+  (-apply [_ f]
+    (let [v (f val)]
+      (when-not (= v ::none)
+        (ValMatchResult. (f val) vars))))
+  (-bind [this sym v]
+    (let [old-v (get vars sym ::not-found)]
+      (condp = old-v
+        ::not-found (ValMatchResult. val (assoc vars sym v))
+        v this
+        nil))))
+
+(defn fit [mr pred]
+  (-apply mr (fn [val] (if (pred val) val ::none))))
+
+(defn vmr
+  ([val]
+   (vmr val nil))
+  ([val vars]
+   (ValMatchResult. val vars)))
+
+^:rct/test
+(comment
+  (-apply (vmr 3) inc) ;=>>
+  {:val 4}
+  (-bind (vmr 3) 'a 4) ;=>> {:vars {'a 4}}
+  (fit (vmr 3) odd?) ;=>>
+  {:val 3})
 
 ;;## Implementation of matchers 
 
 (defn mpred
-  "a basic matcher returns the mr itself when `pred` success, its type is `:pred`"
   [pred]
-  (matcher (fn [mr] (when (pred (:val mr)) mr)) :pred))
+  #(fit % pred))
 
 (defn mval
   "a pred matcher matchers when mr's value equals v"
-  [v] (mpred #(= v %)))
+  [v]
+  (mpred #(= v %)))
 
-(def wildcard
-  "a pred matcher always success"
-  identity)
+(defn msub
+  [f]
+  #(-apply % f))
 
-(defn mvar
-  "a matcher binds `child` matchers result to a symbol `sym` when `child` success,
-   it also checks if the new result equals to known value of the variable, if not,
-   the match fails.
-
-  `child` matcher can specify a `:captured` value in mr, this matcher will use it
-   instead of `:val`."
-  [sym child]
-  (with-meta
-    (fn [mr]
-      (when-let [mr (child mr)]
-        (let [new-v (or (:captured mr) (:val mr))
-              old-v (get-in mr [:vars sym] ::not-found)
-              mr (dissoc mr :captured)]
-          (condp = old-v
-            ::not-found (assoc-in mr [:vars sym] new-v) ;a fresh match
-            new-v mr                   ;current value agrees with existing value
-            nil))))
-    (meta child)))
+(defn mvar [sym child]
+  (fn [mr] (when-let [mr' (child mr)] (-bind mr' sym (:val mr')))))
 
 ^:rct/test
 (comment
   ;;mpred succeed when `pred` success
-  ((mpred even?) {:val 4}) ;=>> {:val 4}
-  ;;mpred fails
-  ((mpred even?) {:val 3}) ;=> nil
-  ;;wildcard example
-  (wildcard {:val 3}) ;=>> {:val 3}
-
-  ;;mvar bind a fresh variable 'a
-  ((mvar 'a (mval 3)) {:val 3}) ;=>
-  {:val 3 :vars {'a 3}}
-  ;;mvar unification
-  ((mvar 'a (mval 3)) {:val 3 :vars {'a 3}}) ;=>>
+  (map (mvar 'a (mpred even?)) [(vmr 4) (vmr 3)]) ;=>>
+  [{:val 4 :vars {'a 4}} nil]
+  ((mval 3) (vmr 3)) ;=>>
   {:val 3}
-  ;;mvar unification fails
-  ((mvar 'a (mval 3)) {:val 3 :vars {'a 2}}) ;=>
-  nil
-  )
+  ;;msub operates on `val` of a mr
+  ((msub inc) (vmr 3)) ;=>>
+  {:val 4})
+
+(defn merge-vars
+  [mr other]
+  (if-let [vo (:vars other)]
+    (vmr (:val mr) (merge (:vars mr) vo))
+    mr))
 
 ;;## Map matcher
-
 (defn mmap
-  "Create a map matcher from a collection of `[k matcher]` pairs.
-   Looks up each key in the current `:val` map, runs its matcher and
-   accumulates both the transformed map and merged variable bindings."
   [k-matchers]
-  (matcher
-   (fn [mr]
-     (when (map? (:val mr))
-       (reduce
-        (fn [mr' [k mch]]
-          (if-let [vmr (some-> (update mr' :val get k) (mch))]
-            (-> mr'
-                (update :val conj [k (:val vmr)])
-                (update :vars merge (:vars vmr)))
-            (reduced nil)))
-        mr k-matchers)))
-   :map))
+  (fn [mr]
+    (let [m (:val mr)]
+      (when (map? m)
+        (reduce
+         (fn [mr' [k mch]]
+           (if-let [vmr (some-> (vmr (get m k)) (mch))]
+             (-> mr' (update :val conj [k (:val vmr)]) (merge-vars vmr))
+             (reduced nil)))
+         mr k-matchers)))))
 
 ^:rct/test
 (comment
   (def mm (mmap [[:a (mvar 'a (mval 4))] [:b (mpred even?)]]))
-  (mm {:val {:a 4 :b 0}})  ;=>
+  (mm (vmr {:a 4 :b 0}))  ;=>>
   {:val {:a 4 :b 0} :vars {'a 4}}
-  (mm {:val {:a 4 :b 3}}) ;=> nil
-  (mm {:val {:a 4 :b 0} :vars {'a 0}}) ;=>
-  nil
-  )
+  (mm (vmr {:a 4 :b 3})) ;=>
+  nil)
 
 ;;## Sequence matchers
 
-(defn mone
+(defn mzone
   [child]
-  (matcher
-   (fn [mr]
-     (when-let [v (some->> (:rest mr) first)]
-       (when-let [mr' (->> (assoc mr :val v) child)]
-         (some-> (assoc mr :captured [v]) (update :rest rest) (update :vars merge (:vars mr'))))))
-   :subseq ::length 1))
+  (fn [zmr]
+    (let [zip (:val zmr)]
+      (when-not (zip/end? zip)
+        (let [node (zip/node zip)]
+          (when-let [vmr (child (assoc zmr :val node))]
+            (-> zmr
+                (-apply (fn [z] (let [nv (:val vmr)] (-> (if (= node nv) z (zip/replace z nv)) zip/next))))
+                (merge-vars vmr))))))))
 
-(defn mrest
-  ([child]
-   (mrest child 0))
-  ([child len]
-   (matcher
-    (fn [mr]
-      (let [melems (cond->> (->> (:rest mr) (map #(child (assoc mr :val %))) (take-while identity))
-                     (pos? len) (take len))]
-        (when (or (zero? len) (>= (count melems) len))
-          (-> mr
-              (assoc :rest (->> (:rest mr) (drop (count melems))))
-              (assoc :captured (->> melems (map :val) (reduce conj [])))))))
-    :subseq)))
-
-(defn msubseq
-  "Compose a sequence of subsequence matchers. "
-  [& matchers]
-  (matcher
-   (fn [mr]
-     (reduce (fn [mr' mch] (if-let [mr'' (mch mr')]
-                            (update mr'' :captured #(concat (:captured mr') %))
-                            (reduced nil)))
-             mr matchers))
-   :subseq))
+^:rct/test
+(comment
+  ;;mzone matches a single value
+  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip [3 4]) zip/next))) ;=>>
+  {:vars {'a 3}}
+  ;;mzone fails when at the end
+  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip []) zip/next))) ;=>
+  nil)
 
 (def find-first (comp first filter))
 
 (defn mor
-  ([children]
-   (matcher
-    (fn [mr]
-      (some->> (map #(% mr) children) (find-first identity)))
-    :or)))
+  [matchers]
+  (fn [mr]
+    (->> matchers (map #(% mr)) (find-first identity))))
+
+(defn mnor
+  [kv-matchers sym]
+  (fn [mr]
+    (let [[k mr']
+          (->> (partition 2 kv-matchers)
+               (map (fn [[k mch]] [k (mch mr)]))
+               (find-first second))]
+      (when mr'
+        (if sym (-bind mr sym k) mr')))))
 
 ^:rct/test
 (comment
-  (def mth (mvar 'a (mor [(mval 3) (mval 4)])))
-  (mth {:val 3}) ;=>> {:vars {'a 3}}
-  (mth {:val 5}) ;=>> nil
-  )
+  (map (mor [(mpred neg?) (mpred even?)]) [(vmr -1) (vmr 2) (vmr 3)]) ;=>>
+  [{} {} nil]
+  ((mnor [0 (mpred even?) 1 (mpred odd?)] 'b) (vmr 3)) ;=>>
+  {:vars {'b 1}})
 
 (defn branching
   [pred f coll]
@@ -188,232 +162,307 @@
   (bf (range 1 8)) ;=> [1 2 3 4 "567"]
   (bf (range 1 3)) ;=> [1 2]
   (bf [1 5 6 8 10 11]) ;=>
-  [1 "568" "1011"]
-  (bf [5])
-  )
+  [1 "568" "1011"])
+
+(defn- optional [x] (some-> x meta ::optional))
+
+(defn mzsubseq
+  ([children sym]
+   (mzsubseq children sym nil))
+  ([children sym len]
+   (fn [zmr]
+     (when-let [[rslt vals] (reduce (fn [[zmr' acc] child]
+                                      (let [zv (:val zmr')]
+                                        (if-let [zmr'' (child zmr')]
+                                          [zmr'' (cond-> acc
+                                                   (not (zip/end? zv)) (conj (zip/node zv)))]
+                                          (reduced nil))))
+                                    [zmr []] children)]
+       (cond-> rslt sym (-bind sym (cond->> vals len (take len))))))))
 
 (defn moption
   "Optional subsequence matcher"
   ([child]
-   (matcher child :subseq ::optional (fn [c nxt] (mor [(apply msubseq (cons (mone c) nxt)) (apply msubseq nxt)])))))
-
-(defn- optional [x] (some-> x meta ::optional))
-
-(def mnone
-  (matcher
-   (fn [mr] (when-not (some-> mr :rest seq) (dissoc mr :rest)))
-   :subseq))
-
-(defn mlazy-subseq
-  ([child min-len max-len greedy?]
-   (mlazy-subseq child min-len max-len greedy? nil))
-  ([child min-len max-len greedy? var-sym]
-   (matcher
-    child
-    :subseq ::optional (fn [c nxt]
-                         (let [mth (->> (if greedy? (range max-len (dec min-len) -1) (range min-len (inc max-len)))
-                                        (map (fn [len] (if (zero? len) (apply msubseq nxt) (apply msubseq (mrest c len) nxt))))
-                                        (mor))]
-                           (cond->> mth var-sym (mvar var-sym)))))))
+   (moption child false))
+  ([child lazy?]
+   (with-meta child {::optional (fn [c nxt]
+                                  (let [m1 (mzsubseq (cons (mzone c) nxt) nil)
+                                        m0 (mzsubseq nxt nil)]
+                                    (mor (if lazy? [m0 m1] [m1 m0]))))})))
 
 (defn mseq
-  "Top level sequence matcher.
-   Treats the current `:val` as the full sequence, stores it in `:rest`,
-   runs `matchers` left-to-right and succeeds only when the whole
-   sequence is consumed."
-  [matchers]
-  (let [matchers (branching optional (fn [c nxt] ((optional c) c nxt)) matchers)]
-    (matcher
-     (fn [mr]
-       (let [v (:val mr)]
-         (when (seqable? v)
-           (-> (reduce (fn [mr' mch]
-                         (or (mch mr') (reduced nil)))
-                       (assoc mr :rest v)
-                       matchers)
-               (dissoc :rest)))))
-     :seq)))
-
-^:rct/test
-(comment
-  ;;mone matches a single sequence value
-  (def mo (mvar 'a (mone (mval 1))))
-  (mo {:val [1] :rest [1]})             ;=>> {:vars {'a [1]} :rest []}
-  (mo {:val [2] :rest [2]})             ;=> nil
-  (mo {:val [] :rest []})               ;=> nil
-
-  ;;mseq matches a whole sequence
-  (def sm (mseq [(mone (mvar 'a (mval 1))) (mone (mpred zero?)) (mone (mpred odd?)) mnone]))
-  (sm {:val [1 0 3]})                   ;=>> {:vars {'a 1}}
-  (sm {:val [1 0 3 2]})                 ;=> nil
-
-  ;;complex patterns
-  (def sm (mseq [(mone (mvar 'b (mval 1))) (mone (mpred zero?)) (mvar 'a (mrest (mpred odd?))) mnone]))
-  (sm {:val [1 0 1 3 5]})               ;=>> {:vars {'a [1 3 5]}}
-  (sm {:val [1 0 1 3 5 2]})             ;=> nil
-
-  ;;moption support
-  (map (mseq [(moption (mvar 'opt (mval 2))) (mone (mval 1))]) [{:val [1]} {:val [2 1]}]) ;=>>
-  [{} {:vars {'opt 2}}]
-  ((mseq [(mone (mval 4)) (moption (mval 2))]) {:val [4]}) ;=>> {:val [4]}
-
-  ;;mrest support len
-  (map (mseq [(mrest (mpred even?) 2) mnone]) [{:val [0]} {:val [0 2]} {:val [0 2 4]}]) ;=>>
-  [nil {} nil]
-
-  ;;TODO wrong result
-  ((mseq [(mvar 'a (msubseq (mone wildcard) (mone wildcard))) (mone (mval 10)) mnone]) {:val [5 6 10]}) ;=>>
-  {:vars {'a [5 6]}}
-  ;;more branching
-  (def mth (mseq [(mlazy-subseq (mval 10) 0 2 false 'a)  mnone]))
-  (map mth [{:val []} {:val [10 10]} {:val [10 10 10]}]) ;=>>
-  [{:val []} {:val [10 10]} nil]
-  ;;greedy
-  (map (mseq [(mlazy-subseq (mval 10) 0 2 true 'a) (mone (mval 20)) mnone])
-       [{:val [10 20]} {:val [10 10 20]} {:val [10 10 10 20]}]) ;=>>
-  [{:vars {'a [10]}} {:vars {'a [10 10]}} nil])
-
-;;## Misc matchers
-
-(defn mf [f child]
-  (matcher (fn [mr] (when-let [mr (child mr)] (f mr))) :sub))
-
-(defn msub [f child]
-  (mf #(update % :val f) child))
-
-(defn mmulti
-  "Higher order matcher that looks up variable `sym` in `:vars`, calls
-   `(f v)` to obtain a matcher and then runs it against the current
-   matcher result."
-  [f sym]
-  (matcher
-   (fn [mr]
-     (let [v (get-in mr [:vars sym])]
-       ((f v) mr)))
-   :multi))
-
-^:rct/test
-(comment
-  ;msub substitute :val and :captured
-  (def ms (msub inc (mval 1)))
-  (ms {:val 1}) ;=>> {:val 2}
-  )
-
-;;## Pattern
-;;
-;; Pattern is a mini language using common clojure data, it can translate to matcher functions.
-
-(defn named-var?
-  "Parse a symbol as a named pattern variable.
-   Returns `[base-name seq?]` when `v` has the `?x`, `??x` or
-   forms, otherwise `nil`."
-  [v]
-  (when (symbol? v)
-    (when-let [[_ s n optional?] (re-matches #"(\?[\?]?)([\p{Alnum}-_]+)(\??)" (name v))]
-      [(when-not (= "_" n) (symbol n)) (cond-> #{} (= optional? "?") (conj :optional) (= s "??") (conj :seq))])))
-
-:rct/test
-(comment
-  (named-var? '?x3) ;=>>
-  ['x3 #{}]
-  (named-var? '?x?) ;=>>
-  ['x #{:optional}]
-  (named-var? '?_)
-  )
-
-(defmulti make-matcher
-  "Compile a low level pattern description like `[:pred pred]` or
-   `[:seq ...]` into a concrete matcher function."
-  first)
-
-(defn- scalar-element [x]
-  (cond
-    (matcher-type x) x
-    (fn? x) (mpred x)
-    :else (mval x)))
-
-(defn- wrap-element [x]
-  (let [mt (matcher-type x)] (cond-> x (not mt) scalar-element (not= mt :subseq) mone)))
-
-(defn- seq-matcher [x]
-  (->> (map wrap-element x) (concat [mnone]) mseq))
-
-(defn- map-matcher [x]
-  (->> (map (fn [[k v]] [k (scalar-element v)]) x)
-       mmap))
-
-(defn mscanner
-  ([children]
-   (mscanner children nil))
-  ([children default]
-   (matcher
+  [children]
+  (let [children (branching optional (fn [c nxt] ((optional c) c nxt)) children)]
     (fn [mr]
-      (reduce (fn [acc mch] (or (mch acc) default acc)) mr children))
-    :scaner)))
+      (some-> (reduce
+               (fn [zmr child] (or (child zmr) (reduced nil)))
+               (vmr (-> mr :val seq zip/seq-zip zip/next) (:vars mr)) children)
+              (-apply zip/root)))))
 
-(defn vr
-  [v]
-  (fn [{vars :vars}]
-    (walk/postwalk
-     (fn [x] (or (and (symbol? x) (get vars x)) x))
-     v)))
-
-(def mand #(mscanner % (reduced nil)))
-
-(def rule-basic
-  (msub #(make-matcher (rest %))
-        (mseq [(mone (mval '?))
-               (mone (mvar 'type (mpred keyword?)))
-               (mvar 'args (mrest wildcard))])))
-
-(comment
-  :dbg
-  ((mseq [(mlazy-subseq wildcard 0 3 false)]) {:val [1 1 1]}))
-
-(def rule-named
-  (msub (fn [sym] (when-let [[var-name flags] (named-var? sym)]
-                    (cond->> wildcard
-                      (flags :seq) (#(mrest % 0))
-                      var-name (mvar var-name)
-                      (flags :optional) moption)))
-        (mpred named-var?)))
-
-(def rule-seq (msub seq-matcher (mpred #(and (vector? %) (not (map-entry? %))))))
-(def rule-map (msub map-matcher (mpred map?)))
-
-(defn ptn->matcher
-  ([rules ptn]
-   (let [srules (mscanner rules)]
-     (->> ptn
-          (walk/postwalk
-           (fn [x] (if-let [mr (srules {:val x})] (:val mr) x)))
-          scalar-element))))
-
-(def matcher-of (partial ptn->matcher [rule-map rule-seq rule-named rule-basic]))
+(def mzterm (mpred zip/end?))
 
 ^:rct/test
 (comment
-  (map (mscanner [(mseq [(mone (mval 1)) mnone]) (mseq [(mone (mval 2)) mnone])]) [{:val [1]} {:val [2]} {:val [3]}]) ;=>>
-  [{:val [1]} {:val [2]} {:val [3]}]
+  ;;mzterm matches the end of seq
+  (map mzterm [(vmr (-> (zip/vector-zip []) zip/next)) (vmr (-> (zip/vector-zip [3]) zip/next))]) ;=>>
+  [identity nil]
+  ;;mseq matches one element and check ending
+  (map (mseq [(mzone (mvar 'a (mpred even?))) mzterm]) [(vmr [0]) (vmr [2 4]) (vmr [1])]) ;=>>
+  [{:vars {'a 0}} nil nil]
+  ;;mseq support nil element
+  ((mseq [(mzone (mpred nil?))]) (vmr []))
+  (map (mseq [(mzone (mpred nil?))]) [(vmr []) (vmr [nil])]) ;=>>
+  [nil {:val [nil]}]
+  ;;mseq return value can be bound to a var
+  ((mvar 'a (mseq [(mzone (mval 4))])) (vmr [4])) ;=>>
+  {:vars {'a [4]}}
+  ;;mseq support msub
+  ((mseq [(mzone (mvar 'b (msub inc)))]) (vmr [3])) ;=>>
+  {:val [4] :vars {'b 4}}
+  ((mseq [(mzone (mval 3)) (mzone (mval 4)) mzterm]) (vmr [3 4])) ;=>>
+  {:val [3 4]}
+  ;;moption captures an optional value
+  (map (mseq [(moption (mvar 'a (mval 3))) (mzone (mval 0)) mzterm]) [(vmr [3 0]) (vmr [0])]) ;=>>
+  [{:vars {'a 3}} {}]
+  ;;optional can be lazy
+  (map (mseq [(moption (mvar 'a (mval 5)) true) (mzone (mvar 'b (mval 5))) mzterm]) [(vmr [5]) (vmr [5 5])]) ;=>>
+  [{:vars '{b 5}} {:vars '{a 5 b 5}}]
+  ;;sub sequence value captured
+  ((mseq [(mzsubseq (repeat 3 (mzone (mpred even?))) 'a) (mzone (mpred odd?)) mzterm]) (vmr [2 4 6 7])) ;=>>
+  {:vars {'a [2 4 6]}})
 
-  ((vr '(* x 5)) {:vars {'x 5}}) ;=>
-  '(* 5 5)
-  ((matcher-of '(? :var a (? :val 3))) {:val 3}) ;=>>
-  {:vars {'a 3}}
-  )
+(defn mzrepeat
+  ([child min-len & {:keys [max-len greedy? sym]}]
+   (let [zc (mzone child)]
+     (if max-len
+       (let [var-len (- max-len min-len)]
+         (with-meta zc
+           {::optional (fn [c nxt]
+                         (->> (if greedy? (range max-len (dec min-len) -1) (range min-len (inc max-len)))
+                              (map (fn [len] (mzsubseq (cond->> nxt (pos? len) (concat (repeat len zc))) sym len)))
+                              (mor)))}))
+       (mzsubseq (repeat min-len zc) sym)))))
 
+^:rct/test
+(comment
+  ;;mzrepeat repeats child matchers for exact length
+  (map (mseq [(mzrepeat (mpred even?) 3 :sym 'a) mzterm]) [(vmr [8 10 12]) (vmr [8 10]) (vmr [8 10 12 4])]) ;=>>
+  [{:vars {'a [8 10 12]}} nil nil]
+  ;;mzrepeat can have optionally length
+  ((mseq [(mzrepeat (mpred even?) 1 :max-len 2 :sym 'a) mzterm]) (vmr [8 10]))
+  (map (mseq [(mzrepeat (mpred even?) 0 :max-len 2 :sym 'a) (mzone (mval 3)) mzterm])
+       [(vmr [3]) (vmr [0 3]) (vmr [0 2 3]) (vmr [0 2 4 3])]))
 
-(defmethod make-matcher :pred [[_ pred]] (mpred pred))
-(defmethod make-matcher :val [[_ v]] (mval v))
-(defmethod make-matcher :var [[_ sym child]] (mvar sym child))
-(defmethod make-matcher :seq [[_ & children]] (mseq children))
-(defmethod make-matcher :map [[_ & children]] (mmap children))
-(defmethod make-matcher :* [[&_]] wildcard)
+;; (defn mlazy-subseq
+;;   ([child min-len max-len greedy?]
+;;    (mlazy-subseq child min-len max-len greedy? nil))
+;;   ([child min-len max-len greedy? var-sym]
+;;    (matcher
+;;     child
+;;     :subseq ::optional (fn [c nxt]
+;;                          (let [mth (->> (if greedy? (range max-len (dec min-len) -1) (range min-len (inc max-len)))
+;;                                         (map (fn [len] (if (zero? len) (apply msubseq nxt) (apply msubseq (mrest c len) nxt))))
+;;                                         (mor))]
+;;                            (cond->> mth var-sym (mvar var-sym)))))))
 
-(defmethod make-matcher :1 [[_ child]] (mone child))
-(defmethod make-matcher :? [[_ child]] (moption child))
+;; (defn mseq
+;;   "Top level sequence matcher.
+;;    Treats the current `:val` as the full sequence, stores it in `:rest`,
+;;    runs `matchers` left-to-right and succeeds only when the whole
+;;    sequence is consumed."
+;;   [matchers]
+;;   (let [matchers (branching optional (fn [c nxt] ((optional c) c nxt)) matchers)]
+;;     (matcher
+;;      (fn [mr]
+;;        (let [v (:val mr)]
+;;          (when (seqable? v)
+;;            (-> (reduce (fn [mr' mch]
+;;                          (or (mch mr') (reduced nil)))
+;;                        (assoc mr :rest v)
+;;                        matchers)
+;;                (dissoc :rest)))))
+;;      :seq)))
 
-(defmethod make-matcher :sub [[_ f child]] (msub f child))
-(defmethod make-matcher :or [[_ & conditions]] (mor conditions))
-(defmethod make-matcher :and [[_ & children]] (mand children))
-(defmethod make-matcher :rest [[_ child]] (mrest (or child wildcard)))
+;; ^:rct/test
+;; (comment
+;;   ;;mone matches a single sequence value
+;;   (def mo (mvar 'a (mone (mval 1))))
+;;   (mo {:val [1] :rest [1]})             ;=>> {:vars {'a [1]} :rest []}
+;;   (mo {:val [2] :rest [2]})             ;=> nil
+;;   (mo {:val [] :rest []})               ;=> nil
+
+;;   ;;mseq matches a whole sequence
+;;   (def sm (mseq [(mone (mvar 'a (mval 1))) (mone (mpred zero?)) (mone (mpred odd?)) mnone]))
+;;   (sm {:val [1 0 3]})                   ;=>> {:vars {'a 1}}
+;;   (sm {:val [1 0 3 2]})                 ;=> nil
+
+;;   ;;complex patterns
+;;   (def sm (mseq [(mone (mvar 'b (mval 1))) (mone (mpred zero?)) (mvar 'a (mrest (mpred odd?))) mnone]))
+;;   (sm {:val [1 0 1 3 5]})               ;=>> {:vars {'a [1 3 5]}}
+;;   (sm {:val [1 0 1 3 5 2]})             ;=> nil
+
+;;   ;;moption support
+;;   (map (mseq [(moption (mvar 'opt (mval 2))) (mone (mval 1))]) [{:val [1]} {:val [2 1]}]) ;=>>
+;;   [{} {:vars {'opt 2}}]
+;;   ((mseq [(mone (mval 4)) (moption (mval 2))]) {:val [4]}) ;=>> {:val [4]}
+
+;;   ;;mrest support len
+;;   (map (mseq [(mrest (mpred even?) 2) mnone]) [{:val [0]} {:val [0 2]} {:val [0 2 4]}]) ;=>>
+;;   [nil {} nil]
+
+;;   ;;TODO wrong result
+;;   ((mseq [(mvar 'a (msubseq (mone wildcard) (mone wildcard))) (mone (mval 10)) mnone]) {:val [5 6 10]}) ;=>>
+;;   {:vars {'a [5 6]}}
+;;   ((mseq [(mor [(mvar 'a (msubseq (mone (mval 3)))) (msubseq (mone (mval 4)) (mone (mval 5)))])]) {:val [4 5]})
+;;   ;;more branching
+;;   (def mth (mseq [(mlazy-subseq (mval 10) 0 2 false 'a)  mnone]))
+;;   (map mth [{:val []} {:val [10 10]} {:val [10 10 10]}]) ;=>>
+;;   [{:val []} {:val [10 10]} nil]
+;;   ;;greedy
+;;   (map (mseq [(mlazy-subseq (mval 10) 0 2 true 'a) (mone (mval 20)) mnone])
+;;        [{:val [10 20]} {:val [10 10 20]} {:val [10 10 10 20]}]) ;=>>
+;;   [{:vars {'a [10]}} {:vars {'a [10 10]}} nil])
+
+;; ;;## Misc matchers
+
+;; (defn mf [f child]
+;;   (matcher (fn [mr] (when-let [mr (child mr)] (f mr))) :sub))
+
+;; (defn msub [f child]
+;;   (mf #(update % :val f) child))
+
+;; (defn mmulti
+;;   "Higher order matcher that looks up variable `sym` in `:vars`, calls
+;;    `(f v)` to obtain a matcher and then runs it against the current
+;;    matcher result."
+;;   [f sym]
+;;   (matcher
+;;    (fn [mr]
+;;      (let [v (get-in mr [:vars sym])]
+;;        ((f v) mr)))
+;;    :multi))
+
+;; ^:rct/test
+;; (comment
+;;   ;msub substitute :val and :captured
+;;   (def ms (msub inc (mval 1)))
+;;   (ms {:val 1}) ;=>> {:val 2}
+;;   )
+
+;; ;;## Pattern
+;; ;;
+;; ;; Pattern is a mini language using common clojure data, it can translate to matcher functions.
+
+;; (defn named-var?
+;;   "Parse a symbol as a named pattern variable.
+;;    Returns `[base-name seq?]` when `v` has the `?x`, `??x` or
+;;    forms, otherwise `nil`."
+;;   [v]
+;;   (when (symbol? v)
+;;     (when-let [[_ s n optional?] (re-matches #"(\?[\?]?)([\p{Alnum}-_]+)(\??)" (name v))]
+;;       [(when-not (= "_" n) (symbol n)) (cond-> #{} (= optional? "?") (conj :optional) (= s "??") (conj :seq))])))
+
+;; :rct/test
+;; (comment
+;;   (named-var? '?x3) ;=>>
+;;   ['x3 #{}]
+;;   (named-var? '?x?) ;=>>
+;;   ['x #{:optional}]
+;;   (named-var? '?_)
+;;   )
+
+;; (defmulti make-matcher
+;;   "Compile a low level pattern description like `[:pred pred]` or
+;;    `[:seq ...]` into a concrete matcher function."
+;;   first)
+
+;; (defn- scalar-element [x]
+;;   (cond
+;;     (matcher-type x) x
+;;     (fn? x) (mpred x)
+;;     :else (mval x)))
+
+;; (defn- wrap-element [x]
+;;   (let [mt (matcher-type x)] (cond-> x (not mt) scalar-element (not= mt :subseq) mone)))
+
+;; (defn- seq-matcher [x]
+;;   (->> (map wrap-element x) (concat [mnone]) mseq))
+
+;; (defn- map-matcher [x]
+;;   (->> (map (fn [[k v]] [k (scalar-element v)]) x)
+;;        mmap))
+
+;; (defn mscanner
+;;   ([children]
+;;    (mscanner children nil))
+;;   ([children default]
+;;    (matcher
+;;     (fn [mr]
+;;       (reduce (fn [acc mch] (or (mch acc) default acc)) mr children))
+;;     :scaner)))
+
+;; (defn vr
+;;   [v]
+;;   (fn [{vars :vars}]
+;;     (walk/postwalk
+;;      (fn [x] (or (and (symbol? x) (get vars x)) x))
+;;      v)))
+
+;; (def mand #(mscanner % (reduced nil)))
+
+;; (def rule-basic
+;;   (msub #(make-matcher (rest %))
+;;         (mseq [(mone (mval '?))
+;;                (mone (mvar 'type (mpred keyword?)))
+;;                (mvar 'args (mrest wildcard))])))
+
+;; (comment
+;;   :dbg
+;;   ((mseq [(mlazy-subseq wildcard 0 3 false)]) {:val [1 1 1]}))
+
+;; (def rule-named
+;;   (msub (fn [sym] (when-let [[var-name flags] (named-var? sym)]
+;;                     (cond->> wildcard
+;;                       (flags :seq) (#(mrest % 0))
+;;                       var-name (mvar var-name)
+;;                       (flags :optional) moption)))
+;;         (mpred named-var?)))
+
+;; (def rule-seq (msub seq-matcher (mpred #(and (vector? %) (not (map-entry? %))))))
+;; (def rule-map (msub map-matcher (mpred map?)))
+
+;; (defn ptn->matcher
+;;   ([rules ptn]
+;;    (let [srules (mscanner rules)]
+;;      (->> ptn
+;;           (walk/postwalk
+;;            (fn [x] (if-let [mr (srules {:val x})] (:val mr) x)))
+;;           scalar-element))))
+
+;; (def matcher-of (partial ptn->matcher [rule-map rule-seq rule-named rule-basic]))
+
+;; ^:rct/test
+;; (comment
+;;   (map (mscanner [(mseq [(mone (mval 1)) mnone]) (mseq [(mone (mval 2)) mnone])]) [{:val [1]} {:val [2]} {:val [3]}]) ;=>>
+;;   [{:val [1]} {:val [2]} {:val [3]}]
+
+;;   ((vr '(* x 5)) {:vars {'x 5}}) ;=>
+;;   '(* 5 5)
+;;   ((matcher-of '(? :var a (? :val 3))) {:val 3}) ;=>>
+;;   {:vars {'a 3}}
+;;   )
+
+;; (defmethod make-matcher :pred [[_ pred]] (mpred pred))
+;; (defmethod make-matcher :val [[_ v]] (mval v))
+;; (defmethod make-matcher :var [[_ sym child]] (mvar sym child))
+;; (defmethod make-matcher :seq [[_ & children]] (mseq children))
+;; (defmethod make-matcher :map [[_ & children]] (mmap children))
+;; (defmethod make-matcher :* [[&_]] wildcard)
+
+;; (defmethod make-matcher :1 [[_ child]] (mone child))
+;; (defmethod make-matcher :? [[_ child]] (moption child))
+
+;; (defmethod make-matcher :sub [[_ f child]] (msub f child))
+;; (defmethod make-matcher :or [[_ & conditions]] (mor conditions))
+;; (defmethod make-matcher :and [[_ & children]] (mand children))
+;; (defmethod make-matcher :rest [[_ child]] (mrest (or child wildcard)))
