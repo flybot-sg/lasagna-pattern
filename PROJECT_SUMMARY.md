@@ -79,7 +79,7 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 ;; Core form
 (? :type args...)
 
-;; Variable bindings
+;; Variable bindings (symbol form)
 ?x      ; bind to 'x
 ?x?     ; optional (0 or 1)
 ?x+     ; one or more (lazy - matches minimum)
@@ -88,6 +88,13 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 ?x*!    ; zero or more (greedy - matches maximum)
 ??x     ; sequence binding
 ?_      ; wildcard (no binding)
+
+;; Variable bindings (list form) - more control
+(?x)              ; bind single value to x
+(?x even?)        ; bind single value with predicate
+(?x [2 4])        ; bind 2-4 elements
+(?x [1 0])        ; bind 1+ elements (0 = unbounded)
+(?x even? [2 3] !) ; greedy, 2-3 elements with predicate
 
 ;; Examples
 (? :val 5)                    ; exact value
@@ -113,6 +120,36 @@ Add `!` suffix for **greedy** matching - matches the maximum possible.
 ;; Greedy: first quantifier takes maximum
 (query '[?a*! ?b*] [1 2 3])   ;=> {a (1 2 3) b ()}
 (query '[?a+! ?b+] [1 2 3])   ;=> {a (1 2) b (3)}
+```
+
+### List-form Named Variables
+
+For more control over matching, use the list form: `(?x pred? [min max]? !?)`
+
+| Form | Description |
+|------|-------------|
+| `(?x)` | Single value, bind to x |
+| `(?x even?)` | Single value with predicate |
+| `(?x [2 4])` | 2-4 elements (lazy) |
+| `(?x [1 0])` | 1+ elements (max=0 means unbounded) |
+| `(?x even? [2 3])` | 2-3 elements, each must satisfy predicate |
+| `(?x [0 5] !)` | 0-5 elements (greedy) |
+
+```clojure
+;; Single value with predicate
+(query '[(?x even?)] [4])          ;=> {x 4}
+(query '[(?x even?)] [3])          ;=> nil
+
+;; Subsequence with length range
+(query '[(?x [2 4])] [1 2 3])      ;=> {x (1 2 3)}
+(query '[(?x [2 4])] [1])          ;=> nil (too short)
+
+;; With predicate and length
+(query '[(?x even? [2 3])] [2 4 6]) ;=> {x (2 4 6)}
+
+;; Lazy vs greedy
+(query '[(?x [0 5]) ?y*] [1 2 3])   ;=> {x () y (1 2 3)}    ; lazy
+(query '[(?x [0 5] !) ?y*] [1 2 3]) ;=> {x (1 2 3) y ()}    ; greedy
 ```
 
 ### Pattern Types Reference

@@ -503,6 +503,69 @@
   ((rule-of core-rule '(? :val 5)) (vmr 5)) ;=>>
   {:val 5})
 
+;;## List-var pattern parsing
+;; These functions parse list-form named variables like (?x even? [2 4] !)
+
+(defn- var-symbol?
+  "Check if x is a symbol starting with ? (before postwalk transforms it)"
+  [x]
+  (and (symbol? x)
+       (let [n (name x)]
+         (and (>= (count n) 2)
+              (= \? (first n))))))
+
+(defn- parse-var-name
+  "Extract variable name from ?name symbol"
+  [sym]
+  (let [n (name sym)]
+    (when (and (>= (count n) 2) (= \? (first n)))
+      (let [base (clojure.core/subs n 1)]
+        (when-not (= "_" base)
+          (symbol base))))))
+
+(defn- parse-list-var
+  "Parse a list-form named variable like (?x even? [2 4] !).
+   Returns nil if not a valid list-var, or a map with:
+   - :sym - the variable name (symbol or nil for wildcard)
+   - :pred - predicate function (or nil)
+   - :min-len - minimum length (nil for single value)
+   - :max-len - maximum length (0 means unbounded)
+   - :greedy? - true if greedy matching"
+  [x]
+  (when (and (list? x) (seq x))
+    (let [[head & args] x]
+      ;; Check if head is a raw ?name symbol (before postwalk transforms it)
+      (when (var-symbol? head)
+        (let [sym (parse-var-name head)]
+          (loop [args args
+                 result {:sym sym :pred nil :min-len nil :max-len nil :greedy? false}]
+            (if (empty? args)
+              result
+              (let [[arg & rest-args] args]
+                (cond
+                  ;; Greedy flag
+                  (= '! arg)
+                  (recur rest-args (assoc result :greedy? true))
+
+                  ;; Length vector [min max]
+                  (and (vector? arg) (= 2 (count arg))
+                       (every? #(and (number? %) (not (neg? %))) arg))
+                  (let [[min-len max-len] arg]
+                    (recur rest-args (assoc result :min-len min-len :max-len max-len)))
+
+                  ;; Predicate function (actual fn or symbol to resolve)
+                  (fn? arg)
+                  (recur rest-args (assoc result :pred arg))
+
+                  ;; Predicate symbol - resolve it
+                  (symbol? arg)
+                  (if-let [resolved (resolve arg)]
+                    (recur rest-args (assoc result :pred @resolved))
+                    nil)  ;; Symbol doesn't resolve - invalid
+
+                  ;; Invalid - not a list-var
+                  :else nil)))))))))
+
 (defn- scalar-element [x]
   (cond
     (matcher-type x) x
@@ -514,7 +577,22 @@
    (ptn->matcher ptn [core-rule]))
   ([ptn rules]
    (when-let [mch (mor rules)]
-     (walk/postwalk (fn [x] (or (rule-of mch x) x)) ptn))))
+     ;; Use prewalk to handle list-var patterns before children are transformed,
+     ;; then postwalk for everything else
+     (let [prewalk-fn (fn [x]
+                        ;; Check list-var pattern first (before children transform)
+                        (if-let [parsed (parse-list-var x)]
+                          (let [{:keys [sym pred min-len max-len greedy?]} parsed
+                                child (if pred (mpred pred) wildcard)]
+                            (if min-len
+                              (let [effective-max (if (zero? max-len) 100 max-len)]
+                                (mzrepeat child min-len {:max-len effective-max :greedy? greedy? :sym sym}))
+                              (if sym (mvar sym child) child)))
+                          x))
+           postwalk-fn (fn [x] (or (rule-of mch x) x))]
+       (->> ptn
+            (walk/prewalk prewalk-fn)
+            (walk/postwalk postwalk-fn))))))
 
 ^:rct/test
 (comment
@@ -661,7 +739,30 @@
   {:reason #"value mismatch" :path [:a] :depth 1}
   ;;nested failure with path trace
   (query-with-failure '{:a {:b 10}} {:a {:b 20}}) ;=>>
-  {:path [:a :b] :depth 2})
+  {:path [:a :b] :depth 2}
+  ;;list-form named variables: (?x pred? [min max]? !?)
+  (query '[(?x even?)] [4]) ;=>>
+  '{x 4}
+  (query '[(?x even?)] [3]) ;=>
+  nil
+  ;;with length range [min max]
+  (query '[(?x [2 4])] [1 2 3]) ;=>>
+  '{x (1 2 3)}
+  (query '[(?x [2 4])] [1]) ;=>
+  nil
+  ;;with predicate and length
+  (query '[(?x even? [2 3])] [2 4 6]) ;=>>
+  '{x (2 4 6)}
+  (query '[(?x even? [2 3])] [2 4 5]) ;=>
+  nil
+  ;;unbounded (max=0 means match to end)
+  (query '[(?x [1 0])] [1 2 3]) ;=>>
+  '{x (1 2 3)}
+  ;;lazy vs greedy with list-var
+  (query '[(?x [0 5]) ?y*] [1 2 3]) ;=>>
+  '{x () y (1 2 3)}
+  (query '[(?x [0 5] !) ?y*] [1 2 3]) ;=>>
+  '{x (1 2 3) y ()})
 
 ;;## Utils
 
