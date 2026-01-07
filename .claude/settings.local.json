@@ -13,7 +13,8 @@
       "Bash(jj describe:*)",
       "Bash(jj show:*)",
       "Bash(jj new:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(tree:*)"
     ]
   }
 }

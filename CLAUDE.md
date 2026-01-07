@@ -78,6 +78,29 @@ Tests use rich-comment-tests embedded inline in source files:
 - Pure functions; isolate effects at the edges
 - Every public var has a concise docstring
 
+## Namespace Dependency Rules
+
+**Rule:** A namespace can never refer to sibling namespaces within the same project. It can only refer to:
+1. Its direct children namespaces (e.g., `foo.bar` can require `foo.bar.baz`)
+2. External libraries (e.g., `clojure.walk`, `clojure.zip`)
+
+**Exception:** A project may have one `util` namespace containing only pure functions without any domain knowledge. This util namespace can be required by any namespace in the project.
+
+**Examples:**
+```
+;; ALLOWED:
+sg.flybot.pullable         → sg.flybot.pullable.core (child)
+sg.flybot.pullable.core    → sg.flybot.pullable.core.impl (child)
+any namespace              → clojure.walk (external)
+any namespace              → project.util (exception - pure functions only)
+
+;; NOT ALLOWED:
+sg.flybot.pullable.foo     → sg.flybot.pullable.bar (sibling)
+sg.flybot.pullable.core.a  → sg.flybot.pullable.core.b (sibling)
+```
+
+**Rationale:** This rule prevents circular dependencies and spaghetti code by enforcing a clear hierarchical structure. Parent namespaces orchestrate their children; children never reach sideways to siblings.
+
 ## Version Control
 
 This repository uses Jujutsu (jj), not Git. Small, focused commits with imperative, present-tense 
