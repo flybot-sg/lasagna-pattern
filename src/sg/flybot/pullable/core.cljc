@@ -784,6 +784,54 @@
              x))
          actual-form))))
 
+(defn- build-form
+  "Build code that constructs a form at runtime with var substitutions.
+   Returns code that builds the data structure without evaluating it."
+  [form vars-sym]
+  (cond
+    ;; Named variable - substitute with value from vars
+    (and (symbol? form) (named-var? form))
+    (let [[nm _] (named-var? form)]
+      `(get ~vars-sym '~nm))
+
+    ;; List - build with list*
+    (list? form)
+    `(list ~@(map #(build-form % vars-sym) form))
+
+    ;; Vector - build with vector
+    (vector? form)
+    `(vector ~@(map #(build-form % vars-sym) form))
+
+    ;; Map - build with hash-map
+    (map? form)
+    `(hash-map ~@(mapcat (fn [[k v]]
+                           [(build-form k vars-sym)
+                            (build-form v vars-sym)])
+                         form))
+
+    ;; Set - build with hash-set
+    (set? form)
+    `(hash-set ~@(map #(build-form % vars-sym) form))
+
+    ;; Other values - quote them
+    :else
+    `'~form))
+
+(defmacro substitute-form
+  "Returns a function that substitutes named vars (like ?x, ?y) in `form`
+   with values from `:vars` in the match result, returning the form without evaluating.
+
+   Example:
+     ((substitute-form '(* 2 ?x)) {:vars {'x 5}}) ;=> (* 2 5)"
+  [form]
+  (let [actual-form (if (and (seq? form) (= 'quote (first form)))
+                      (second form)
+                      form)
+        vars-sym (gensym "vars")]
+    `(fn [{:keys [~'vars]}]
+       (let [~vars-sym ~'vars]
+         ~(build-form actual-form vars-sym)))))
+
 ^:rct/test
 (comment
   ((substitute '(+ 5 ?x ?y)) {:vars {'x 3 'y 0}}) ;=>>
@@ -791,4 +839,11 @@
   ((substitute '(* ?a (+ ?b 1))) {:vars {'a 2 'b 3}}) ;=>>
   8
   ((substitute '{:result ?val}) {:vars {'val 42}}) ;=>>
-  {:result 42})
+  {:result 42}
+  ;;substitute-form returns unevaluated form
+  ((substitute-form '(* 2 ?x)) {:vars {'x 5}}) ;=>>
+  '(* 2 5)
+  ((substitute-form '[?a ?b ?c]) {:vars {'a 1 'b 2 'c 3}}) ;=>>
+  [1 2 3]
+  ((substitute-form '{:sum ?x :product ?y}) {:vars {'x 10 'y 20}}) ;=>>
+  {:sum 10 :product 20})
