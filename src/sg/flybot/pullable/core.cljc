@@ -3,6 +3,11 @@
    [clojure.walk :as walk]
    [clojure.zip :as zip]))
 
+(def ^:dynamic *max-repeat-length*
+  "Maximum length for unbounded repeat patterns. Defaults to 1000.
+   Bind to a different value if needed for specific use cases."
+  1000)
+
 ;;# Matcher and matcher result
 ;;
 ;; A matcher is a function takes a match result (mr) and returns a mr, or nil if not matching.
@@ -415,9 +420,90 @@
   [{:vars '{a []}} {:vars '{a [0]}} {:vars '{a [0 2]}} failure?]
   ((mseq [(mzoption (mvar 'len (mpred (complement neg-int?)))) (mzoption (mvar 'sym (mpred symbol?)))]) (vmr [3 'a])))
 
+(defn mzfilter
+  "A sub-matcher that filters remaining elements by `pred`, collecting matches.
+   Consumes all remaining elements but only keeps those matching pred.
+   Options:
+   - `sym` if we bind the filtered elements to a symbol"
+  [pred {:keys [sym]}]
+  (matcher :subseq
+           (fn [zmr]
+             (loop [z (:val zmr)
+                    filtered []]
+               (if (zip/end? z)
+                 (cond-> (assoc zmr :val z)
+                   sym (-bind sym filtered))
+                 (let [node (zip/node z)]
+                   (recur (zip/next z)
+                          (if (pred node) (conj filtered node) filtered))))))))
+
+^:rct/test
+(comment
+  ;;mzfilter filters elements by predicate
+  ((mseq [(mzfilter even? {:sym 'evens})]) (vmr [1 2 3 4 5 6])) ;=>>
+  {:vars '{evens [2 4 6]}}
+  ;;mzfilter with no matches returns empty
+  ((mseq [(mzfilter neg? {:sym 'negs})]) (vmr [1 2 3])) ;=>>
+  {:vars '{negs []}}
+  ;;mzfilter can combine with other sub-matchers
+  ((mseq [(mzone (mvar 'first identity)) (mzfilter even? {:sym 'rest-evens})]) (vmr [1 2 3 4 5 6])) ;=>>
+  {:vars '{first 1 rest-evens [2 4 6]}})
+
+(defn mzfirst
+  "A sub-matcher that finds the first element matching `pred`.
+   Consumes all remaining elements but returns only the first match as :val.
+   Fails if no element matches.
+   Options:
+   - `sym` if we bind the found element to a symbol"
+  [pred {:keys [sym]}]
+  (matcher :subseq
+           (fn [zmr]
+             (loop [z (:val zmr)]
+               (if (zip/end? z)
+                 (fail "no element matches predicate" :first nil)
+                 (let [node (zip/node z)]
+                   (if (pred node)
+                     ;; Found it - create a fake end-zipper where zip/root returns the found value
+                     ;; [value :end] is a zipper at end position, zip/root returns (node loc) = value
+                     (cond-> (assoc zmr :val [node :end])
+                       sym (-bind sym node))
+                     (recur (zip/next z)))))))))
+
+^:rct/test
+(comment
+  ;;mzfirst finds first matching element
+  ((mseq [(mzfirst even? {:sym 'first-even})]) (vmr [1 3 5 6 7 8])) ;=>>
+  {:val 6 :vars '{first-even 6}}
+  ;;mzfirst fails when no match
+  ((mseq [(mzfirst neg? {})]) (vmr [1 2 3])) ;=>>
+  failure?
+  ;;mzfirst can combine with other sub-matchers
+  ((mseq [(mzone (mvar 'head identity)) (mzfirst even? {:sym 'first-even})]) (vmr [1 3 4 5 6])) ;=>>
+  {:val 4 :vars '{head 1 first-even 4}})
+
 ;;## Pattern
 ;;
 ;; Pattern is a mini language using common clojure data, it can translate to matcher functions.
+
+(defn mzcollect
+  "A sub-matcher that collects all remaining elements matching pred into sym.
+   Requires at least min-len elements (default 1)."
+  ([pred sym] (mzcollect pred sym 1))
+  ([pred sym min-len]
+   (matcher :collect
+            (fn [zmr]
+              (loop [z (:val zmr)
+                     items []]
+                (if (zip/end? z)
+                  (if (>= (count items) min-len)
+                    (-bind (assoc zmr :val z) sym items)
+                    (fail (str "need at least " min-len " elements, got " (count items)) :collect items))
+                  (let [node (zip/node z)]
+                    (if (pred node)
+                      (recur (zip/next z) (conj items node))
+                      (if (>= (count items) min-len)
+                        (-bind (assoc zmr :val z) sym items)
+                        (fail (str "element doesn't match: " (pr-str node)) :collect node))))))))))
 
 (defn mchain [children]
   (matcher :chain
@@ -429,63 +515,280 @@
                            result)))
                      mr children))))
 
-(def ^:private matcher-arg-specs
-  "Specification of expected arguments for each (? :type ...) matcher"
-  {:pred {:args "(? :pred <fn>)"
-          :matcher (mzone (mvar 'pred (mpred fn?)))}
-   :val  {:args "(? :val <value>)"
-          :matcher (mzone (mvar 'val identity))}
-   :map  {:args "(? :map <map>)"
-          :matcher (mzone (mvar 'map (mpred map?)))}
-   :1    {:args "(? :1 <matcher>)"
-          :matcher (mzone (mvar 'child (mpred matcher-type)))}
-   :?    {:args "(? :? <matcher>)"
-          :matcher (mzone (mvar 'child (mpred matcher-type)))}
-   :-    {:args "(? :- <matcher> <len> [<max-len>] [<sym>])"
-          :matcher (mzsubseq [(mzone (mvar 'child (mpred matcher-type)))
-                              (mzone (mvar 'len (mpred (complement neg-int?))))
-                              (mzoption (mvar 'max-len (mpred (complement neg-int?))))
-                              (mzoption (mvar 'sym (mpred symbol?)))]
-                             nil)}
-   :seq  {:args "(? :seq [<matchers>...])"
-          :matcher (mzone (mvar 'children (mpred #(every? matcher-type %))))}
-   :var  {:args "(? :var <sym> <matcher>)"
-          :matcher (mzsubseq [(mzone (mvar 'sym (mpred symbol?)))
-                              (mzone (mvar 'child (mpred matcher-type)))]
-                             nil)}})
+(declare repeat-matcher)
 
-(defn matcher-args [t]
-  (if-let [spec (get matcher-arg-specs t)]
-    (:matcher spec)
-    (throw (ex-info (str "Unknown matcher type: " t
-                         ". Valid types: " (keys matcher-arg-specs))
-                    {:type t :valid-types (keys matcher-arg-specs)}))))
+(def ^:private matcher-specs* (atom {}))
 
-(defn make-matcher [{:keys [vars]}]
-  (case (get vars 'type)
-    :pred (mpred (get vars 'pred))
-    :val (mval (get vars 'val))
-    :map (mmap (get vars 'map))
-    :1 (mzone (get vars 'child))
-    :? (mzoption (get vars 'child))
-    :- (mzrepeat (get vars 'child) (get vars 'len) {:max-len (get vars 'max-len) :sym (get vars 'sym)})
-    :seq (mseq (get vars 'children))
-    :var (mvar (get vars 'sym) (get vars 'child))))
+(defmacro defmatcher
+  "Define a matcher type specification.
+   type - keyword like :pred, :val, etc.
+   args - human-readable argument format string
+   parse - matcher that validates and extracts arguments
+   make - form with ?sym placeholders that are replaced with (get vars 'sym),
+          or a (fn [vars] ...) for complex logic"
+  [type args parse make]
+  (let [make-form (if (and (seq? make) (= (first make) 'fn))
+                    ;; Already a function form, use as-is
+                    make
+                    ;; Transform ?sym -> (get vars 'sym)
+                    (let [transformed (walk/postwalk
+                                       (fn [x]
+                                         (if (and (symbol? x)
+                                                  (clojure.string/starts-with? (name x) "?")
+                                                  (not= (name x) "?"))
+                                           `(get ~'vars '~(symbol (subs (name x) 1)))
+                                           x))
+                                       make)]
+                      `(fn [~'vars] ~transformed)))]
+    `(swap! matcher-specs* assoc ~type
+            {:args ~args
+             :parse ~parse
+             :make ~make-form})))
+
+(defn- resolve-var-args
+  "Resolve $sym references in args using bound vars from match result.
+   Uses $ prefix to avoid conflict with ?sym which is transformed to named-var patterns."
+  [args bound-vars]
+  (mapv (fn [arg]
+          (if (and (symbol? arg)
+                   (clojure.string/starts-with? (name arg) "$"))
+            (get bound-vars (symbol (subs (name arg) 1)))
+            arg))
+        args))
+
+(defn- parse-keyword-args
+  "Parse keyword arguments from a flat sequence.
+   Returns map of keyword->value pairs.
+   Example: [:min 2 :max 4 :as x] -> {:min 2 :max 4 :as x}"
+  [args]
+  (loop [args args
+         result {}]
+    (if (empty? args)
+      result
+      (let [[k v & rest] args]
+        (if (keyword? k)
+          (recur rest (assoc result k v))
+          result)))))
+
+(defn- levenshtein
+  "Calculate Levenshtein distance between two strings"
+  [s1 s2]
+  (let [len1 (count s1)
+        len2 (count s2)]
+    (cond
+      (zero? len1) len2
+      (zero? len2) len1
+      :else
+      (let [matrix (vec (for [i (range (inc len1))]
+                          (vec (for [j (range (inc len2))]
+                                 (cond (zero? i) j
+                                       (zero? j) i
+                                       :else 0)))))]
+        (loop [i 1 matrix matrix]
+          (if (> i len1)
+            (get-in matrix [len1 len2])
+            (recur (inc i)
+                   (loop [j 1 matrix matrix]
+                     (if (> j len2)
+                       matrix
+                       (let [cost (if (= (nth s1 (dec i)) (nth s2 (dec j))) 0 1)
+                             val (min (inc (get-in matrix [(dec i) j]))
+                                      (inc (get-in matrix [i (dec j)]))
+                                      (+ (get-in matrix [(dec i) (dec j)]) cost))]
+                         (recur (inc j) (assoc-in matrix [i j] val))))))))))))
+
+(defn- suggest-matcher-type
+  "Suggest similar matcher type if the given one is unknown"
+  [invalid-type valid-types]
+  (let [invalid-name (name invalid-type)
+        suggestions (->> valid-types
+                         (map (fn [t] [t (levenshtein invalid-name (name t))]))
+                         (filter (fn [[_ d]] (<= d 3)))
+                         (sort-by second))]
+    (when (seq suggestions)
+      (ffirst suggestions))))
+
+(defmatcher :pred "(? :pred <fn> [<args>...])"
+  ;; Collect fn and all args
+  (mzcollect (constantly true) 'all 1)
+  (fn [vars]
+    (let [[f & args] (get vars 'all)
+          args (vec args)]
+      (if (empty? args)
+        ;; No extra args - original behavior
+        (mpred f)
+        ;; With args - substitute ?var and call f with args + current value
+        (matcher :pred
+                 (fn [mr]
+                   (let [v (:val mr)
+                         resolved-args (resolve-var-args args (:vars mr))
+                         result (apply f (conj resolved-args v))]
+                     (if result mr (fail "predicate failed" :pred v)))))))))
+
+(defmatcher :val "(? :val <value>)"
+  (mzone (mvar 'val identity))
+  (mval ?val))
+
+(defmatcher :map "(? :map <map>)"
+  (mzone (mvar 'map (mpred map?)))
+  (mmap ?map))
+
+(defmatcher :one "(? :one <matcher>)"
+  (mzone (mvar 'child (mpred matcher-type)))
+  (mzone ?child))
+
+(defmatcher :optional "(? :optional <matcher>)"
+  (mzone (mvar 'child (mpred matcher-type)))
+  (mzoption ?child))
+
+(defmatcher :repeat "(? :repeat <matcher> :min <n> [:max <n>] [:as <sym>] [:greedy])"
+  ;; Collect matcher and all remaining args
+  (mzsubseq [(mzone (mvar 'child (mpred matcher-type)))
+             (mzcollect (constantly true) 'rest 0)]
+            nil)
+  (fn [vars]
+    (let [child (get vars 'child)
+          rest-args (get vars 'rest)
+          kw-args (parse-keyword-args rest-args)
+          min-len (or (:min kw-args) 0)
+          max-len (:max kw-args)
+          sym (:as kw-args)
+          greedy? (contains? kw-args :greedy)]
+      (mzrepeat child min-len {:max-len max-len :greedy? greedy? :sym sym}))))
+
+(defmatcher :seq "(? :seq [<matchers>...] [:min <n>] [:max <n>] [:as <sym>] [:greedy])"
+  ;; Collect children vector and all remaining args
+  (mzsubseq [(mzone (mvar 'children (mpred #(every? matcher-type %))))
+             (mzcollect (constantly true) 'rest 0)]
+            nil)
+  (fn [vars]
+    (let [children (get vars 'children)
+          rest-args (get vars 'rest)
+          kw-args (parse-keyword-args rest-args)
+          min-len (:min kw-args)
+          max-len (:max kw-args)
+          sym (:as kw-args)
+          greedy? (contains? kw-args :greedy)
+          wrap-sym (fn [m] (if sym (mvar sym m) m))]
+      (if min-len
+        ;; Repeat the sequence pattern min to max times
+        (let [sub-matchers (mapv (fn [c] (let [mt (matcher-type c)]
+                                           (cond-> c (not= mt :subseq) mzone)))
+                                 children)
+              effective-max (or max-len min-len)
+              rep-range (if greedy?
+                          (range effective-max (dec min-len) -1)
+                          (range min-len (inc effective-max)))
+              alternatives (map (fn [n]
+                                  (mseq (vec (concat (apply concat (repeat n sub-matchers))
+                                                     [mterm]))))
+                                rep-range)]
+          (wrap-sym (mor alternatives)))
+        ;; Basic case - just match sequence once
+        (wrap-sym (mseq children))))))
+
+(defmatcher :var "(? :var <sym> <matcher>)"
+  (mzsubseq [(mzone (mvar 'sym (mpred symbol?)))
+             (mzone (mvar 'child (mpred matcher-type)))]
+            nil)
+  (mvar ?sym ?child))
+
+(defmatcher :named-var "(? :named-var <sym-or-nil> <flags-set>)"
+  (mzsubseq [(mzone (mvar 'sym identity))
+             (mzone (mvar 'flags (mpred set?)))]
+            nil)
+  (fn [vars]
+    (let [sym (get vars 'sym)
+          flags (get vars 'flags)]
+      (cond
+        (flags :one-or-more)  (repeat-matcher sym 1 (flags :greedy))
+        (flags :zero-or-more) (repeat-matcher sym 0 (flags :greedy))
+        :else (cond->> wildcard
+                sym (mvar sym)
+                (flags :optional) mzoption)))))
+
+(defmatcher :or "(? :or <matcher>...)"
+  (mzcollect matcher-type 'alternatives)
+  (mor ?alternatives))
+
+(defmatcher :not "(? :not <matcher>)"
+  (mzone (mvar 'child (mpred matcher-type)))
+  (fn [vars]
+    (let [child (get vars 'child)]
+      (matcher :not
+               (fn [mr]
+                 (let [result (child mr)]
+                   (if (failure? result)
+                     mr  ; child failed, so :not succeeds
+                     (fail "negation failed: child matcher succeeded" :not (:val mr)))))))))
+
+(defmatcher :-> "(? :-> <matcher>...)"
+  (mzcollect matcher-type 'steps)
+  (mchain ?steps))
+
+(defmatcher :match-case "(? :match-case [<key> <matcher>...] [<sym>])"
+  (mzsubseq [(mzone (mvar 'kv-matchers
+                          (mpred #(and (vector? %)
+                                       (even? (count %))
+                                       (every? matcher-type (take-nth 2 (rest %)))))))
+             (mzoption (mvar 'sym (mpred symbol?)))]
+            nil)
+  (mnor ?kv-matchers ?sym))
+
+(defmatcher :filter "(? :filter <pred> [<sym>])"
+  (mzsubseq [(mzone (mvar 'pred (mpred fn?)))
+             (mzoption (mvar 'sym (mpred symbol?)))]
+            nil)
+  (mzfilter ?pred {:sym ?sym}))
+
+(defmatcher :first "(? :first <pred> [<sym>])"
+  (mzsubseq [(mzone (mvar 'pred (mpred fn?)))
+             (mzoption (mvar 'sym (mpred symbol?)))]
+            nil)
+  (mzfirst ?pred {:sym ?sym}))
+
+(defmatcher :sub "(? :sub <fn> [<matcher>])"
+  (mzsubseq [(mzone (mvar 'f (mpred fn?)))
+             (mzoption (mvar 'child (mpred matcher-type)))]
+            nil)
+  (fn [vars]
+    (let [f (get vars 'f)
+          child (or (get vars 'child) wildcard)]
+      (mchain [child (msub f)]))))
+
+(def ^:private matcher-specs
+  "Unified specifications for each matcher type, populated by defmatcher."
+  @matcher-specs*)
+
+(defn- get-spec
+  "Get spec for matcher type, throws if unknown with typo suggestions"
+  [t]
+  (or (get matcher-specs t)
+      (let [valid-types (keys matcher-specs)
+            suggestion (suggest-matcher-type t valid-types)]
+        (throw (ex-info (str "Unknown matcher type: " t
+                             (when suggestion (str ". Did you mean :" (name suggestion) "?"))
+                             "\nValid types: " (sort valid-types))
+                        {:type t :valid-types valid-types :suggestion suggestion})))))
+
+(defn make-matcher
+  "Construct a matcher from parsed vars using the spec's :make function"
+  [{:keys [vars]}]
+  ((:make (get-spec (get vars 'type))) vars))
 
 (defn- check-matcher-args
   "Check matcher args and throw descriptive error on failure"
   [zmr]
-  (let [matcher-type (get-in zmr [:vars 'type])
-        arg-matcher (matcher-args matcher-type)
-        result (arg-matcher zmr)]
+  (let [t (get-in zmr [:vars 'type])
+        spec (get-spec t)
+        result ((:parse spec) zmr)]
     (if (failure? result)
-      (let [spec (get matcher-arg-specs matcher-type)]
-        (throw (ex-info (str "Invalid arguments for (? " matcher-type " ...)\n"
-                             "  Expected: " (:args spec) "\n"
-                             "  Error: " (:reason result))
-                        {:matcher-type matcher-type
-                         :expected (:args spec)
-                         :failure result})))
+      (throw (ex-info (str "Invalid arguments for (? " t " ...)\n"
+                           "  Expected: " (:args spec) "\n"
+                           "  Error: " (:reason result))
+                      {:matcher-type t
+                       :expected (:args spec)
+                       :failure result}))
       result)))
 
 (def core-rule
@@ -500,8 +803,101 @@
 (comment
   ((rule-of core-rule (list '? :pred odd?)) (vmr 3)) ;=>>
   {:val 3}
+  ;;:pred with args - args passed before current value: (f arg... val)
+  ;;(? :pred < 5) on 10 calls (< 5 10) = true
+  ((rule-of core-rule (list '? :pred < 5)) (vmr 10)) ;=>>
+  {:val 10}
+  ;;(? :pred > 5) on 3 calls (> 5 3) = true
+  ((rule-of core-rule (list '? :pred > 5)) (vmr 3)) ;=>>
+  {:val 3}
+  ;;(? :pred < 5) on 3 calls (< 5 3) = false
+  ((rule-of core-rule (list '? :pred < 5)) (vmr 3)) ;=>>
+  failure?
+  ;;:pred with $var references bound variables
+  ;;[2 5]: a=2, then (< 2 5) = true
+  ((ptn->matcher (list '? :seq [(list '? :one (mvar 'a wildcard))
+                                (list '? :one (list '? :pred < '$a))])) (vmr [2 5])) ;=>>
+  {:val [2 5] :vars '{a 2}}
+  ;;[5 2]: a=5, then (< 5 2) = false
+  ((ptn->matcher (list '? :seq [(list '? :one (mvar 'a wildcard))
+                                (list '? :one (list '? :pred < '$a))])) (vmr [5 2])) ;=>>
+  failure?
   ((rule-of core-rule '(? :val 5)) (vmr 5)) ;=>>
-  {:val 5})
+  {:val 5}
+  ;;:or matches first successful alternative
+  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr 4)) ;=>>
+  {:val 4}
+  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr -1)) ;=>>
+  {:val -1}
+  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr 3)) ;=>>
+  failure?
+  ;;:-> chains matchers, output of one feeds into next
+  ((rule-of core-rule (list '? :-> (mpred even?) (mvar 'x wildcard))) (vmr 4)) ;=>>
+  {:val 4 :vars '{x 4}}
+  ((rule-of core-rule (list '? :-> (mpred even?) (mpred pos?))) (vmr 4)) ;=>>
+  {:val 4}
+  ;;:-> fails if any step fails
+  ((rule-of core-rule (list '? :-> (mpred even?) (mpred neg?))) (vmr 4)) ;=>>
+  failure?
+  ;;:match-case binds matched key to symbol
+  ((rule-of core-rule (list '? :match-case [:even (mpred even?) :neg-one (mval -1)] 'which)) (vmr 4)) ;=>>
+  {:val 4 :vars '{which :even}}
+  ((rule-of core-rule (list '? :match-case [:even (mpred even?) :neg-one (mval -1)] 'which)) (vmr -1)) ;=>>
+  {:val -1 :vars '{which :neg-one}}
+  ((rule-of core-rule (list '? :match-case [:even (mpred even?) :neg-one (mval -1)] 'which)) (vmr 3)) ;=>>
+  failure?
+  ;;:match-case without sym just matches without binding key
+  ((rule-of core-rule (list '? :match-case [:a (mpred pos?) :b (mpred neg?)])) (vmr 5)) ;=>>
+  {:val 5}
+  ;;:filter filters sequence elements by predicate
+  ((ptn->matcher (list '? :seq [(list '? :filter even? 'evens)])) (vmr [1 2 3 4 5 6])) ;=>>
+  {:vars '{evens [2 4 6]}}
+  ;;:filter with :var to bind the filtered sequence
+  ((ptn->matcher (list '? :var 'result (list '? :seq [(list '? :filter odd? 'odds)]))) (vmr [1 2 3 4 5])) ;=>>
+  {:vars '{result [1 2 3 4 5] odds [1 3 5]}}
+  ;;:first finds first matching element, :val is the single value
+  ((ptn->matcher (list '? :seq [(list '? :first even? 'first-even)])) (vmr [1 3 5 6 7 8])) ;=>>
+  {:val 6 :vars '{first-even 6}}
+  ;;:first fails when no match
+  ((ptn->matcher (list '? :seq [(list '? :first neg?)])) (vmr [1 2 3])) ;=>>
+  failure?
+  ;;:first with :var binds the found value
+  ((ptn->matcher (list '? :var 'found (list '? :seq [(list '? :first even? 'x)]))) (vmr [1 2 3 4])) ;=>>
+  {:val 2 :vars '{found 2 x 2}}
+  ;;:sub applies function to value
+  ((rule-of core-rule (list '? :sub inc (mpred even?))) (vmr 8)) ;=>>
+  {:val 9}
+  ;;:sub without child matcher uses wildcard
+  ((rule-of core-rule (list '? :sub inc)) (vmr 5)) ;=>>
+  {:val 6}
+  ;;:sub fails if child matcher fails
+  ((rule-of core-rule (list '? :sub inc (mpred even?))) (vmr 7)) ;=>>
+  failure?
+  ;;:not succeeds when child fails
+  ((rule-of core-rule (list '? :not (mpred even?))) (vmr 3)) ;=>>
+  {:val 3}
+  ;;:not fails when child succeeds
+  ((rule-of core-rule (list '? :not (mpred even?))) (vmr 4)) ;=>>
+  failure?
+  ;;:not with :val - match anything except 5
+  ((rule-of core-rule (list '? :not (mval 5))) (vmr 3)) ;=>>
+  {:val 3}
+  ((rule-of core-rule (list '? :not (mval 5))) (vmr 5)) ;=>>
+  failure?
+  ;;:repeat with keyword args (lazy by default - matches minimum)
+  ((ptn->matcher (list '? :seq [(list '? :repeat (mpred even?) :min 2 :max 3 :as 'evens)])) (vmr [2 4])) ;=>>
+  {:vars '{evens (2 4)}}
+  ;;with :greedy matches maximum
+  ((ptn->matcher (list '? :seq [(list '? :repeat (mpred even?) :min 2 :max 3 :as 'evens :greedy true)])) (vmr [2 4 6])) ;=>>
+  {:vars '{evens (2 4 6)}}
+  ((ptn->matcher (list '? :seq [(list '? :repeat (mpred even?) :min 2 :max 3)])) (vmr [2])) ;=>>
+  failure?
+  ;;:seq with keyword args
+  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 2 :max 2 :as 'pairs)) (vmr [1 2 1 2])) ;=>>
+  {:vars '{pairs [1 2 1 2]}}
+  ;;:sub can chain with :var to bind result
+  ((ptn->matcher (list '? :var 'x (list '? :sub inc))) (vmr 10)) ;=>>
+  {:val 11 :vars '{x 11}})
 
 ;;## List-var pattern parsing
 ;; These functions parse list-form named variables like (?x even? [2 4] !)
@@ -572,23 +968,30 @@
     (fn? x) (mpred x)
     :else (mval x)))
 
+(declare named-var->form)
+
 (defn ptn->matcher
   ([ptn]
    (ptn->matcher ptn [core-rule]))
   ([ptn rules]
    (when-let [mch (mor rules)]
-     ;; Use prewalk to handle list-var patterns before children are transformed,
+     ;; Use prewalk to handle list-var and named-var patterns before children are transformed,
      ;; then postwalk for everything else
      (let [prewalk-fn (fn [x]
-                        ;; Check list-var pattern first (before children transform)
-                        (if-let [parsed (parse-list-var x)]
-                          (let [{:keys [sym pred min-len max-len greedy?]} parsed
+                        (cond
+                          ;; Check list-var pattern first (before children transform)
+                          (parse-list-var x)
+                          (let [{:keys [sym pred min-len max-len greedy?]} (parse-list-var x)
                                 child (if pred (mpred pred) wildcard)]
                             (if min-len
-                              (let [effective-max (if (zero? max-len) 100 max-len)]
+                              (let [effective-max (if (zero? max-len) *max-repeat-length* max-len)]
                                 (mzrepeat child min-len {:max-len effective-max :greedy? greedy? :sym sym}))
                               (if sym (mvar sym child) child)))
-                          x))
+                          ;; Named-var symbols like ?x, ?x+, ?x* -> (? :named-var sym flags)
+                          (named-var->form x)
+                          (named-var->form x)
+                          ;; Otherwise pass through
+                          :else x))
            postwalk-fn (fn [x] (or (rule-of mch x) x))]
        (->> ptn
             (walk/prewalk prewalk-fn)
@@ -598,10 +1001,28 @@
 (comment
   ((ptn->matcher '(? :map {:a (? :var a (? :val 3)) :b (? :map {:c (? :var a (? :val 3))})})) (vmr {:a 3 :b {:c 3}})) ;=>>
   {:vars '{a 3}}
-  ((ptn->matcher '(? :seq [(? :? (? :val 1)) (? :1 (? :val 10))])) (vmr [10])) ;=>>
+  ((ptn->matcher '(? :seq [(? :optional (? :val 1)) (? :one (? :val 10))])) (vmr [10])) ;=>>
   {:val [10]}
-  ((ptn->matcher (list '? :seq [(list '? :- (list '? :pred odd?) 1 2 'a)])) (vmr [1 3 5])) ;=>>
-  {:val [1]})
+  ((ptn->matcher (list '? :seq [(list '? :repeat (list '? :pred odd?) :min 1 :max 2 :as 'a)])) (vmr [1 3 5])) ;=>>
+  {:val [1]}
+  ;;:seq with :min - repeat sequence pattern exactly min times
+  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 2)) (vmr [1 2 1 2])) ;=>>
+  {:val [1 2 1 2]}
+  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 2)) (vmr [1 2])) ;=>>
+  failure?
+  ;;:seq with :min and :max - repeat between min and max times
+  ((ptn->matcher (list '? :seq [(mval 1)] :min 2 :max 3)) (vmr [1 1])) ;=>>
+  {:val [1 1]}
+  ((ptn->matcher (list '? :seq [(mval 1)] :min 2 :max 3)) (vmr [1 1 1])) ;=>>
+  {:val [1 1 1]}
+  ((ptn->matcher (list '? :seq [(mval 1)] :min 2 :max 3)) (vmr [1])) ;=>>
+  failure?
+  ;;:seq with :as - bind matched sequence
+  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 1 :max 2 :as 'x)) (vmr [1 2])) ;=>>
+  {:vars '{x [1 2]}}
+  ;;:seq with :greedy - try max repetitions first
+  ((ptn->matcher (list '? :seq [(mval 1)] :min 1 :max 3 :as 'a :greedy true)) (vmr [1 1])) ;=>>
+  {:vars '{a [1 1]}})
 
 (defn- wrap-element [x]
   (let [mt (matcher-type x)] (cond-> x (not mt) scalar-element (not= mt :subseq) mzone)))
@@ -634,18 +1055,16 @@
    - ?x+     one or more (lazy)
    - ?x*     zero or more (lazy)
    - ?x+!    one or more (greedy)
-   - ?x*!    zero or more (greedy)
-   - ??x     sequence binding"
+   - ?x*!    zero or more (greedy)"
   [v]
   (when (symbol? v)
-    (when-let [[_ prefix n suffix greedy] (re-matches #"(\?[\?]?)([\p{Alnum}-_]+)([\?\+\*]?)(\!?)" (name v))]
+    (when-let [[_ n suffix greedy] (re-matches #"\?([\p{Alnum}-_]+)([\?\+\*]?)(\!?)" (name v))]
       [(when-not (= "_" n) (symbol n))
        (cond-> #{}
          (= suffix "?") (conj :optional)
          (= suffix "+") (conj :one-or-more)
          (= suffix "*") (conj :zero-or-more)
-         (= greedy "!") (conj :greedy)
-         (= prefix "??") (conj :seq))])))
+         (= greedy "!") (conj :greedy))])))
 
 ^:rct/test
 (comment
@@ -669,40 +1088,150 @@
    Default is lazy (match minimum), use greedy? true to match maximum."
   [sym min-len greedy?]
   ;; Use mzrepeat with a large max-len for practical unbounded matching
-  (mzrepeat wildcard min-len {:max-len 100 :greedy? greedy? :sym sym}))
+  (mzrepeat wildcard min-len {:max-len *max-repeat-length* :greedy? greedy? :sym sym}))
 
-(def named-var-rule
-  (mchain [(mchain [(msub named-var?)
-                    (mseq [(mzone (mvar 'sym identity)) (mzone (mvar 'flags identity))])])
-           (mf (fn [{{:syms [sym flags]} :vars}]
-                 (cond
-                   (flags :one-or-more)  (repeat-matcher sym 1 (flags :greedy))
-                   (flags :zero-or-more) (repeat-matcher sym 0 (flags :greedy))
-                   :else (cond->> wildcard
-                           sym (mvar sym)
-                           (flags :optional) mzoption
-                           (flags :seq) seq-matcher))))]))
+;; named-var-rule removed - now handled via prewalk-fn using named-var->form
+;; which generates (? :named-var sym flags) forms processed by core-rule
 
-(def core-rules [named-var-rule vector-rule map-rule core-rule])
+(def core-rules [vector-rule map-rule core-rule])
 
+;;## Compiled Matcher Protocol
+;;
+;; IMatcher provides multiple ways to access match results from a compiled pattern.
+;; CompiledMatcher implements both IFn (for raw results) and IMatcher (for convenience).
+
+(defprotocol IMatcher
+  "Protocol for compiled matchers providing multiple result access patterns."
+  (-query [this data] "Returns vars map or nil on failure")
+  (-match-result [this data] "Returns {:vars ...} on success or MatchFailure on failure")
+  (-match! [this data] "Returns vars map or throws on failure"))
+
+(defrecord CompiledMatcher [matcher-fn pattern]
+  IMatcher
+  (-query [this data]
+    (let [result (matcher-fn (vmr data))]
+      (when-not (failure? result)
+        (:vars result))))
+
+  (-match-result [this data]
+    (let [result (matcher-fn (vmr data))]
+      (if (failure? result)
+        result
+        {:vars (:vars result)})))
+
+  (-match! [this data]
+    (let [result (matcher-fn (vmr data))]
+      (if (failure? result)
+        (throw (ex-info (str "Match failed: " (:reason result))
+                        {:failure result
+                         :pattern pattern
+                         :data data
+                         :path (:path result)}))
+        (:vars result))))
+
+  #?@(:clj
+      [clojure.lang.IFn
+       (invoke [this data]
+               (matcher-fn (vmr data)))]
+      :cljs
+      [IFn
+       (-invoke [this data]
+                (matcher-fn (vmr data)))]))
+
+(defn compiled-matcher
+  "Create a CompiledMatcher from a matcher function and original pattern"
+  [matcher-fn pattern]
+  (->CompiledMatcher matcher-fn pattern))
+
+;; Extend IMatcher to support raw patterns (compiles on each call - for REPL convenience)
+#?(:clj
+   (extend-protocol IMatcher
+     clojure.lang.IPersistentMap
+     (-query [this data]
+       (-query (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match-result [this data]
+       (-match-result (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match! [this data]
+       (-match! (compiled-matcher (ptn->matcher this core-rules) this) data))
+
+     clojure.lang.IPersistentVector
+     (-query [this data]
+       (-query (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match-result [this data]
+       (-match-result (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match! [this data]
+       (-match! (compiled-matcher (ptn->matcher this core-rules) this) data))
+
+     clojure.lang.IPersistentList
+     (-query [this data]
+       (-query (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match-result [this data]
+       (-match-result (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match! [this data]
+       (-match! (compiled-matcher (ptn->matcher this core-rules) this) data)))
+
+   :cljs
+   (extend-protocol IMatcher
+     PersistentArrayMap
+     (-query [this data]
+       (-query (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match-result [this data]
+       (-match-result (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match! [this data]
+       (-match! (compiled-matcher (ptn->matcher this core-rules) this) data))
+
+     PersistentHashMap
+     (-query [this data]
+       (-query (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match-result [this data]
+       (-match-result (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match! [this data]
+       (-match! (compiled-matcher (ptn->matcher this core-rules) this) data))
+
+     PersistentVector
+     (-query [this data]
+       (-query (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match-result [this data]
+       (-match-result (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match! [this data]
+       (-match! (compiled-matcher (ptn->matcher this core-rules) this) data))
+
+     List
+     (-query [this data]
+       (-query (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match-result [this data]
+       (-match-result (compiled-matcher (ptn->matcher this core-rules) this) data))
+     (-match! [this data]
+       (-match! (compiled-matcher (ptn->matcher this core-rules) this) data))))
+
+;; Public wrapper functions
 (defn query
-  "Match pattern against data and return variable bindings, or nil if no match"
+  "Match pattern against data and return variable bindings, or nil if no match.
+   Pattern can be a CompiledMatcher or a raw pattern (compiled on each call)."
   [ptn data]
-  (let [result ((ptn->matcher ptn core-rules) (vmr data))]
-    (when-not (failure? result)
-      (:vars result))))
+  (-query ptn data))
 
-(defn query-with-failure
-  "Match pattern against data and return either {:vars ...} on success or the MatchFailure on failure"
+(defn match-result
+  "Match pattern against data and return {:vars ...} on success or MatchFailure on failure.
+   Pattern can be a CompiledMatcher or a raw pattern (compiled on each call)."
   [ptn data]
-  (let [result ((ptn->matcher ptn core-rules) (vmr data))]
-    (if (failure? result)
-      result
-      {:vars (:vars result)})))
+  (-match-result ptn data))
+
+(defn match!
+  "Match pattern against data and return vars map, or throw on failure.
+   Pattern can be a CompiledMatcher or a raw pattern (compiled on each call)."
+  [ptn data]
+  (-match! ptn data))
 
 ^:rct/test
 (comment
-  ((rule-of named-var-rule '?x) (vmr 5)) ;=>>
+  ;;named-var->form transforms symbols to (? :named-var ...) forms
+  (named-var->form '?x) ;=>>
+  '(? :named-var x #{})
+  (named-var->form '?x+) ;=>>
+  '(? :named-var x #{:one-or-more})
+  ;;core-rule processes (? :named-var ...) forms
+  ((rule-of core-rule '(? :named-var x #{})) (vmr 5)) ;=>>
   {:vars '{x 5}}
   (query '{:a ?a :b {:c ?a}} {:a 3 :b {:c 3}}) ;=>>
   '{a 3}
@@ -731,14 +1260,14 @@
   '{a (1) b (2 3)}                      ; lazy: ?a+ takes minimum (1)
   (query '[?a+! ?b+] [1 2 3]) ;=>>
   '{a (1 2) b (3)}                      ; greedy: ?a+! takes maximum
-  ;;query returns nil on failure (backward compatible)
+  ;;query returns nil on failure
   (query '{:a 5} {:a 3}) ;=>
   nil
-  ;;query-with-failure returns detailed failure info
-  (query-with-failure '{:a 5} {:a 3}) ;=>>
+  ;;match-result returns detailed failure info
+  (match-result '{:a 5} {:a 3}) ;=>>
   {:reason #"value mismatch" :path [:a] :depth 1}
   ;;nested failure with path trace
-  (query-with-failure '{:a {:b 10}} {:a {:b 20}}) ;=>>
+  (match-result '{:a {:b 10}} {:a {:b 20}}) ;=>>
   {:path [:a :b] :depth 2}
   ;;list-form named variables: (?x pred? [min max]? !?)
   (query '[(?x even?)] [4]) ;=>>
@@ -762,7 +1291,29 @@
   (query '[(?x [0 5]) ?y*] [1 2 3]) ;=>>
   '{x () y (1 2 3)}
   (query '[(?x [0 5] !) ?y*] [1 2 3]) ;=>>
-  '{x (1 2 3) y ()})
+  '{x (1 2 3) y ()}
+
+  ;;## CompiledMatcher protocol tests
+  ;;compiled-matcher creates a CompiledMatcher
+  (def cm (compiled-matcher (ptn->matcher '{:a ?a} core-rules) '{:a ?a}))
+  (instance? CompiledMatcher cm) ;=>
+  true
+  ;;CompiledMatcher is callable as a function (returns ValMatchResult)
+  (cm {:a 42}) ;=>>
+  {:val {:a 42} :vars '{a 42}}
+  ;;query on CompiledMatcher returns vars or nil
+  (query cm {:a 42}) ;=>>
+  '{a 42}
+  (query cm "not a map") ;=>
+  nil
+  ;;match-result on CompiledMatcher returns {:vars ...} or MatchFailure
+  (match-result cm {:a 42}) ;=>>
+  {:vars '{a 42}}
+  (match-result cm "not a map") ;=>>
+  failure?
+  ;;match! on CompiledMatcher returns vars or throws
+  (match! cm {:a 42}) ;=>>
+  '{a 42})
 
 ;;## Utils
 
@@ -847,3 +1398,14 @@
   [1 2 3]
   ((substitute-form '{:sum ?x :product ?y}) {:vars {'x 10 'y 20}}) ;=>>
   {:sum 10 :product 20})
+
+;; Helper using substitute-form to transform named-var symbols to (? :named-var ...) forms
+(def ^:private named-var->form*
+  (substitute-form '(? :named-var ?sym ?flags)))
+
+(defn named-var->form
+  "Transform a named-var symbol like ?x, ?x+, ?x* to a (? :named-var sym flags) form.
+   Returns nil if x is not a named-var symbol."
+  [x]
+  (when-let [[sym flags] (named-var? x)]
+    (named-var->form* {:vars {'sym sym 'flags flags}})))
