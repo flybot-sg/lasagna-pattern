@@ -53,7 +53,7 @@ bb clean
 
 ## Testing Convention
 
-Tests use rich-comment-tests embedded inline in source files:
+Tests use rich-comment-tests (RCT) embedded inline in source files:
 
 ```clojure
 ^:rct/test
@@ -69,6 +69,37 @@ Tests use rich-comment-tests embedded inline in source files:
 - `;=>` for value equality
 - `;=>>` for predicate/matcho-style expectations
 - `throws=>>` for exception expectations
+
+### RCT Test Guidelines
+
+**White-box testing approach:**
+- Tests should cover all code branches (success, failure, edge cases)
+- Each test should verify a specific behavior or branch
+
+**Commenting conventions:**
+- Add a brief comment above each assertion explaining its intention
+- Use section headers (`;;-------------------------------------------------------------------`) to group related tests
+- Format: `;; <what-is-being-tested>: <expected-behavior>`
+
+**Avoid redundancy:**
+- Remove tests that cover the same branch as an existing test
+- Consolidate similar cases into single tests using `map` when appropriate
+- Prefer one representative test per branch over multiple similar tests
+
+**Example structure:**
+```clojure
+^:rct/test
+(comment
+  ;;-------------------------------------------------------------------
+  ;; <section-name> - <description>
+  ;;-------------------------------------------------------------------
+  ;; success case: <what-happens>
+  (some-fn good-input) ;=>> expected
+  ;; failure case: <what-happens>
+  (some-fn bad-input) ;=>> failure?
+  ;; edge case: <boundary-condition>
+  (some-fn edge-input) ;=>> expected)
+```
 
 ## Code Style
 
