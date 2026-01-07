@@ -172,45 +172,44 @@
 
 ^:rct/test
 (comment
-  ;; Compile returns a CompiledMatcher
+  ;;-------------------------------------------------------------------
+  ;; compile - returns CompiledMatcher
+  ;;-------------------------------------------------------------------
   (def m (compile '{:a ?a :b ?b}))
 
-  ;; As function - returns raw ValMatchResult
-  (m {:a 1 :b 2}) ;=>>
-  {:vars '{a 1 b 2}}
-  (m {:a 1 :b 2 :c 3}) ;=>>
-  {:vars '{a 1 b 2}}
+  ;; callable as function - returns ValMatchResult
+  (m {:a 1 :b 2}) ;=>> {:vars '{a 1 b 2}}
+  ;; ignores extra keys in data
+  (m {:a 1 :b 2 :c 3}) ;=>> {:vars '{a 1 b 2}}
 
+  ;;-------------------------------------------------------------------
   ;; query - returns vars map or nil
-  (query m {:a 1 :b 2}) ;=>>
-  '{a 1 b 2}
+  ;;-------------------------------------------------------------------
+  ;; succeeds - returns bindings
+  (query m {:a 1 :b 2}) ;=>> '{a 1 b 2}
+  ;; fails - returns nil
+  (query '{:x 10} {:x 99}) ;=> nil
+  ;; raw pattern (compiles each time - for REPL)
+  (query '{:x ?x} {:x 42}) ;=>> '{x 42}
 
-  ;; query with raw pattern (compiles each time)
-  (query '{:x ?x} {:x 42}) ;=>>
-  '{x 42}
+  ;;-------------------------------------------------------------------
+  ;; match-result returns vars or MatchFailure
+  ;;-------------------------------------------------------------------
+  ;; succeeds, returns vars
+  (match-result m {:a 1 :b 2}) ;=>> {:vars '{a 1 b 2}}
+  ;; fails - returns MatchFailure with diagnostic path
+  (match-result '{:x 10} {:x 99}) ;=>> {:reason #"value mismatch" :path [:x]}
 
-  ;; match-result - returns {:vars ...} or MatchFailure
-  (match-result m {:a 1 :b 2}) ;=>>
-  {:vars '{a 1 b 2}}
-
+  ;;-------------------------------------------------------------------
   ;; match! - returns vars or throws
-  (match! m {:a 1 :b 2}) ;=>>
-  '{a 1 b 2}
+  ;;-------------------------------------------------------------------
+  (match! m {:a 1 :b 2}) ;=>> '{a 1 b 2}
 
-  ;; failure returns MatchFailure with diagnostic info
-  ((compile '{:x 10}) {:x 99}) ;=>>
-  {:reason #"value mismatch" :path [:x]}
-
-  ;; query returns nil on value mismatch
-  (query '{:x 10} {:x 99}) ;=>
-  nil
-
-  ;; match-result returns MatchFailure on value mismatch
-  (match-result '{:x 10} {:x 99}) ;=>>
-  {:reason #"value mismatch" :path [:x]}
-
-  ;; sequence pattern
-  ((compile '[?a ?b]) [1 2]) ;=>>
-  {:vars '{a 1 b 2}}
-  (query '[?head ?tail+] [1 2 3]) ;=>>
-  '{head 1 tail (2 3)})
+  ;;-------------------------------------------------------------------
+  ;; Sequence patterns
+  ;;-------------------------------------------------------------------
+  ;; fixed-length sequence
+  ((compile '[?a ?b]) [1 2]) ;=>> {:vars '{a 1 b 2}}
+  ;; head + rest pattern
+  (query '[?head ?tail+] [1 2 3]) ;=>> '{head 1 tail (2 3)}
+  )

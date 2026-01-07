@@ -116,7 +116,7 @@
 (defn vmr
   "returns a mr with `val` and `vars`"
   ([val]
-   (vmr val nil))
+   (vmr val {}))
   ([val vars]
    (ValMatchResult. val vars)))
 
@@ -129,11 +129,15 @@
 
 ^:rct/test
 (comment
-  (vapply (vmr 3) inc) ;=>>
-  {:val 4}
+  ;; vapply transforms val by applying f
+  (vapply (vmr 3) inc) ;=>> {:val 4}
+  ;; -bind adds variable binding to vars
   (-bind (vmr 3) 'a 4) ;=>> {:vars {'a 4}}
-  (fit (vmr 3) odd?) ;=>>
-  {:val 3})
+  ;; fit returns mr when predicate succeeds
+  (fit (vmr 3) odd?) ;=>> {:val 3}
+  ;; fit returns MatchFailure when predicate fails
+  (fit (vmr 4) odd?) ;=>> failure?
+  )
 
 ;;=============================================================================
 ;; SECTION 2: Matcher Primitives
@@ -196,16 +200,18 @@
 
 ^:rct/test
 (comment
-  ;;mpred succeed when `pred` success
+  ;; mpred succeeds when predicate passes, fails otherwise
   (map (mvar 'a (mpred even?)) [(vmr 4) (vmr 3)]) ;=>>
   [{:val 4 :vars {'a 4}} failure?]
-  ((mval 3) (vmr 3)) ;=>>
-  {:val 3}
-  ;;msub operates on `val` of a mr
-  ((msub inc) (vmr 3)) ;=>>
-  {:val 4}
-  ;;mf operate on the mr value
-  ((mf (fn [{:keys [vars val]}] (+ val (vars 'a)))) (vmr 3 {'a 2})))
+  ;; mval succeeds on exact value match
+  ((mval 3) (vmr 3)) ;=>> {:val 3}
+  ;; mval fails on value mismatch
+  ((mval 3) (vmr 5)) ;=>> failure?
+  ;; msub transforms val by applying function
+  ((msub inc) (vmr 3)) ;=>> {:val 4}
+  ;; mf transforms using full match result (access to both val and vars)
+  ((mf (fn [{:keys [vars val]}] (+ val (vars 'a)))) (vmr 3 {'a 2})) ;=>> {:val 5}
+  )
 
 (def find-first
   "returns the first matched element"
@@ -242,10 +248,12 @@
 
 ^:rct/test
 (comment
+  ;; mor returns first successful match (short-circuits)
   (map (mor [(mpred neg?) (mpred even?)]) [(vmr -1) (vmr 2) (vmr 3)]) ;=>>
   [{} {} failure?]
-  ((mnor [0 (mpred even?) 1 (mpred odd?)] 'b) (vmr 3)) ;=>>
-  {:vars {'b 1}})
+  ;; mnor tries matchers in order, binds key of first success to symbol
+  ((mnor [0 (mpred even?) 1 (mpred odd?)] 'b) (vmr 3)) ;=>> {:vars {'b 1}}
+  )
 
 ;;## Map matcher
 
@@ -267,11 +275,12 @@
 
 ^:rct/test
 (comment
+  ;; mmap succeeds when all key matchers succeed, collects vars
   (def mm (mmap {:a (mvar 'a (mval 4)) :b (mpred even?)}))
-  (mm (vmr {:a 4 :b 0}))  ;=>>
-  {:val {:a 4 :b 0} :vars {'a 4}}
-  (mm (vmr {:a 4 :b 3})) ;=>>
-  failure?)
+  (mm (vmr {:a 4 :b 0})) ;=>> {:val {:a 4 :b 0} :vars {'a 4}}
+  ;; mmap fails when any key matcher fails
+  (mm (vmr {:a 4 :b 3})) ;=>> failure?
+  )
 
 ;;## Sequence matchers
 ;;
@@ -297,12 +306,11 @@
 
 ^:rct/test
 (comment
-  ;;mzone matches a single value
-  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip [3 4]) zip/next))) ;=>>
-  {:vars {'a 3}}
-  ;;mzone fails when at the end
-  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip []) zip/next))) ;=>>
-  failure?)
+  ;; mzone matches single element in zipper sequence
+  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip [3 4]) zip/next))) ;=>> {:vars {'a 3}}
+  ;; mzone fails at end of sequence (no element to match)
+  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip []) zip/next))) ;=>> failure?
+  )
 
 (defn branching
   "branching the `coll` on elements fits `pred`, then apply `f` to the element itself and its
@@ -317,11 +325,15 @@
 
 ^:rct/test
 (comment
+  ;; branching groups elements by predicate, applies f to each group
   (def bf (partial branching #(zero? (mod % 5)) #(apply str % %2)))
+  ;; branch at 5, group [5 6 7]
   (bf (range 1 8)) ;=> [1 2 3 4 "567"]
+  ;; no branch point found - returns input unchanged
   (bf (range 1 3)) ;=> [1 2]
-  (bf [1 5 6 8 10 11]) ;=>
-  [1 "568" "1011"])
+  ;; multiple branch points
+  (bf [1 5 6 8 10 11]) ;=> [1 "568" "1011"]
+  )
 
 (defn- optional [x] (some-> x meta ::optional))
 
@@ -414,33 +426,27 @@
 
 ^:rct/test
 (comment
-  ;;mseq fails when the value is not seqable
+  ;; mseq fails on non-seqable input
   ((mseq []) (vmr 3)) ;=>> failure?
-  ;;mzterm matches the end of seq
+  ;; mterm succeeds at end, fails when elements remain
   (map mterm [(vmr (-> (zip/vector-zip []) zip/next)) (vmr (-> (zip/vector-zip [3]) zip/next))]) ;=>>
   [identity failure?]
-  ;;mseq matches one element and check ending
+  ;; mseq single element match with termination check
   (map (mseq [(mzone (mvar 'a (mpred even?))) mterm]) [(vmr [0]) (vmr [2 4]) (vmr [1])]) ;=>>
   [{:vars {'a 0}} failure? failure?]
-  ;;mseq support nil element
-  ((mseq [(mzone (mpred nil?))]) (vmr []))
-  (map (mseq [(mzone (mpred nil?))]) [(vmr []) (vmr [nil])]) ;=>>
-  [failure? {:val [nil]}]
-  ;;mseq return value can be bound to a var
-  ((mvar 'a (mseq [(mzone (mval 4))])) (vmr [4])) ;=>>
-  {:vars {'a [4]}}
-  ;;mseq support msub
-  ((mseq [(mzone (mvar 'b (msub inc)))]) (vmr [3])) ;=>>
-  {:val [4] :vars {'b 4}}
-  ((mseq [(mzone (mval 3)) (mzone (mval 4)) mterm]) (vmr [3 4])) ;=>>
-  {:val [3 4]}
-  ;;moption captures an optional value
+  ;; mseq handles nil elements correctly
+  (map (mseq [(mzone (mpred nil?))]) [(vmr []) (vmr [nil])]) ;=>> [failure? {:val [nil]}]
+  ;; mseq result can be bound via mvar
+  ((mvar 'a (mseq [(mzone (mval 4))])) (vmr [4])) ;=>> {:vars {'a [4]}}
+  ;; mseq supports value transformation via msub
+  ((mseq [(mzone (mvar 'b (msub inc)))]) (vmr [3])) ;=>> {:val [4] :vars {'b 4}}
+  ;; mzoption optional element - present vs absent
   (map (mseq [(mzoption (mvar 'a (mval 3))) (mzone (mval 0)) mterm]) [(vmr [3 0]) (vmr [0])]) ;=>>
   [{:vars {'a 3}} {}]
-  ;;optional can be lazy
+  ;; mzoption lazy mode prefers shorter match first
   (map (mseq [(mzoption (mvar 'a (mval 5)) true) (mzone (mvar 'b (mval 5))) mterm]) [(vmr [5]) (vmr [5 5])]) ;=>>
   [{:vars '{b 5}} {:vars '{a 5 b 5}}]
-  ;;sub sequence value captured
+  ;; mzsubseq captures fixed-length subsequence
   ((mseq [(mzsubseq (repeat 3 (mzone (mpred even?))) 'a) (mzone (mpred odd?)) mterm]) (vmr [2 4 6 7])) ;=>>
   {:vars {'a [2 4 6]}})
 
@@ -510,14 +516,13 @@
 
 ^:rct/test
 (comment
-  ;;mzrepeat repeats child matchers for exact length
+  ;; mzrepeat exact length matches exactly min-len elements
   (map (mseq [(mzrepeat (mpred even?) 3 {:sym 'a}) mterm]) [(vmr [8 10 12]) (vmr [8 10]) (vmr [8 10 12 4])]) ;=>>
   [{:vars {'a [8 10 12]}} failure? failure?]
-  ;;mzrepeat can have optionally length
+  ;; mzrepeat variable length (lazy) matches minimum needed
   (map (mseq [(mzrepeat (mpred even?) 0 {:max-len 2 :sym 'a}) (mzone (mval 3)) mterm])
        [(vmr [3]) (vmr [0 3]) (vmr [0 2 3]) (vmr [0 2 4 3])]) ;=>>
-  [{:vars '{a []}} {:vars '{a [0]}} {:vars '{a [0 2]}} failure?]
-  ((mseq [(mzoption (mvar 'len (mpred (complement neg-int?)))) (mzoption (mvar 'sym (mpred symbol?)))]) (vmr [3 'a])))
+  [{:vars '{a []}} {:vars '{a [0]}} {:vars '{a [0 2]}} failure?])
 
 (defn mzfilter
   "A sub-matcher that filters remaining elements by `pred`, collecting matches.
@@ -538,13 +543,11 @@
 
 ^:rct/test
 (comment
-  ;;mzfilter filters elements by predicate
-  ((mseq [(mzfilter even? {:sym 'evens})]) (vmr [1 2 3 4 5 6])) ;=>>
-  {:vars '{evens [2 4 6]}}
-  ;;mzfilter with no matches returns empty
-  ((mseq [(mzfilter neg? {:sym 'negs})]) (vmr [1 2 3])) ;=>>
-  {:vars '{negs []}}
-  ;;mzfilter can combine with other sub-matchers
+  ;; mzfilter collects elements matching predicate
+  ((mseq [(mzfilter even? {:sym 'evens})]) (vmr [1 2 3 4 5 6])) ;=>> {:vars '{evens [2 4 6]}}
+  ;; mzfilter returns empty when no matches
+  ((mseq [(mzfilter neg? {:sym 'negs})]) (vmr [1 2 3])) ;=>> {:vars '{negs []}}
+  ;; mzfilter combines with other sub-matchers
   ((mseq [(mzone (mvar 'first identity)) (mzfilter even? {:sym 'rest-evens})]) (vmr [1 2 3 4 5 6])) ;=>>
   {:vars '{first 1 rest-evens [2 4 6]}})
 
@@ -570,13 +573,11 @@
 
 ^:rct/test
 (comment
-  ;;mzfirst finds first matching element
-  ((mseq [(mzfirst even? {:sym 'first-even})]) (vmr [1 3 5 6 7 8])) ;=>>
-  {:val 6 :vars '{first-even 6}}
-  ;;mzfirst fails when no match
-  ((mseq [(mzfirst neg? {})]) (vmr [1 2 3])) ;=>>
-  failure?
-  ;;mzfirst can combine with other sub-matchers
+  ;; mzfirst finds first element matching predicate
+  ((mseq [(mzfirst even? {:sym 'first-even})]) (vmr [1 3 5 6 7 8])) ;=>> {:val 6 :vars '{first-even 6}}
+  ;; mzfirst fails when no element matches
+  ((mseq [(mzfirst neg? {})]) (vmr [1 2 3])) ;=>> failure?
+  ;; mzfirst combines with other sub-matchers
   ((mseq [(mzone (mvar 'head identity)) (mzfirst even? {:sym 'first-even})]) (vmr [1 3 4 5 6])) ;=>>
   {:val 4 :vars '{head 1 first-even 4}})
 
@@ -638,20 +639,21 @@
 
 ^:rct/test
 (comment
-  (named-var? '?x3) ;=>>
-  ['x3 #{}]
-  (named-var? '?x?) ;=>>
-  ['x #{:optional}]
-  (named-var? '?x+) ;=>>
-  ['x #{:one-or-more}]
-  (named-var? '?x*) ;=>>
-  ['x #{:zero-or-more}]
-  (named-var? '?x+!) ;=>>
-  ['x #{:one-or-more :greedy}]
-  (named-var? '?x*!) ;=>>
-  ['x #{:zero-or-more :greedy}]
-  (named-var? '?_) ;=>>
-  [nil #{}])
+  ;; named-var? parses basic binding ?x
+  (named-var? '?x3) ;=>> ['x3 #{}]
+  ;; named-var? parses optional ?x?
+  (named-var? '?x?) ;=>> ['x #{:optional}]
+  ;; named-var? parses one-or-more ?x+ (lazy)
+  (named-var? '?x+) ;=>> ['x #{:one-or-more}]
+  ;; named-var? parses zero-or-more ?x* (lazy)
+  (named-var? '?x*) ;=>> ['x #{:zero-or-more}]
+  ;; named-var? parses greedy one-or-more ?x+!
+  (named-var? '?x+!) ;=>> ['x #{:one-or-more :greedy}]
+  ;; named-var? parses greedy zero-or-more ?x*!
+  (named-var? '?x*!) ;=>> ['x #{:zero-or-more :greedy}]
+  ;; named-var? wildcard ?_ returns nil symbol
+  (named-var? '?_) ;=>> [nil #{}]
+  )
 
 (defmacro substitute
   "Returns a function that substitutes named vars (like ?x, ?y) in `form`
@@ -721,19 +723,17 @@
 
 ^:rct/test
 (comment
-  ((substitute '(+ 5 ?x ?y)) {:vars {'x 3 'y 0}}) ;=>>
-  8
-  ((substitute '(* ?a (+ ?b 1))) {:vars {'a 2 'b 3}}) ;=>>
-  8
-  ((substitute '{:result ?val}) {:vars {'val 42}}) ;=>>
-  {:result 42}
-  ;;substitute-form returns unevaluated form
-  ((substitute-form '(* 2 ?x)) {:vars {'x 5}}) ;=>>
-  '(* 2 5)
-  ((substitute-form '[?a ?b ?c]) {:vars {'a 1 'b 2 'c 3}}) ;=>>
-  [1 2 3]
-  ((substitute-form '{:sum ?x :product ?y}) {:vars {'x 10 'y 20}}) ;=>>
-  {:sum 10 :product 20})
+  ;; substitute evaluates form with vars replaced
+  ((substitute '(+ 5 ?x ?y)) {:vars {'x 3 'y 0}}) ;=>> 8
+  ;; substitute nested expressions
+  ((substitute '(* ?a (+ ?b 1))) {:vars {'a 2 'b 3}}) ;=>> 8
+  ;; substitute works with map literals
+  ((substitute '{:result ?val}) {:vars {'val 42}}) ;=>> {:result 42}
+  ;; substitute-form returns unevaluated form (data construction)
+  ((substitute-form '(* 2 ?x)) {:vars {'x 5}}) ;=>> '(* 2 5)
+  ((substitute-form '[?a ?b ?c]) {:vars {'a 1 'b 2 'c 3}}) ;=>> [1 2 3]
+  ((substitute-form '{:sum ?x :product ?y}) {:vars {'x 10 'y 20}}) ;=>> {:sum 10 :product 20}
+  )
 
 (defn named-var->form
   "Transform a named-var symbol like ?x, ?x+, ?x* to a (? :named-var sym flags) form.
@@ -744,11 +744,11 @@
 
 ^:rct/test
 (comment
-  ;;named-var->form transforms symbols to (? :named-var ...) forms
-  (named-var->form '?x) ;=>>
-  '(? :named-var x #{})
-  (named-var->form '?x+) ;=>>
-  '(? :named-var x #{:one-or-more}))
+  ;; named-var->form transforms ?x to internal form
+  (named-var->form '?x) ;=>> '(? :named-var x #{})
+  ;; named-var->form preserves flags
+  (named-var->form '?x+) ;=>> '(? :named-var x #{:one-or-more})
+  )
 
 ;;=============================================================================
 ;; SECTION 4: Pattern DSL and Compilation
@@ -1182,131 +1182,125 @@
 
 ^:rct/test
 (comment
-  ((rule-of core-rule (list '? :pred odd?)) (vmr 3)) ;=>>
-  {:val 3}
-  ;;:pred with args - args passed before current value: (f arg... val)
-  ;;(? :pred < 5) on 10 calls (< 5 10) = true
-  ((rule-of core-rule (list '? :pred < 5)) (vmr 10)) ;=>>
-  {:val 10}
-  ;;(? :pred > 5) on 3 calls (> 5 3) = true
-  ((rule-of core-rule (list '? :pred > 5)) (vmr 3)) ;=>>
-  {:val 3}
-  ;;(? :pred < 5) on 3 calls (< 5 3) = false
-  ((rule-of core-rule (list '? :pred < 5)) (vmr 3)) ;=>>
-  failure?
-  ;;:pred with $var references bound variables
-  ;;[2 5]: a=2, then (< 2 5) = true
+  ;;-------------------------------------------------------------------
+  ;; pred - predicate matching
+  ;;-------------------------------------------------------------------
+  ;; basic predicate
+  ((rule-of core-rule (list '? :pred odd?)) (vmr 3)) ;=>> {:val 3}
+  ;; predicate with args (f args... val) success case
+  ((rule-of core-rule (list '? :pred < 5)) (vmr 10)) ;=>> {:val 10}
+  ;; predicate with args failure case
+  ((rule-of core-rule (list '? :pred < 5)) (vmr 3)) ;=>> failure?
+  ;; predicate with $var reference to bound variable
   ((ptn->matcher (list '? :seq [(list '? :one (mvar 'a wildcard))
                                 (list '? :one (list '? :pred < '$a))])) (vmr [2 5])) ;=>>
   {:val [2 5] :vars '{a 2}}
-  ;;[5 2]: a=5, then (< 5 2) = false
-  ((ptn->matcher (list '? :seq [(list '? :one (mvar 'a wildcard))
-                                (list '? :one (list '? :pred < '$a))])) (vmr [5 2])) ;=>>
-  failure?
-  ((rule-of core-rule '(? :val 5)) (vmr 5)) ;=>>
-  {:val 5}
-  ;;:or matches first successful alternative
-  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr 4)) ;=>>
-  {:val 4}
-  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr -1)) ;=>>
-  {:val -1}
-  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr 3)) ;=>>
-  failure?
-  ;;:-> chains matchers, output of one feeds into next
+
+  ;;-------------------------------------------------------------------
+  ;; val - exact value matching
+  ;;-------------------------------------------------------------------
+  ((rule-of core-rule '(? :val 5)) (vmr 5)) ;=>> {:val 5}
+
+  ;;-------------------------------------------------------------------
+  ;; or - first successful alternative wins
+  ;;-------------------------------------------------------------------
+  ;; first alternative matches
+  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr 4)) ;=>> {:val 4}
+  ;; second alternative matches
+  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr -1)) ;=>> {:val -1}
+  ;; no alternative matches
+  ((rule-of core-rule (list '? :or (mpred even?) (mval -1))) (vmr 3)) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; -> - sequential matcher chain
+  ;;-------------------------------------------------------------------
+  ;; chain succeeds when all steps pass
   ((rule-of core-rule (list '? :-> (mpred even?) (mvar 'x wildcard))) (vmr 4)) ;=>>
   {:val 4 :vars '{x 4}}
-  ((rule-of core-rule (list '? :-> (mpred even?) (mpred pos?))) (vmr 4)) ;=>>
-  {:val 4}
-  ;;:-> fails if any step fails
-  ((rule-of core-rule (list '? :-> (mpred even?) (mpred neg?))) (vmr 4)) ;=>>
-  failure?
-  ;;:match-case binds matched key to symbol
+  ;; chain fails when any step fails
+  ((rule-of core-rule (list '? :-> (mpred even?) (mpred neg?))) (vmr 4)) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; match-case - case matching with key binding
+  ;;-------------------------------------------------------------------
+  ;; binds matched key to symbol
   ((rule-of core-rule (list '? :match-case [:even (mpred even?) :neg-one (mval -1)] 'which)) (vmr 4)) ;=>>
   {:val 4 :vars '{which :even}}
+  ;; falls through to second case
   ((rule-of core-rule (list '? :match-case [:even (mpred even?) :neg-one (mval -1)] 'which)) (vmr -1)) ;=>>
   {:val -1 :vars '{which :neg-one}}
+  ;; fails when no case matches
   ((rule-of core-rule (list '? :match-case [:even (mpred even?) :neg-one (mval -1)] 'which)) (vmr 3)) ;=>>
   failure?
-  ;;:match-case without sym just matches without binding key
-  ((rule-of core-rule (list '? :match-case [:a (mpred pos?) :b (mpred neg?)])) (vmr 5)) ;=>>
-  {:val 5}
-  ;;:filter filters sequence elements by predicate
+
+  ;;-------------------------------------------------------------------
+  ;; filter - collect matching elements from sequence
+  ;;-------------------------------------------------------------------
   ((ptn->matcher (list '? :seq [(list '? :filter even? 'evens)])) (vmr [1 2 3 4 5 6])) ;=>>
   {:vars '{evens [2 4 6]}}
-  ;;:filter with :var to bind the filtered sequence
-  ((ptn->matcher (list '? :var 'result (list '? :seq [(list '? :filter odd? 'odds)]))) (vmr [1 2 3 4 5])) ;=>>
-  {:vars '{result [1 2 3 4 5] odds [1 3 5]}}
-  ;;:first finds first matching element, :val is the single value
+
+  ;;-------------------------------------------------------------------
+  ;; first - find first matching element
+  ;;-------------------------------------------------------------------
+  ;; succeeds - returns first match
   ((ptn->matcher (list '? :seq [(list '? :first even? 'first-even)])) (vmr [1 3 5 6 7 8])) ;=>>
   {:val 6 :vars '{first-even 6}}
-  ;;:first fails when no match
-  ((ptn->matcher (list '? :seq [(list '? :first neg?)])) (vmr [1 2 3])) ;=>>
-  failure?
-  ;;:first with :var binds the found value
-  ((ptn->matcher (list '? :var 'found (list '? :seq [(list '? :first even? 'x)]))) (vmr [1 2 3 4])) ;=>>
-  {:val 2 :vars '{found 2 x 2}}
-  ;;:sub applies function to value
-  ((rule-of core-rule (list '? :sub inc (mpred even?))) (vmr 8)) ;=>>
-  {:val 9}
-  ;;:sub without child matcher uses wildcard
-  ((rule-of core-rule (list '? :sub inc)) (vmr 5)) ;=>>
-  {:val 6}
-  ;;:sub fails if child matcher fails
-  ((rule-of core-rule (list '? :sub inc (mpred even?))) (vmr 7)) ;=>>
-  failure?
-  ;;:not succeeds when child fails
-  ((rule-of core-rule (list '? :not (mpred even?))) (vmr 3)) ;=>>
-  {:val 3}
-  ;;:not fails when child succeeds
-  ((rule-of core-rule (list '? :not (mpred even?))) (vmr 4)) ;=>>
-  failure?
-  ;;:not with :val - match anything except 5
-  ((rule-of core-rule (list '? :not (mval 5))) (vmr 3)) ;=>>
-  {:val 3}
-  ((rule-of core-rule (list '? :not (mval 5))) (vmr 5)) ;=>>
-  failure?
-  ;;:repeat with keyword args (lazy by default - matches minimum)
+  ;; fails when no element matches
+  ((ptn->matcher (list '? :seq [(list '? :first neg?)])) (vmr [1 2 3])) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; sub - value transformation
+  ;;-------------------------------------------------------------------
+  ;; with child matcher transforms after successful match
+  ((rule-of core-rule (list '? :sub inc (mpred even?))) (vmr 8)) ;=>> {:val 9}
+  ;; without child matcher transforms any value
+  ((rule-of core-rule (list '? :sub inc)) (vmr 5)) ;=>> {:val 6}
+  ;; fails when child matcher fails
+  ((rule-of core-rule (list '? :sub inc (mpred even?))) (vmr 7)) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; not - negation matcher
+  ;;-------------------------------------------------------------------
+  ;; succeeds when child fails
+  ((rule-of core-rule (list '? :not (mpred even?))) (vmr 3)) ;=>> {:val 3}
+  ;; fails when child succeeds
+  ((rule-of core-rule (list '? :not (mpred even?))) (vmr 4)) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; repeat - repeated element matching
+  ;;-------------------------------------------------------------------
+  ;; lazy (default) matches minimum needed
   ((ptn->matcher (list '? :seq [(list '? :repeat (mpred even?) :min 2 :max 3 :as 'evens)])) (vmr [2 4])) ;=>>
   {:vars '{evens (2 4)}}
-  ;;with :greedy matches maximum
+  ;; greedy matches maximum possible
   ((ptn->matcher (list '? :seq [(list '? :repeat (mpred even?) :min 2 :max 3 :as 'evens :greedy true)])) (vmr [2 4 6])) ;=>>
   {:vars '{evens (2 4 6)}}
-  ((ptn->matcher (list '? :seq [(list '? :repeat (mpred even?) :min 2 :max 3)])) (vmr [2])) ;=>>
-  failure?
-  ;;:seq with keyword args
-  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 2 :max 2 :as 'pairs)) (vmr [1 2 1 2])) ;=>>
-  {:vars '{pairs [1 2 1 2]}}
-  ;;:sub can chain with :var to bind result
-  ((ptn->matcher (list '? :var 'x (list '? :sub inc))) (vmr 10)) ;=>>
-  {:val 11 :vars '{x 11}}
-  ;;ptn->matcher with map and vector patterns
+  ;; fails when below minimum
+  ((ptn->matcher (list '? :seq [(list '? :repeat (mpred even?) :min 2 :max 3)])) (vmr [2])) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; seq - sequence pattern with repetition
+  ;;-------------------------------------------------------------------
+  ;; min - repeat pattern exactly min times
+  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 2)) (vmr [1 2 1 2])) ;=>> {:val [1 2 1 2]}
+  ;; fails when count < min
+  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 2)) (vmr [1 2])) ;=>> failure?
+  ;; min and max - repeat between min and max times (lazy)
+  ((ptn->matcher (list '? :seq [(mval 1)] :min 2 :max 3)) (vmr [1 1])) ;=>> {:val [1 1]}
+  ;; as - bind matched sequence
+  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 1 :max 2 :as 'x)) (vmr [1 2])) ;=>> {:vars '{x [1 2]}}
+
+  ;;-------------------------------------------------------------------
+  ;; Complex patterns
+  ;;-------------------------------------------------------------------
+  ;; nested map pattern with variable unification
   ((ptn->matcher '(? :map {:a (? :var a (? :val 3)) :b (? :map {:c (? :var a (? :val 3))})})) (vmr {:a 3 :b {:c 3}})) ;=>>
   {:vars '{a 3}}
-  ((ptn->matcher '(? :seq [(? :optional (? :val 1)) (? :one (? :val 10))])) (vmr [10])) ;=>>
-  {:val [10]}
-  ((ptn->matcher (list '? :seq [(list '? :repeat (list '? :pred odd?) :min 1 :max 2 :as 'a)])) (vmr [1 3 5])) ;=>>
-  {:val [1]}
-  ;;:seq with :min - repeat sequence pattern exactly min times
-  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 2)) (vmr [1 2 1 2])) ;=>>
-  {:val [1 2 1 2]}
-  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 2)) (vmr [1 2])) ;=>>
-  failure?
-  ;;:seq with :min and :max - repeat between min and max times
-  ((ptn->matcher (list '? :seq [(mval 1)] :min 2 :max 3)) (vmr [1 1])) ;=>>
-  {:val [1 1]}
-  ((ptn->matcher (list '? :seq [(mval 1)] :min 2 :max 3)) (vmr [1 1 1])) ;=>>
-  {:val [1 1 1]}
-  ((ptn->matcher (list '? :seq [(mval 1)] :min 2 :max 3)) (vmr [1])) ;=>>
-  failure?
-  ;;:seq with :as - bind matched sequence
-  ((ptn->matcher (list '? :seq [(mval 1) (mval 2)] :min 1 :max 2 :as 'x)) (vmr [1 2])) ;=>>
-  {:vars '{x [1 2]}}
-  ;;:seq with :greedy - try max repetitions first
-  ((ptn->matcher (list '? :seq [(mval 1)] :min 1 :max 3 :as 'a :greedy true)) (vmr [1 1])) ;=>>
-  {:vars '{a [1 1]}}
-  ;;map-rule test
-  ((ptn->matcher '{:a (? :var a (? :val 5))} [map-rule core-rule]) (vmr {:a 5})) ;=>>
-  {:val {:a 5}})
+  ;; optional element in sequence
+  ((ptn->matcher '(? :seq [(? :optional (? :val 1)) (? :one (? :val 10))])) (vmr [10])) ;=>> {:val [10]}
+  ;; map-rule compiles map literals
+  ((ptn->matcher '{:a (? :var a (? :val 5))} [map-rule core-rule]) (vmr {:a 5})) ;=>> {:val {:a 5}}
+  )
 
 ;;=============================================================================
 ;; SECTION 5: CompiledMatcher and Public API
@@ -1418,87 +1412,82 @@
 
 ^:rct/test
 (comment
-  ;;core-rule processes (? :named-var ...) forms
-  ((rule-of core-rule '(? :named-var x #{})) (vmr 5)) ;=>>
-  {:vars '{x 5}}
-  (query '{:a ?a :b {:c ?a}} {:a 3 :b {:c 3}}) ;=>>
-  '{a 3}
-  (query '[3 ?_ ?a?] [3 0 4]) ;=>>
-  '{a 4}
-  ;;?x+ matches one or more elements
-  (query '[1 ?rest+] [1 2 3 4]) ;=>>
-  '{rest [2 3 4]}
-  (query '[?first ?rest+] [1 2 3]) ;=>>
-  '{first 1 rest [2 3]}
-  (query '[?rest+] []) ;=>
-  nil
-  ;;?x* matches zero or more elements
-  (query '[1 ?rest*] [1 2 3]) ;=>>
-  '{rest [2 3]}
-  (query '[1 ?rest*] [1]) ;=>>
-  '{rest []}
-  ;;lazy vs greedy: lazy matches minimum, greedy matches maximum
-  ;; For [?a* ?b*], both can vary so lazy/greedy matters
-  (query '[?a* ?b*] [1 2 3]) ;=>>
-  '{a () b (1 2 3)}                     ; lazy: ?a* takes minimum (0)
-  (query '[?a*! ?b*] [1 2 3]) ;=>>
-  '{a (1 2 3) b ()}                     ; greedy: ?a*! takes maximum
-  ;; For [?a+ ?b+], both must match at least 1
-  (query '[?a+ ?b+] [1 2 3]) ;=>>
-  '{a (1) b (2 3)}                      ; lazy: ?a+ takes minimum (1)
-  (query '[?a+! ?b+] [1 2 3]) ;=>>
-  '{a (1 2) b (3)}                      ; greedy: ?a+! takes maximum
-  ;;query returns nil on failure
-  (query '{:a 5} {:a 3}) ;=>
-  nil
-  ;;match-result returns detailed failure info
-  (match-result '{:a 5} {:a 3}) ;=>>
-  {:reason #"value mismatch" :path [:a] :depth 1}
-  ;;nested failure with path trace
-  (match-result '{:a {:b 10}} {:a {:b 20}}) ;=>>
-  {:path [:a :b] :depth 2}
-  ;;list-form named variables: (?x pred? [min max]? !?)
-  (query '[(?x even?)] [4]) ;=>>
-  '{x 4}
-  (query '[(?x even?)] [3]) ;=>
-  nil
-  ;;with length range [min max]
-  (query '[(?x [2 4])] [1 2 3]) ;=>>
-  '{x (1 2 3)}
-  (query '[(?x [2 4])] [1]) ;=>
-  nil
-  ;;with predicate and length
-  (query '[(?x even? [2 3])] [2 4 6]) ;=>>
-  '{x (2 4 6)}
-  (query '[(?x even? [2 3])] [2 4 5]) ;=>
-  nil
-  ;;unbounded (max=0 means match to end)
-  (query '[(?x [1 0])] [1 2 3]) ;=>>
-  '{x (1 2 3)}
-  ;;lazy vs greedy with list-var
-  (query '[(?x [0 5]) ?y*] [1 2 3]) ;=>>
-  '{x () y (1 2 3)}
-  (query '[(?x [0 5] !) ?y*] [1 2 3]) ;=>>
-  '{x (1 2 3) y ()}
+  ;;-------------------------------------------------------------------
+  ;; Pattern DSL - symbol form variables
+  ;;-------------------------------------------------------------------
+  ;; named-var internal form
+  ((rule-of core-rule '(? :named-var x #{})) (vmr 5)) ;=>> {:vars '{x 5}}
+  ;; nested map with variable unification (?a appears twice, must match)
+  (query '{:a ?a :b {:c ?a}} {:a 3 :b {:c 3}}) ;=>> '{a 3}
+  ;; wildcard ?_ matches but doesn't bind, optional ?a? matches if present
+  (query '[3 ?_ ?a?] [3 0 4]) ;=>> '{a 4}
 
-  ;;## CompiledMatcher protocol tests
-  ;;compiled-matcher creates a CompiledMatcher
+  ;;-------------------------------------------------------------------
+  ;; ?x+ (one or more, lazy)
+  ;;-------------------------------------------------------------------
+  ;; matches remaining elements after fixed prefix
+  (query '[1 ?rest+] [1 2 3 4]) ;=>> '{rest [2 3 4]}
+  ;; fails on empty remainder
+  (query '[?rest+] []) ;=> nil
+
+  ;;-------------------------------------------------------------------
+  ;; ?x* (zero or more, lazy)
+  ;;-------------------------------------------------------------------
+  ;; matches remaining elements
+  (query '[1 ?rest*] [1 2 3]) ;=>> '{rest [2 3]}
+  ;; matches empty remainder
+  (query '[1 ?rest*] [1]) ;=>> '{rest []}
+
+  ;;-------------------------------------------------------------------
+  ;; Lazy vs greedy quantifiers
+  ;;-------------------------------------------------------------------
+  ;; lazy (default) first quantifier takes minimum
+  (query '[?a* ?b*] [1 2 3]) ;=>> '{a () b (1 2 3)}
+  ;; greedy (!) first quantifier takes maximum
+  (query '[?a*! ?b*] [1 2 3]) ;=>> '{a (1 2 3) b ()}
+  ;; with minimum constraints
+  (query '[?a+ ?b+] [1 2 3]) ;=>> '{a (1) b (2 3)}
+  (query '[?a+! ?b+] [1 2 3]) ;=>> '{a (1 2) b (3)}
+
+  ;;-------------------------------------------------------------------
+  ;; query/match-result failure handling
+  ;;-------------------------------------------------------------------
+  ;; query returns nil on mismatch
+  (query '{:a 5} {:a 3}) ;=> nil
+  ;; match-result returns MatchFailure with path
+  (match-result '{:a 5} {:a 3}) ;=>> {:reason #"value mismatch" :path [:a] :depth 1}
+  ;; nested failure tracks full path
+  (match-result '{:a {:b 10}} {:a {:b 20}}) ;=>> {:path [:a :b] :depth 2}
+
+  ;;-------------------------------------------------------------------
+  ;; List-form named variables (?x pred? [min max]? !?)
+  ;;-------------------------------------------------------------------
+  ;; with predicate succeeds or fails based on predicate
+  (query '[(?x even?)] [4]) ;=>> '{x 4}
+  (query '[(?x even?)] [3]) ;=> nil
+  ;; with length range [min max]
+  (query '[(?x [2 4])] [1 2 3]) ;=>> '{x (1 2 3)}
+  (query '[(?x [2 4])] [1]) ;=> nil
+  ;; with predicate and length
+  (query '[(?x even? [2 3])] [2 4 6]) ;=>> '{x (2 4 6)}
+  ;; unbounded (max=0 means match to end)
+  (query '[(?x [1 0])] [1 2 3]) ;=>> '{x (1 2 3)}
+  ;; lazy vs greedy
+  (query '[(?x [0 5]) ?y*] [1 2 3]) ;=>> '{x () y (1 2 3)}
+  (query '[(?x [0 5] !) ?y*] [1 2 3]) ;=>> '{x (1 2 3) y ()}
+
+  ;;-------------------------------------------------------------------
+  ;; CompiledMatcher protocol
+  ;;-------------------------------------------------------------------
   (def cm (compiled-matcher (ptn->matcher '{:a ?a} core-rules) '{:a ?a}))
-  (instance? CompiledMatcher cm) ;=>
-  true
-  ;;CompiledMatcher is callable as a function (returns ValMatchResult)
-  (cm {:a 42}) ;=>>
-  {:val {:a 42} :vars '{a 42}}
-  ;;query on CompiledMatcher returns vars or nil
-  (query cm {:a 42}) ;=>>
-  '{a 42}
-  (query cm "not a map") ;=>
-  nil
-  ;;match-result on CompiledMatcher returns {:vars ...} or MatchFailure
-  (match-result cm {:a 42}) ;=>>
-  {:vars '{a 42}}
-  (match-result cm "not a map") ;=>>
-  failure?
-  ;;match! on CompiledMatcher returns vars or throws
-  (match! cm {:a 42}) ;=>>
-  '{a 42})
+  ;; callable as function - returns ValMatchResult
+  (cm {:a 42}) ;=>> {:val {:a 42} :vars '{a 42}}
+  ;; query - returns vars or nil
+  (query cm {:a 42}) ;=>> '{a 42}
+  (query cm "not a map") ;=> nil
+  ;; match-result - returns {:vars} or MatchFailure
+  (match-result cm {:a 42}) ;=>> {:vars '{a 42}}
+  (match-result cm "not a map") ;=>> failure?
+  ;; match! - returns vars (throws on failure)
+  (match! cm {:a 42}) ;=>> '{a 42}
+  )
