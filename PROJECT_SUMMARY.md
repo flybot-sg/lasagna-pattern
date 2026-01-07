@@ -65,6 +65,8 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 | `mzone` | Single element in sequence |
 | `mzoption` | Optional element matching |
 | `mzrepeat` | Repeated element matching |
+| `mzfilter` | Filter elements by predicate |
+| `mzfirst` | Find first matching element |
 | `mor` | First-match-wins OR |
 | `mnor` | Named OR with key binding |
 | `mvar` | Variable binding |
@@ -86,7 +88,6 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 ?x*     ; zero or more (lazy - matches minimum)
 ?x+!    ; one or more (greedy - matches maximum)
 ?x*!    ; zero or more (greedy - matches maximum)
-??x     ; sequence binding
 ?_      ; wildcard (no binding)
 
 ;; Variable bindings (list form) - more control
@@ -156,14 +157,27 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 
 | Type | Syntax | Description |
 |------|--------|-------------|
-| `:pred` | `(? :pred <fn>)` | Match if predicate returns truthy |
+| `:pred` | `(? :pred <fn> [<args>...])` | Match if (fn args... val) is truthy |
 | `:val` | `(? :val <value>)` | Match exact value |
 | `:map` | `(? :map <map>)` | Match map structure |
-| `:seq` | `(? :seq [<matchers>...])` | Match sequence |
+| `:seq` | `(? :seq [<matchers>...] [:min <n>] [:max <n>] [:as <sym>] [:greedy])` | Match sequence (optionally repeated) |
 | `:var` | `(? :var <sym> <matcher>)` | Bind match to variable |
-| `:1` | `(? :1 <matcher>)` | Match single element in seq |
-| `:?` | `(? :? <matcher>)` | Optional element in seq |
-| `:-` | `(? :- <matcher> <len> [<max-len>] [<sym>])` | Repeat matcher |
+| `:one` | `(? :one <matcher>)` | Match single element in seq |
+| `:optional` | `(? :optional <matcher>)` | Optional element in seq |
+| `:repeat` | `(? :repeat <matcher> :min <n> [:max <n>] [:as <sym>] [:greedy])` | Repeat matcher |
+| `:or` | `(? :or <matcher>...)` | Match first successful alternative |
+| `:not` | `(? :not <matcher>)` | Succeed if child matcher fails |
+| `:->` | `(? :-> <matcher>...)` | Chain matchers sequentially |
+| `:match-case` | `(? :match-case [<key> <matcher>...] [<sym>])` | Match first case, bind key to sym |
+| `:filter` | `(? :filter <pred> [<sym>])` | Filter sequence elements by predicate |
+| `:first` | `(? :first <pred> [<sym>])` | Find first element matching predicate |
+| `:sub` | `(? :sub <fn> [<matcher>])` | Apply fn to transform matched value |
+
+**Variable References in Args:** Use `$var` syntax in `:pred` args to reference bound variables:
+```clojure
+;; (< value-of-a current-val)
+(? :pred < $a)
+```
 
 **Note:** Invalid patterns throw descriptive exceptions:
 ```clojure
@@ -182,19 +196,19 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 ;; Public API (sg.flybot.pullable)
 (require '[sg.flybot.pullable :as p])
 
-(p/compile pattern)        → matcher-fn
-(p/compile pattern rules)  → matcher-fn
+;; Compile pattern once, reuse many times
+(def m (p/compile '{:name ?name :age ?age}))
 
-;; Usage
-(def m (p/compile '{:name ?name}))
-(m {:name "Alice"})  ;=> ValMatchResult with {:vars {name "Alice"}}
-(m {:name 123})      ;=> MatchFailure if pattern expects string
+;; Multiple ways to use compiled matcher:
+(m {:name "Alice" :age 30})        ;=> ValMatchResult (raw, for chaining)
+(p/query m {:name "Alice" :age 30}) ;=> {name "Alice" age 30} or nil
+(p/match-result m {:name "Alice"})  ;=> MatchFailure with diagnostics
+(p/match! m {:name "Alice" :age 30}) ;=> {name "Alice" age 30} or throws
 
-;; Core functions (sg.flybot.pullable.core)
-(query pattern data)              → vars-map | nil
-(query-with-failure pattern data) → {:vars ...} | MatchFailure
+;; Also works with raw patterns (compiles each time, for REPL):
+(p/query '{:x ?x} {:x 42})  ;=> {x 42}
 
-;; Low-level
+;; Low-level (sg.flybot.pullable.core)
 (ptn->matcher pattern) → matcher-fn
 (vmr value)            → ValMatchResult
 
