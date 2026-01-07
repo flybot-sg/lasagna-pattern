@@ -3,11 +3,6 @@
    [clojure.walk :as walk]
    [clojure.zip :as zip]))
 
-(def ^:dynamic *max-repeat-length*
-  "Maximum length for unbounded repeat patterns. Defaults to 1000.
-   Bind to a different value if needed for specific use cases."
-  1000)
-
 ;;# Matcher and matcher result
 ;;
 ;; A matcher is a function takes a match result (mr) and returns a mr, or nil if not matching.
@@ -339,18 +334,28 @@
   (let [children (expand-optionals sub-matchers)]
     (matcher :seq
              (fn [mr]
-               (if-not (seqable? (:val mr))
-                 (fail (str "expected seqable, got " (type (:val mr))) :seq (:val mr))
-                 (let [result (reduce
-                               (fn [zmr child]
-                                 (let [child-result (child zmr)]
-                                   (if (failure? child-result)
-                                     (reduced child-result)
-                                     child-result)))
-                               (vmr (-> mr :val seq zip/seq-zip zip/next) (:vars mr)) children)]
-                   (if (failure? result)
-                     result
-                     (vapply result zip/root))))))))
+               (let [original (:val mr)]
+                 (if-not (seqable? original)
+                   (fail (str "expected seqable, got " (type original)) :seq original)
+                   (let [result (reduce
+                                 (fn [zmr child]
+                                   (let [child-result (child zmr)]
+                                     (if (failure? child-result)
+                                       (reduced child-result)
+                                       child-result)))
+                                 (vmr (-> original seq zip/seq-zip zip/next) (:vars mr)) children)]
+                     (if (failure? result)
+                       result
+                       ;; Preserve original collection type using empty + into
+                       (vapply result (fn [z]
+                                        (let [matched (zip/root z)]
+                                          (if (and (coll? original) (seqable? matched) (not (string? matched)))
+                                            (let [e (empty original)]
+                                              ;; Lists need reverse since conj prepends
+                                              (if (list? e)
+                                                (apply list matched)
+                                                (into e matched)))
+                                            matched))))))))))))
 
 (def mterm
   "a matcher tests if it is the end of a seq"
@@ -393,20 +398,76 @@
   ((mseq [(mzsubseq (repeat 3 (mzone (mpred even?))) 'a) (mzone (mpred odd?)) mterm]) (vmr [2 4 6 7])) ;=>>
   {:vars {'a [2 4 6]}})
 
+(defn- try-match-elements
+  "Try to match elements from zipper using child matcher.
+   Returns [items final-zipper] where items are matched elements."
+  [child zmr max-len]
+  (loop [z (:val zmr)
+         items []]
+    (cond
+      ;; Hit max limit
+      (and max-len (>= (count items) max-len))
+      [items z]
+      ;; End of sequence
+      (zip/end? z)
+      [items z]
+      ;; Try to match
+      :else
+      (let [node (zip/node z)
+            result (child (assoc zmr :val node))]
+        (if (failure? result)
+          [items z]
+          (recur (zip/next z) (conj items (:val result))))))))
+
 (defn mzrepeat
   "a sub-matcher repeats the `child` matcher with minimum length of `min-len`,
   Options:
-   - `max-len` if it's length is flexable
-   - `greedy?` apply when `max-len` is specified
+   - `max-len` if it's length is flexible (nil means unbounded - uses actual sequence length)
+   - `greedy?` if true, match maximum first then backtrack; if false, match minimum first
    - `sym` if we bind the whole sub-seq to a symbol"
-  ([child min-len {:keys [max-len greedy? sym]}]
+  ([child min-len {:keys [max-len greedy? sym] :as opts}]
    (let [zc (mzone child)]
-     (if max-len
+     (if (contains? opts :max-len)
+       ;; Dynamic matching - determine length at runtime based on actual sequence
        (vary-meta zc assoc
-                  ::optional (fn [_ nxt]
-                               (->> (if greedy? (range max-len (dec min-len) -1) (range min-len (inc max-len)))
-                                    (map (fn [len] (mzsubseq (cond->> nxt (pos? len) (concat (repeat len zc))) sym len)))
-                                    (mor))))
+                  ::optional (fn [_c nxt]
+                               (let [nxt-matcher (mzsubseq nxt nil)]
+                                 (matcher :repeat
+                                          (fn [zmr]
+                                            ;; Collect all matching elements up to max-len (nil = unbounded)
+                                            ;; Use unwrapped 'child' directly (not mzone-wrapped _c)
+                                            (let [[items _final-z] (try-match-elements child zmr max-len)
+                                                  item-count (count items)]
+                                              (if (< item-count min-len)
+                                                ;; Not enough elements
+                                                (fail (str "need at least " min-len " elements, got " item-count) :repeat items)
+                                                ;; Try different lengths
+                                                (if greedy?
+                                                  ;; Greedy: start with all matched, backtrack
+                                                  (loop [len item-count]
+                                                    (if (< len min-len)
+                                                      (fail "no length worked" :repeat items)
+                                                      (let [;; Reconstruct zipper at position len
+                                                            start-z (:val zmr)
+                                                            z-at-len (nth (iterate zip/next start-z) len)
+                                                            attempt (nxt-matcher (assoc zmr :val z-at-len))]
+                                                        (if (failure? attempt)
+                                                          (recur (dec len))
+                                                          (cond-> (merge-vars zmr attempt)
+                                                            sym (-bind sym (take len items)))))))
+                                                  ;; Lazy: start with min, increment
+                                                  (loop [len min-len]
+                                                    (if (> len item-count)
+                                                      (fail "no length worked" :repeat items)
+                                                      (let [;; Reconstruct zipper at position len
+                                                            start-z (:val zmr)
+                                                            z-at-len (nth (iterate zip/next start-z) len)
+                                                            attempt (nxt-matcher (assoc zmr :val z-at-len))]
+                                                        (if (failure? attempt)
+                                                          (recur (inc len))
+                                                          (cond-> (merge-vars zmr attempt)
+                                                            sym (-bind sym (take len items)))))))))))))))
+       ;; Fixed length - match exactly min-len elements
        (mzsubseq (repeat min-len zc) sym)))))
 
 ^:rct/test
@@ -984,7 +1045,8 @@
                           (let [{:keys [sym pred min-len max-len greedy?]} (parse-list-var x)
                                 child (if pred (mpred pred) wildcard)]
                             (if min-len
-                              (let [effective-max (if (zero? max-len) *max-repeat-length* max-len)]
+                              ;; max-len of 0 means unbounded (nil)
+                              (let [effective-max (when-not (zero? max-len) max-len)]
                                 (mzrepeat child min-len {:max-len effective-max :greedy? greedy? :sym sym}))
                               (if sym (mvar sym child) child)))
                           ;; Named-var symbols like ?x, ?x+, ?x* -> (? :named-var sym flags)
@@ -1087,8 +1149,8 @@
   "Create a repeating matcher for + and * quantifiers.
    Default is lazy (match minimum), use greedy? true to match maximum."
   [sym min-len greedy?]
-  ;; Use mzrepeat with a large max-len for practical unbounded matching
-  (mzrepeat wildcard min-len {:max-len *max-repeat-length* :greedy? greedy? :sym sym}))
+  ;; Use mzrepeat with nil max-len for unbounded matching (uses actual sequence length)
+  (mzrepeat wildcard min-len {:max-len nil :greedy? greedy? :sym sym}))
 
 ;; named-var-rule removed - now handled via prewalk-fn using named-var->form
 ;; which generates (? :named-var sym flags) forms processed by core-rule

@@ -12,7 +12,8 @@
       "Bash(jj log:*)",
       "Bash(jj describe:*)",
       "Bash(jj show:*)",
-      "Bash(jj new:*)"
+      "Bash(jj new:*)",
+      "Bash(echo:*)"
     ]
   }
 }
