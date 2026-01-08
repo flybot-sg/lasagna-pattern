@@ -170,6 +170,40 @@
   "Returns true if x is a MatchFailure"
   core/failure?)
 
+(def substitute-vars
+  "Runtime substitution: walk `form` and replace ?x symbols with values from `vars` map.
+   Works with dynamic patterns at runtime.
+
+   Example:
+     (substitute-vars '(+ ?x ?x) {'x 5}) ;=> (+ 5 5)"
+  core/substitute-vars)
+
+(defn rewrite-rule
+  "Create a rewrite rule that matches `from-pattern` and produces `to-pattern`.
+
+   Returns a function that:
+   - Takes data and attempts to match against from-pattern
+   - On match, substitutes bound variables into to-pattern
+   - Returns the rewritten form, or nil if no match
+
+   Patterns use vector syntax for sequences (matches lists and vectors).
+
+   Examples:
+     ;; Double to add: (* 2 x) -> (+ x x)
+     (def double->add (rewrite-rule '[* 2 ?x] '(+ ?x ?x)))
+     (double->add '(* 2 5))     ;=> (+ 5 5)
+     (double->add '(* 2 y))     ;=> (+ y y)
+     (double->add '(+ 1 2))     ;=> nil
+
+     ;; Nested patterns work too
+     (def combine (rewrite-rule '[* 2 [* 3 ?x]] '(* 6 ?x)))
+     (combine '(* 2 (* 3 y)))   ;=> (* 6 y)"
+  [from-pattern to-pattern]
+  (let [matcher (compile from-pattern)]
+    (fn [data]
+      (when-let [vars (query matcher data)]
+        (substitute-vars to-pattern vars)))))
+
 ^:rct/test
 (comment
   ;;-------------------------------------------------------------------
@@ -212,4 +246,30 @@
   ((compile '[?a ?b]) [1 2]) ;=>> {:vars '{a 1 b 2}}
   ;; head + rest pattern
   (query '[?head ?tail+] [1 2 3]) ;=>> '{head 1 tail (2 3)}
+
+  ;;-------------------------------------------------------------------
+  ;; Nested patterns
+  ;;-------------------------------------------------------------------
+  ;; nested sequence matching
+  (query '[[?x]] '((inner))) ;=>> '{x inner}
+  (query '[?a [?b ?c]] '(x (y z))) ;=>> '{a x b y c z}
+  ;; deeply nested
+  (query '[?op [?nested ?x ?y] ?z] '(+ (* a b) c)) ;=>> '{op + nested * x a y b z c}
+
+  ;;-------------------------------------------------------------------
+  ;; rewrite-rule - pattern-based term rewriting
+  ;;-------------------------------------------------------------------
+  ;; basic rewrite: (* 2 x) -> (+ x x)
+  (def double->add (rewrite-rule '[* 2 ?x] '(+ ?x ?x)))
+  (double->add '(* 2 5)) ;=>> '(+ 5 5)
+  (double->add '(* 2 y)) ;=>> '(+ y y)
+  ;; no match returns nil
+  (double->add '(+ 1 2)) ;=> nil
+  ;; nested rewrite: (* 2 (* 3 x)) -> (* 6 x)
+  (def combine-mults (rewrite-rule '[* 2 [* 3 ?x]] '(* 6 ?x)))
+  (combine-mults '(* 2 (* 3 y))) ;=>> '(* 6 y)
+  (combine-mults '(* 2 (* 3 (+ a b)))) ;=>> '(* 6 (+ a b))
+  ;; rewrite with multiple variables
+  (def swap-args (rewrite-rule '[f ?a ?b] '(f ?b ?a)))
+  (swap-args '(f 1 2)) ;=>> '(f 2 1)
   )

@@ -288,6 +288,17 @@
 ;;use clojure.zip's zipper as the `:val` of the mr, the convention is `zmr`,
 ;;The name convention for this kind of sub-matchers starting from `mz`, rather than `m`
 
+(defn zip-advance
+  "Advance zipper to next sibling. Returns end-marker if no more siblings.
+   Unlike zip/next, this does NOT descend into nested sequences.
+   The end marker preserves the tree root for later reconstruction."
+  [z]
+  (if-let [right (zip/right z)]
+    right
+    ;; No more siblings - create end marker that preserves the tree
+    ;; Store the root in metadata so zip/root equivalent can be retrieved
+    (with-meta [nil :end] {::zip-root (zip/root z)})))
+
 (defn mzone
   "A sub-matcher means a single value matches by the `child` matcher"
   [child]
@@ -301,15 +312,15 @@
                    (if (failure? result)
                      result
                      (-> zmr
-                         (vapply (fn [z] (let [nv (:val result)] (-> (if (= node nv) z (zip/replace z nv)) zip/next))))
+                         (vapply (fn [z] (let [nv (:val result)] (-> (if (= node nv) z (zip/replace z nv)) zip-advance))))
                          (merge-vars result)))))))))
 
 ^:rct/test
 (comment
   ;; mzone matches single element in zipper sequence
-  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip [3 4]) zip/next))) ;=>> {:vars {'a 3}}
+  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip [3 4]) zip/down))) ;=>> {:vars {'a 3}}
   ;; mzone fails at end of sequence (no element to match)
-  ((mzone (mvar 'a (mval 3))) (vmr (-> (zip/vector-zip []) zip/next))) ;=>> failure?
+  ((mzone (mvar 'a (mval 3))) (vmr [nil :end])) ;=>> failure?
   )
 
 (defn branching
@@ -386,6 +397,14 @@
         ;; Head is not optional - keep it and continue
         (cons head expanded-tail)))))
 
+(defn- zip-root*
+  "Get the root of a zipper, handling our custom end-marker.
+   For end-markers, retrieves root from metadata."
+  [z]
+  (if-let [root (::zip-root (meta z))]
+    root
+    (zip/root z)))
+
 (defn mseq
   "a matcher matches a sequence by its `sub-matchers`"
   [sub-matchers]
@@ -395,18 +414,23 @@
                (let [original (:val mr)]
                  (if-not (seqable? original)
                    (fail (str "expected seqable, got " (type original)) :seq original)
-                   (let [result (reduce
+                   ;; Use zip/down to enter sequence. For empty seqs, down returns nil,
+                   ;; so we use end-marker with original preserved in metadata.
+                   (let [z (zip/seq-zip (seq original))
+                         initial-z (or (zip/down z)
+                                       (with-meta [nil :end] {::zip-root (seq original)}))
+                         result (reduce
                                  (fn [zmr child]
                                    (let [child-result (child zmr)]
                                      (if (failure? child-result)
                                        (reduced child-result)
                                        child-result)))
-                                 (vmr (-> original seq zip/seq-zip zip/next) (:vars mr)) children)]
+                                 (vmr initial-z (:vars mr)) children)]
                      (if (failure? result)
                        result
                        ;; Preserve original collection type using empty + into
                        (vapply result (fn [z]
-                                        (let [matched (zip/root z)]
+                                        (let [matched (zip-root* z)]
                                           (if (and (coll? original) (seqable? matched) (not (string? matched)))
                                             (let [e (empty original)]
                                               ;; Lists need reverse since conj prepends
@@ -429,7 +453,7 @@
   ;; mseq fails on non-seqable input
   ((mseq []) (vmr 3)) ;=>> failure?
   ;; mterm succeeds at end, fails when elements remain
-  (map mterm [(vmr (-> (zip/vector-zip []) zip/next)) (vmr (-> (zip/vector-zip [3]) zip/next))]) ;=>>
+  (map mterm [(vmr [nil :end]) (vmr (-> (zip/vector-zip [3]) zip/down))]) ;=>>
   [identity failure?]
   ;; mseq single element match with termination check
   (map (mseq [(mzone (mvar 'a (mpred even?))) mterm]) [(vmr [0]) (vmr [2 4]) (vmr [1])]) ;=>>
@@ -469,7 +493,7 @@
             result (child (assoc zmr :val node))]
         (if (failure? result)
           [items z]
-          (recur (zip/next z) (conj items (:val result))))))))
+          (recur (zip-advance z) (conj items (:val result))))))))
 
 (defn- try-lengths
   "Try matching at different lengths in order, returns first success or failure.
@@ -479,7 +503,7 @@
     (loop [[len & more] lengths]
       (if (nil? len)
         (fail "no length worked" :repeat items)
-        (let [z-at-len (nth (iterate zip/next start-z) len)
+        (let [z-at-len (nth (iterate zip-advance start-z) len)
               attempt (nxt-matcher (assoc zmr :val z-at-len))]
           (if (failure? attempt)
             (recur more)
@@ -538,7 +562,7 @@
                  (cond-> (assoc zmr :val z)
                    sym (-bind sym filtered))
                  (let [node (zip/node z)]
-                   (recur (zip/next z)
+                   (recur (zip-advance z)
                           (if (pred node) (conj filtered node) filtered))))))))
 
 ^:rct/test
@@ -569,7 +593,7 @@
                      ;; [value :end] is a zipper at end position, zip/root returns (node loc) = value
                      (cond-> (assoc zmr :val [node :end])
                        sym (-bind sym node))
-                     (recur (zip/next z)))))))))
+                     (recur (zip-advance z)))))))))
 
 ^:rct/test
 (comment
@@ -596,7 +620,7 @@
                     (fail (str "need at least " min-len " elements, got " (count items)) :collect items))
                   (let [node (zip/node z)]
                     (if (pred node)
-                      (recur (zip/next z) (conj items node))
+                      (recur (zip-advance z) (conj items node))
                       (if (>= (count items) min-len)
                         (-bind (assoc zmr :val z) sym items)
                         (fail (str "element doesn't match: " (pr-str node)) :collect node))))))))))
@@ -721,6 +745,20 @@
        (let [~vars-sym ~'vars]
          ~(build-form actual-form vars-sym)))))
 
+(defn substitute-vars
+  "Runtime substitution: walk `form` and replace ?x symbols with values from `vars` map.
+   Unlike `substitute-form` (a macro), this works with dynamic patterns at runtime.
+
+   Example:
+     (substitute-vars '(+ ?x ?x) {'x 5}) ;=> (+ 5 5)"
+  [form vars]
+  (walk/postwalk
+   (fn [x]
+     (if-let [[sym _] (named-var? x)]
+       (get vars sym x)
+       x))
+   form))
+
 ^:rct/test
 (comment
   ;; substitute evaluates form with vars replaced
@@ -733,6 +771,11 @@
   ((substitute-form '(* 2 ?x)) {:vars {'x 5}}) ;=>> '(* 2 5)
   ((substitute-form '[?a ?b ?c]) {:vars {'a 1 'b 2 'c 3}}) ;=>> [1 2 3]
   ((substitute-form '{:sum ?x :product ?y}) {:vars {'x 10 'y 20}}) ;=>> {:sum 10 :product 20}
+  ;; substitute-vars (runtime) replaces vars without evaluating
+  (substitute-vars '(+ ?x ?x) {'x 5}) ;=>> '(+ 5 5)
+  (substitute-vars '{:a ?a :b ?b} {'a 1 'b 2}) ;=>> {:a 1 :b 2}
+  ;; substitute-vars leaves unbound vars as-is
+  (substitute-vars '(f ?x ?y) {'x 10}) ;=>> '(f 10 ?y)
   )
 
 (defn named-var->form

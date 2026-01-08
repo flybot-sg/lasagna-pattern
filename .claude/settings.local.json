@@ -15,7 +15,9 @@
       "Bash(jj new:*)",
       "Bash(echo:*)",
       "Bash(tree:*)",
-      "Bash(clj-kondo:*)"
+      "Bash(clj-kondo:*)",
+      "Bash(jj squash:*)",
+      "Bash(jj restore:*)"
     ]
   }
 }
