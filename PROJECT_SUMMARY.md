@@ -44,7 +44,7 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 
 ### Key Abstractions
 
-1. **Match Result (`ValMatchResult`)**: Holds `:val` (matched value) and `:vars` (variable bindings)
+1. **Match Result (`ValMatchResult`)**: Holds `:val` (matched value) and `:vars` (variable bindings, default `{}`)
 2. **Match Failure (`MatchFailure`)**: Diagnostic info on failed matches:
    - `:reason` - Human-readable failure message
    - `:matcher-type` - Keyword like `:pred`, `:map`, `:val`
@@ -53,6 +53,7 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
    - `:depth` - Tracks match progress (for "best failure" selection)
 3. **Matcher**: Function `(mr) → ValMatchResult | MatchFailure` that transforms/validates match results
 4. **Pattern**: Declarative DSL that compiles to matchers
+5. **IMatcher Protocol**: Provides `-query`, `-match-result`, `-match!` methods. Implemented by `CompiledMatcher` and extended to raw patterns (maps, vectors, lists)
 
 ### Matcher Primitives (in `sg.flybot.pullable.core`)
 
@@ -73,7 +74,11 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 | `msub` | Value substitution |
 | `mf` | Full match-result transformation |
 | `wildcard` | Match anything |
-| `substitute` | Macro: transform match result using pattern vars |
+| `substitute` | Macro: transform match result using pattern vars (evaluates result) |
+| `substitute-form` | Macro: substitute vars and return unevaluated form |
+| `substitute-vars` | Runtime var substitution (works with dynamic patterns) |
+| `mchain` | Chain matchers sequentially |
+| `mzcollect` | Collect matching elements into a binding |
 
 ### Pattern DSL Syntax
 
@@ -208,13 +213,22 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 ;; Also works with raw patterns (compiles each time, for REPL):
 (p/query '{:x ?x} {:x 42})  ;=> {x 42}
 
+;; Term rewriting (pattern-based transformation)
+(def double->add (p/rewrite-rule '[* 2 ?x] '(+ ?x ?x)))
+(double->add '(* 2 5))      ;=> (+ 5 5)
+(double->add '(+ 1 2))      ;=> nil (no match)
+
+;; Runtime variable substitution
+(p/substitute-vars '(+ ?x ?y) {'x 3 'y 5})  ;=> (+ 3 5)
+
 ;; Low-level (sg.flybot.pullable.core)
 (ptn->matcher pattern) → matcher-fn
-(vmr value)            → ValMatchResult
+(vmr value)            → ValMatchResult (with :vars defaulting to {})
+;; Note: Sequence matching preserves collection types (vectors stay vectors, lists stay lists)
 
-;; Transformation (substitute macro)
-((substitute '(+ ?x ?y)) {:vars {'x 3 'y 5}})  ;=> 8
-((substitute '{:sum (* 2 ?val)}) {:vars {'val 21}})  ;=> {:sum 42}
+;; Transformation macros
+((substitute '(+ ?x ?y)) {:vars {'x 3 'y 5}})  ;=> 8  (evaluates result)
+((substitute-form '(* 2 ?x)) {:vars {'x 5}})   ;=> (* 2 5)  (returns unevaluated form)
 ```
 
 ## Testing
@@ -262,5 +276,3 @@ Uses **Jujutsu (jj)**, not Git. Check status with `jj status`.
 |-----------|--------|---------|
 | `sg.flybot.pullable` | Implemented | Public API (`compile` function) |
 | `sg.flybot.pullable.core` | Implemented | Core engine, matchers, MatchFailure |
-| `sg.flybot.pullable.util` | Planned | Helpers |
-| `sg.flybot.pullable.core2` | Planned | Advanced features |

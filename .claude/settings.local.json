@@ -17,7 +17,11 @@
       "Bash(tree:*)",
       "Bash(clj-kondo:*)",
       "Bash(jj squash:*)",
-      "Bash(jj restore:*)"
+      "Bash(jj restore:*)",
+      "Bash(jj git remote add:*)",
+      "Bash(jj git remote:*)",
+      "Bash(jj git push:*)",
+      "Bash(jj bookmark:*)"
     ]
   }
 }
