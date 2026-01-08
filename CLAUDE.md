@@ -6,10 +6,17 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Always read `PROJECT_SUMMARY.md` first** when you need to understand the codebase architecture, available APIs, or implementation details. It contains:
 - Directory structure and namespace organization
-- Key abstractions (ValMatchResult, MatchFailure, Matcher, Pattern)
+- Key abstractions (ValMatchResult, MatchFailure, Matcher, Pattern, IMatcher)
 - Matcher primitives reference table
 - Pattern DSL syntax examples
 - Public API usage examples
+
+**Keep `PROJECT_SUMMARY.md` updated** when making changes that affect:
+- New public API functions (in `sg.flybot.pullable`)
+- New matcher primitives or macros (in `sg.flybot.pullable.core`)
+- Changes to key abstractions (protocols, records, core data structures)
+- New pattern syntax or DSL features
+- Significant behavioral changes (e.g., default values, collection type handling)
 
 ## Project Overview
 
