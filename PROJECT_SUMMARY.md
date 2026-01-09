@@ -156,12 +156,13 @@ Add `!` suffix for **greedy** matching - matches the maximum possible.
 
 ### List-form Named Variables
 
-For more control over matching, use the list form: `(?x pred? [min max]? !?)`
+For more control over matching, use the list form: `(?x pred? [min max]? !?)` or `(?x :update fn)`
 
 | Form | Description |
 |------|-------------|
 | `(?x)` | Single value, bind to x |
 | `(?x even?)` | Single value with predicate |
+| `(?x :update inc)` | Apply fn, bind result to x |
 | `(?x [2 4])` | 2-4 elements (lazy) |
 | `(?x [1 0])` | 1+ elements (max=0 means unbounded) |
 | `(?x even? [2 3])` | 2-3 elements, each must satisfy predicate |
@@ -171,6 +172,10 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 ;; Single value with predicate
 (query '[(?x even?)] [4])          ;=> {x 4}
 (query '[(?x even?)] [3])          ;=> nil
+
+;; Update and bind result
+(transform '{:a (?x :update inc)} {:a 5})
+;=> {:result {:a 6} :vars {x 6}}
 
 ;; Subsequence with length range
 (query '[(?x [2 4])] [1 2 3])      ;=> {x (1 2 3)}
@@ -184,11 +189,38 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 (query '[(?x [0 5] !) ?y*] [1 2 3]) ;=> {x (1 2 3) y ()}    ; greedy
 ```
 
+### Maps and Sets as Predicates
+
+Maps and sets can be used as predicates anywhere a predicate function is accepted:
+- **Sets** test membership: `(#{:a :b :c} val)` returns truthy if `val` is in the set
+- **Maps** test key lookup: `({:a 1 :b 2} val)` returns truthy if `val` is a key in the map
+
+```clojure
+;; Set as predicate in :pred matcher
+(query (list '? :pred #{:active :pending}) :active)  ;=> {}
+(query (list '? :pred #{:active :pending}) :other)   ;=> nil
+
+;; Map as predicate (key lookup)
+(query (list '? :pred {:a 1 :b 2}) :a)  ;=> {}
+(query (list '? :pred {:a 1 :b 2}) :c)  ;=> nil
+
+;; Set in map pattern - tests membership
+(query {:status #{:active :pending}} {:status :active})  ;=> {}
+(query {:status #{:active :pending}} {:status :closed})  ;=> nil
+
+;; Set in list-form variable
+(query '[(?x #{:a :b :c})] [:b])  ;=> {x :b}
+
+;; Set in :filter - collect matching elements
+(query (list '? :seq [(list '? :filter #{:a :b} 'matched)]) [:a :c :b :d])
+;=> {matched [:a :b]}
+```
+
 ### Pattern Types Reference
 
 | Type | Syntax | Description |
 |------|--------|-------------|
-| `:pred` | `(? :pred <fn> [<args>...])` | Match if (fn args... val) is truthy |
+| `:pred` | `(? :pred <pred> [<args>...])` | Match if (pred args... val) is truthy. Pred can be fn, map (key lookup), or set (membership) |
 | `:val` | `(? :val <value>)` | Match exact value |
 | `:map` | `(? :map <map>)` | Match map structure |
 | `:seq` | `(? :seq [<matchers>...] [:min <n>] [:max <n>] [:as <sym>] [:greedy])` | Match sequence (optionally repeated) |
@@ -200,9 +232,10 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 | `:not` | `(? :not <matcher>)` | Succeed if child matcher fails |
 | `:->` | `(? :-> <matcher>...)` | Chain matchers sequentially |
 | `:match-case` | `(? :match-case [<key> <matcher>...] [<sym>])` | Match first case, bind key to sym |
-| `:filter` | `(? :filter <pred> [<sym>])` | Filter sequence elements by predicate |
-| `:first` | `(? :first <pred> [<sym>])` | Find first element matching predicate |
-| `:sub` | `(? :sub <fn> [<matcher>])` | Apply fn to transform matched value |
+| `:filter` | `(? :filter <pred> [<sym>])` | Filter sequence elements by predicate (fn/map/set) |
+| `:first` | `(? :first <pred> [<sym>])` | Find first element matching predicate (fn/map/set) |
+| `:sub` | `(? :sub <ifn> [<matcher>])` | Apply ifn to transform matched value |
+| `:update` | `(? :update <fn>)` | Apply fn to value (use :var to bind) |
 | `:regex` | `(? :regex <pattern> [<sym>])` | Match string against regex, return groups |
 
 **Variable References in Args:** Use `$var` syntax in `:pred` args to reference bound variables:
@@ -237,6 +270,16 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 (p/match-result m {:name "Alice"})  ;=> MatchFailure with diagnostics
 (p/match! m {:name "Alice" :age 30}) ;=> {name "Alice" age 30} or throws
 
+;; Transform: returns both updated data and bindings
+(p/transform '{:count (? :update inc)} {:count 5 :name "test"})
+;=> {:result {:count 6 :name "test"} :vars {}}
+
+;; Shorthand: (?x :update fn) combines binding and update
+(p/transform '{:x (?n :update inc)} {:x 10})
+;=> {:result {:x 11} :vars {n 11}}
+
+(p/transform! '{:x (? :pred even?)} {:x 3})  ;=> throws on mismatch
+
 ;; Also works with raw patterns (compiles each time, for REPL):
 (p/query '{:x ?x} {:x 42})  ;=> {x 42}
 
@@ -247,6 +290,13 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 
 ;; Runtime variable substitution
 (p/substitute-vars '(+ ?x ?y) {'x 3 'y 5})  ;=> (+ 3 5)
+
+;; Pattern-based binding forms
+(p/plet [{:a ?a :b ?b} {:a 3 :b 4}] (* a b))  ;=> 12
+(p/plet [{:a ?a} {:b 3}] a)                    ;=> MatchFailure
+
+(def f (p/pfn {:a ?a :b ?b} (+ ?a ?b)))
+(f {:a 3 :b 4})  ;=> 7
 
 ;; Low-level (sg.flybot.pullable.core)
 (ptn->matcher pattern) → matcher-fn

@@ -1044,6 +1044,33 @@
           child (or (get vars 'child) wildcard)]
       (mchain [child (msub f)]))))
 
+(defmatcher :update "(? :update <fn>)"
+  (mzone (mvar 'f (mpred ifn?)))
+  (fn [vars]
+    (let [raw-f (get vars 'f)
+          ;; Resolve symbol to function if needed (CLJ only, CLJS uses raw value)
+          f #?(:clj (if (symbol? raw-f)
+                      (if-let [v (resolve raw-f)] @v raw-f)
+                      raw-f)
+               :cljs raw-f)]
+      (matcher :update
+               (fn [mr]
+                 (assoc mr :val (f (:val mr))))))))
+
+^:rct/test
+(comment
+  ;;-------------------------------------------------------------------
+  ;; :update matcher - applies function to value
+  ;;-------------------------------------------------------------------
+  ;; basic update: applies function to value
+  ((ptn->matcher '(? :update inc) core-rules) (vmr 5))
+  ;=>> {:val 6 :vars {}}
+
+  ;; compose with :var to bind result
+  ((ptn->matcher '(? :var n (? :update inc)) core-rules) (vmr 5))
+  ;=>> {:val 6 :vars {'n 6}}
+  )
+
 (defmatcher :regex "(? :regex <pattern> [<sym>])"
   (mzsubseq [(mzone (mvar 'pattern (mpred regex?)))
              (mzoption (mvar 'sym (mpred symbol?)))]
@@ -1131,10 +1158,11 @@
           (symbol base))))))
 
 (defn- parse-list-var
-  "Parse a list-form named variable like (?x even? [2 4] !).
+  "Parse a list-form named variable like (?x even? [2 4] !) or (?x :update inc).
    Returns nil if not a valid list-var, or a map with:
    - :sym - the variable name (symbol or nil for wildcard)
    - :pred - predicate function (or nil)
+   - :update-fn - update function (or nil) for transformations
    - :min-len - minimum length (nil for single value)
    - :max-len - maximum length (0 means unbounded)
    - :greedy? - true if greedy matching"
@@ -1145,7 +1173,7 @@
       (when (var-symbol? head)
         (let [sym (parse-var-name head)]
           (loop [args args
-                 result {:sym sym :pred nil :min-len nil :max-len nil :greedy? false}]
+                 result {:sym sym :pred nil :update-fn nil :min-len nil :max-len nil :greedy? false}]
             (if (empty? args)
               result
               (let [[arg & rest-args] args]
@@ -1153,6 +1181,20 @@
                   ;; Greedy flag
                   (= '! arg)
                   (recur rest-args (assoc result :greedy? true))
+
+                  ;; :update keyword followed by function
+                  (= :update arg)
+                  (if-let [[fn-arg & more-args] rest-args]
+                    (let [update-fn (cond
+                                      (symbol? fn-arg)
+                                      #?(:clj (some-> (resolve fn-arg) deref)
+                                         :cljs fn-arg)
+                                      (ifn? fn-arg) fn-arg
+                                      :else nil)]
+                      (if update-fn
+                        (recur more-args (assoc result :update-fn update-fn))
+                        nil))  ;; Invalid update function
+                    nil)  ;; :update without function
 
                   ;; Length vector [min max]
                   (and (vector? arg) (= 2 (count arg))
@@ -1202,8 +1244,12 @@
                           (regex-matcher x)
                           ;; Check list-var pattern first (before children transform)
                           (parse-list-var x)
-                          (let [{:keys [sym pred min-len max-len greedy?]} (parse-list-var x)
-                                child (if pred (mpred pred) wildcard)]
+                          (let [{:keys [sym pred update-fn min-len max-len greedy?]} (parse-list-var x)
+                                base-child (if pred (mpred pred) wildcard)
+                                ;; Apply update function if present
+                                child (if update-fn
+                                        (mchain [base-child (msub update-fn)])
+                                        base-child)]
                             (if min-len
                               ;; max-len of 0 means unbounded (nil)
                               (let [effective-max (when-not (zero? max-len) max-len)]
@@ -1490,6 +1536,11 @@
   "Create a CompiledMatcher from a matcher function and original pattern"
   [matcher-fn pattern]
   (->CompiledMatcher matcher-fn pattern))
+
+(defn compiled-matcher?
+  "Returns true if x is a CompiledMatcher"
+  [x]
+  (instance? CompiledMatcher x))
 
 ;; Extend IMatcher to support raw patterns (compiles on each call - for REPL convenience)
 
