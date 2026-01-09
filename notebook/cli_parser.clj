@@ -44,97 +44,29 @@
 ;; reserving the pattern library for more complex sequence matching.
 
 ;; Regex patterns for token classification
-(def ^:private long-opt-with-value-re
-  "Pattern for --name=value"
-  #"--([a-zA-Z][-a-zA-Z0-9]*)=(.+)")
 
-(def ^:private long-flag-re
-  "Pattern for --name (long flag/option without embedded value)"
-  #"--([a-zA-Z][-a-zA-Z0-9]*)")
+(defrecord ArgOption [short long coercer])
+(def opt ->ArgOption)
 
-(def ^:private short-opts-re
-  "Pattern for -abc (short options, possibly combined)"
-  #"-([a-zA-Z]+)")
+(def opt-schema
+  [(opt :v :verbose #(case % "true" true "false" false (throw (ex-info "wrong value" {}))))
+   (opt :m :mode keyword)
+   (opt :o :output identity)])
 
-(comment
-  ;; Test regex patterns directly
-  (re-matches long-opt-with-value-re "--output=file.txt")
-  ;=> ["--output=file.txt" "output" "file.txt"]
+(def token
+  '(? :match-case
+        [:long-value(? :-> #"--(\w+)=(\w+)" [_ option-name value])
+         :long (? :-> #"--(\w+)" [_ option-name])
+         :short (? :-> #"-(\w+)" [_ option-name])
+         :end-of-opts "--"
+         :positional _]
+        type))
 
-  (re-matches long-flag-re "--verbose")
-  ;=> ["--verbose" "verbose"]
+(def tokens
+  (p/compile (list '? :sub #(re-seq #"\S+" %) [token])))
 
-  (re-matches short-opts-re "-vdf")
-  ;=> ["-vdf" "vdf"]
+(tokens "--verbose")
 
-  (re-matches long-flag-re "positional")
-  ;=> nil
-  )
-
-;;=============================================================================
-;; PART 3: Token Classifier using :match-case
-;;=============================================================================
-;;
-;; Use :match-case to try multiple patterns in order and identify which matched.
-;; This is more declarative than nested or/when-let.
-
-;; Build the classifier using :or pattern (public API only)
-;; Each branch: (? :-> regex/matcher (? :sub transform-fn))
-;; The :or tries each in order, returns first successful match
-(def ^:private token-classifier
-  "Compiled matcher that classifies a token string into its type.
-   Uses :or to try patterns in order (most specific first)."
-  (p/compile
-   (list '? :or
-         ;; --name=value (most specific, must come first)
-         (list '? :-> long-opt-with-value-re
-               (list '? :sub (fn [[_ name value]]
-                               {:type :long-opt :name name :value value})))
-         ;; --name (long flag)
-         (list '? :-> long-flag-re
-               (list '? :sub (fn [[_ name]]
-                               {:type :long-flag :name name})))
-         ;; -abc (short options)
-         (list '? :-> short-opts-re
-               (list '? :sub (fn [[_ chars]]
-                               {:type :short-opts :chars chars})))
-         ;; -- (end of options)
-         (list '? :-> '(? :val "--")
-               (list '? :sub (constantly {:type :end-opts})))
-         ;; Everything else is positional
-         (list '? :sub (fn [s] {:type :positional :value s})))))
-
-(defn classify-token
-  "Classify a single CLI token into its type.
-   Order matters: more specific patterns (--name=val) before general (--name).
-
-   Returns a map with :type and relevant fields."
-  [token]
-  (:val (token-classifier token)))
-
-(comment
-  ;; Test the combined classifier
-  (classify-token "--output=file.txt")
-  ;=> {:type :long-opt, :name "output", :value "file.txt"}
-
-  (classify-token "--verbose")
-  ;=> {:type :long-flag, :name "verbose"}
-
-  (classify-token "-vdf")
-  ;=> {:type :short-opts, :chars "vdf"}
-
-  (classify-token "--")
-  ;=> {:type :end-opts}
-
-  (classify-token "input.txt")
-  ;=> {:type :positional, :value "input.txt"}
-
-  ;; Classify a sequence of tokens
-  (mapv classify-token ["-v" "--output=out.txt" "file.txt"])
-  ;=> [{:type :short-opts, :chars "v"}
-  ;    {:type :long-opt, :name "output", :value "out.txt"}
-  ;    {:type :positional, :value "file.txt"}]
-  )
 
 ;;=============================================================================
 ;; PART 4: Expanding Combined Short Options
@@ -162,9 +94,9 @@
   ;    {:type :short-opt, :char \f}]
 
   ;; Other token types pass through unchanged
-  (expand-short-opts {:type :long-flag :name "verbose"})
+  (expand-short-opts {:type :long-flag :name "verbose"}))
   ;=> [{:type :long-flag, :name "verbose"}]
-  )
+  
 
 ;;=============================================================================
 ;; PART 5: Schema Definition
@@ -185,8 +117,8 @@
 
    :flags
    #{\v \d \h                            ;; -v, -d, -h are flags
-     "verbose" "debug" "help" "dry-run"} ;; long forms
-   })
+     "verbose" "debug" "help" "dry-run"}}) ;; long forms
+   
 
 (defn flag?
   "Check if an option is a flag (no value expected)."
@@ -220,9 +152,9 @@
   (option-key example-schema {:type :short-opt :char \f})
   ;=> :file
 
-  (option-key example-schema {:type :long-opt :name "output" :value "x"})
+  (option-key example-schema {:type :long-opt :name "output" :value "x"}))
   ;=> :output
-  )
+  
 
 ;;=============================================================================
 ;; PART 6: Pattern-Based Token Stream Parsing
@@ -307,10 +239,10 @@
 
   ;; Matches :flag case (-v is a flag)
   (match-first test-patterns [{:type :short-opt :char \v}
-                              {:type :positional :value "file.txt"}])
+                              {:type :positional :value "file.txt"}]))
   ;=> [:flag {opt {:type :short-opt, :char \v},
   ;           rest ({:type :positional, :value "file.txt"})}]
-  )
+  
 
 ;;-----------------------------------------------------------------------------
 ;; Pattern handlers - each returns [updated-result remaining-tokens]
@@ -414,10 +346,10 @@
                   [{:type :short-opt :char \v}
                    {:type :short-opt :char \f}
                    {:type :positional :value "input.txt"}
-                   {:type :long-opt :name "output" :value "out.txt"}])
+                   {:type :long-opt :name "output" :value "out.txt"}]))
   ;=> {:flags #{:v}, :options {:file "input.txt", :output "out.txt"},
   ;    :positional [], :errors []}
-  )
+  
 
 ;;=============================================================================
 ;; PART 7: Full Parser - Putting It All Together
@@ -500,10 +432,10 @@
   ;=> {:flags #{}, :options {}, :positional ["one" "two" "three"], :errors []}
 
   ;; Unknown option produces error
-  (parse-cli example-schema ["--unknown-opt"])
+  (parse-cli example-schema ["--unknown-opt"]))
   ;=> {:flags #{}, :options {}, :positional [],
   ;    :errors [{:error :unknown-option, :token {:type :long-flag, :name "unknown-opt"}}]}
-  )
+  
 
 ;;=============================================================================
 ;; PART 8: Sequence Pattern Matching Power
@@ -587,9 +519,9 @@
   ;=> {first-even 6}
 
   (p/query (list '? :seq [(list '? :first string? 'first-str)])
-           [1 2 "found" 3 "other"])
+           [1 2 "found" 3 "other"]))
   ;=> {first-str "found"}
-  )
+  
 
 ;;=============================================================================
 ;; PART 9: Pattern-Based Token Consumer
@@ -612,10 +544,10 @@
   ;; Using patterns to match a flag followed by anything
   (p/query '[(flag #(= :long-flag (:type %))) ?rest*]
            [{:type :long-flag :name "verbose"}
-            {:type :positional :value "file.txt"}])
+            {:type :positional :value "file.txt"}]))
   ;=> {flag {:type :long-flag, :name "verbose"}
   ;    rest ({:type :positional, :value "file.txt"})}
-  )
+  
 
 ;;=============================================================================
 ;; PART 10: Key Takeaways & Suggested Library Enhancements
