@@ -30,7 +30,8 @@
 
    See `compile` docstring for full pattern syntax reference."
   (:refer-clojure :exclude [compile])
-  (:require [sg.flybot.pullable.core :as core]))
+  (:require [sg.flybot.pullable.core :as core]
+            [clojure.walk :as walk]))
 
 (defn compile
   "Compile a pattern into a CompiledMatcher.
@@ -73,7 +74,7 @@
 
    | Type     | Syntax                                          | Description                          |
    |----------|-------------------------------------------------|--------------------------------------|
-   | :pred    | (? :pred <fn> [<args>...])                      | Match if (fn args... val) is truthy  |
+   | :pred    | (? :pred <pred> [<args>...])                    | Match if (pred args... val) truthy; pred can be fn/map/set |
    | :val     | (? :val <value>)                                | Match exact value                    |
    | :map     | (? :map <map>)                                  | Match map structure                  |
    | :seq     | (? :seq [<m>...] [:min <n>] [:max <n>] [:as <sym>]) | Match sequence, optionally repeated |
@@ -85,9 +86,10 @@
    | :not     | (? :not <matcher>)                              | Succeed if child matcher fails       |
    | :->      | (? :-> <matcher>...)                            | Chain matchers sequentially          |
    | :match-case | (? :match-case [<key> <matcher>...] [<sym>]) | Match first case, bind key to sym    |
-   | :filter  | (? :filter <pred> [<sym>])                      | Filter sequence elements by pred     |
-   | :first   | (? :first <pred> [<sym>])                       | Find first element matching pred     |
-   | :sub     | (? :sub <fn> [<matcher>])                       | Apply fn to transform matched value  |
+   | :filter  | (? :filter <pred> [<sym>])                      | Filter elements by pred (fn/map/set) |
+   | :first   | (? :first <pred> [<sym>])                       | Find first matching pred (fn/map/set)|
+   | :sub     | (? :sub <ifn> [<matcher>])                      | Apply ifn to transform matched value |
+   | :update  | (? :update <fn>)                                | Apply fn to value (use :var to bind) |
 
    ### Variable References in Args
 
@@ -164,6 +166,69 @@
   [pattern data]
   (core/match! pattern data))
 
+(defn transform
+  "Match pattern against data and return {:result <updated-data> :vars <bindings>}.
+
+   Use this when the pattern contains (? :update ...) or (? :sub ...) matchers
+   and you want both the transformed data structure and the variable bindings.
+
+   Returns nil if the pattern doesn't match.
+
+   Pattern can be:
+   - A CompiledMatcher (from `compile`) - efficient, no recompilation
+   - A raw pattern (map, vector, list) - compiles on each call
+
+   Examples:
+     ;; Transform a single value
+     (transform '(? :update inc) 5)
+     ;=> {:result 6 :vars {}}
+
+     ;; Shorthand: (?x :update fn) combines binding and update
+     (transform '{:a (?x :update inc)} {:a 5})
+     ;=> {:result {:a 6} :vars {x 6}}
+
+     ;; Deep transformation in maps
+     (transform '{:count (? :update inc)} {:count 5 :name \"test\"})
+     ;=> {:result {:count 6 :name \"test\"} :vars {}}
+
+     ;; Multiple updates
+     (transform '{:a (? :update inc) :b {:c (? :update dec)}}
+                {:a 1 :b {:c 10}})
+     ;=> {:result {:a 2 :b {:c 9}} :vars {}}"
+  [pattern data]
+  (let [matcher (if (core/compiled-matcher? pattern)
+                  pattern
+                  (compile pattern))
+        result (matcher data)]
+    (when-not (core/failure? result)
+      {:result (:val result)
+       :vars (:vars result)})))
+
+(defn transform!
+  "Like transform but throws on match failure.
+
+   Examples:
+     (transform! '{:x (? :update inc)} {:x 1})
+     ;=> {:result {:x 2} :vars {}}
+
+     (transform! '{:x (? :pred even?)} {:x 3})
+     ;=> throws ExceptionInfo"
+  [pattern data]
+  (let [matcher (if (core/compiled-matcher? pattern)
+                  pattern
+                  (compile pattern))
+        result (matcher data)]
+    (if (core/failure? result)
+      (throw (ex-info (str "Transform failed: " (:reason result))
+                      {:failure result
+                       :pattern (if (core/compiled-matcher? pattern)
+                                  (:pattern pattern)
+                                  pattern)
+                       :data data
+                       :path (:path result)}))
+      {:result (:val result)
+       :vars (:vars result)})))
+
 ;; Re-export useful core functions
 
 (def failure?
@@ -203,6 +268,78 @@
     (fn [data]
       (when-let [vars (query matcher data)]
         (substitute-vars to-pattern vars)))))
+
+;;=============================================================================
+;; Pattern-based binding forms
+;;=============================================================================
+
+(defn- extract-var-symbols
+  "Extract variable symbols from a pattern.
+   Returns a set of symbols (without the ? prefix).
+   E.g., '{:a ?a :b [?b0 ?_]} -> #{a b0}"
+  [pattern]
+  (let [vars (atom #{})]
+    (walk/prewalk
+     (fn [x]
+       (when-let [[sym _] (core/named-var? x)]
+         (when sym  ;; skip wildcards (?_)
+           (swap! vars conj sym)))
+       x)
+     pattern)
+    @vars))
+
+(defmacro plet
+  "Pattern-based let binding.
+
+   Matches pattern against data, then evaluates body with bound variables.
+   Variables in pattern use ?x syntax, body uses plain symbols (x, not ?x).
+
+   Returns MatchFailure on match failure, otherwise the result of body.
+
+   Examples:
+     (plet [{:a ?a :b ?b} {:a 3 :b 4}] (* a b))
+     ;=> 12
+
+     (plet [{:a {:x ?x}} {:a {:x 5}}] x)
+     ;=> 5
+
+     (plet [{:a ?a} {:b 3}] a)
+     ;=> #MatchFailure{...}"
+  [[pattern data] & body]
+  (let [var-syms (extract-var-symbols pattern)]
+    `(let [result# ((compile '~pattern) ~data)]
+       (if (core/failure? result#)
+         result#
+         (let [~'vars## (:vars result#)
+               ~@(mapcat (fn [s] [s `(get ~'vars## '~s)]) var-syms)]
+           ~@body)))))
+
+(defmacro pfn
+  "Pattern-based anonymous function.
+
+   Creates a function that matches its argument against pattern,
+   then substitutes bound variables into body and evaluates it.
+
+   Both pattern and body use ?x syntax for variables.
+
+   Returns MatchFailure on match failure, otherwise the evaluated result.
+
+   Examples:
+     (def f (pfn {:a ?a :b ?b} (+ ?a ?b)))
+     (f {:a 3 :b 4})
+     ;=> 7
+
+     (def ex1 (pfn {:a ?a :b [?b0 ?_ ?b2]} [(* ?a ?b2) (+ ?a ?b0)]))
+     (ex1 {:a 3 :b [2 0 4]})
+     ;=> [12 5]"
+  [pattern body]
+  `(let [matcher# (compile '~pattern)
+         subst-fn# (core/substitute '~body)]
+     (fn [data#]
+       (let [result# (matcher# data#)]
+         (if (core/failure? result#)
+           result#
+           (subst-fn# result#))))))
 
 ^:rct/test
 (comment
@@ -272,4 +409,83 @@
   ;; rewrite with multiple variables
   (def swap-args (rewrite-rule '[f ?a ?b] '(f ?b ?a)))
   (swap-args '(f 1 2)) ;=>> '(f 2 1)
+
+  ;;-------------------------------------------------------------------
+  ;; transform - returns both updated data and bindings
+  ;;-------------------------------------------------------------------
+  ;; basic update: transforms a single value
+  (transform '(? :update inc) 5)
+  ;=>> {:result 6 :vars {}}
+
+  ;; compose with :var to bind result (verbose form)
+  (transform '(? :var n (? :update inc)) 5)
+  ;=>> {:result 6 :vars {'n 6}}
+
+  ;; shorthand: (?x :update fn) combines binding and update
+  (transform '(?n :update inc) 5)
+  ;=>> {:result 6 :vars {'n 6}}
+
+  ;; shorthand in maps
+  (transform '{:a (?x :update inc)} {:a 5})
+  ;=>> {:result {:a 6} :vars {'x 6}}
+
+  ;; deep map update: reconstructs nested structure
+  (transform '{:a {:b (? :update inc)}} {:a {:b 5} :c 10})
+  ;=>> {:result {:a {:b 6} :c 10} :vars {}}
+
+  ;; multiple updates: transforms at multiple paths
+  (transform '{:a (? :update inc) :b (? :update dec)} {:a 1 :b 10})
+  ;=>> {:result {:a 2 :b 9} :vars {}}
+
+  ;; sequence update: transforms elements in place
+  (transform '[(? :update inc) ?rest*] [1 2 3])
+  ;=>> {:result [2 2 3] :vars {'rest '(2 3)}}
+
+  ;; transform returns nil on mismatch
+  (transform '{:x (? :pred even?)} {:x 3})
+  ;=> nil
+
+  ;;-------------------------------------------------------------------
+  ;; extract-var-symbols - helper for plet
+  ;;-------------------------------------------------------------------
+  ;; extracts var names from pattern (without ? prefix)
+  (extract-var-symbols '{:a ?a :b ?b}) ;=>> #{'a 'b}
+  ;; handles nested patterns
+  (extract-var-symbols '{:a ?a :b {:c ?c}}) ;=>> #{'a 'c}
+  ;; handles sequence patterns
+  (extract-var-symbols '[?x ?y ?z]) ;=>> #{'x 'y 'z}
+  ;; skips wildcards
+  (extract-var-symbols '[?a ?_ ?b]) ;=>> #{'a 'b}
+  ;; handles quantifiers
+  (extract-var-symbols '[?head ?tail+]) ;=>> #{'head 'tail}
+
+  ;;-------------------------------------------------------------------
+  ;; plet - pattern-based let binding
+  ;;-------------------------------------------------------------------
+  ;; basic map destructuring
+  (plet [{:a ?a :b ?b} {:a 3 :b 4}] (* a b)) ;=> 12
+  ;; nested pattern
+  (plet [{:a {:x ?x}} {:a {:x 5}}] x) ;=> 5
+  ;; sequence pattern
+  (plet [[?first ?second] [10 20]] (+ first second)) ;=> 30
+  ;; match failure returns MatchFailure (use exact value to force failure)
+  (plet [{:a 1} {:a 2}] :never-reached) ;=>> failure?
+  ;; multiple expressions in body
+  (plet [{:x ?x} {:x 5}] (let [y 10] (+ x y))) ;=> 15
+
+  ;;-------------------------------------------------------------------
+  ;; pfn - pattern-based function
+  ;;-------------------------------------------------------------------
+  ;; basic usage
+  (let [f (pfn {:a ?a :b ?b} (+ ?a ?b))]
+    (f {:a 3 :b 4})) ;=> 7
+  ;; with sequence pattern and vector result
+  (let [ex1 (pfn {:a ?a :b [?b0 ?_ ?b2]} [(* ?a ?b2) (+ ?a ?b0)])]
+    (ex1 {:a 3 :b [2 0 4]})) ;=> [12 5]
+  ;; match failure returns MatchFailure (use exact value to force failure)
+  (let [f (pfn {:a 1} :matched)]
+    (f {:a 2})) ;=>> failure?
+  ;; nested pattern
+  (let [f (pfn {:outer {:inner ?x}} (* ?x ?x))]
+    (f {:outer {:inner 7}})) ;=> 49
   )

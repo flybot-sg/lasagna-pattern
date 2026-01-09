@@ -230,57 +230,89 @@
 ;;
 ;; This is where pattern matching really shines! We define patterns for
 ;; different token sequences and use them to consume the token stream.
+;;
+;; NOTE: We'd like to use :match-case here to try patterns in order and know
+;; which matched. However, :match-case currently requires pre-compiled matchers
+;; (from core namespace), not pattern data. This is a potential library
+;; enhancement - supporting pattern syntax inside :match-case would make
+;; this code more concise.
 
 ;;-----------------------------------------------------------------------------
-;; Token patterns - each pattern matches a specific token structure
+;; Pattern factory - creates schema-aware patterns
 ;;-----------------------------------------------------------------------------
-;; Note: We use vector literals with `list` for predicate vars because
-;; quoting '[...] would also quote the anonymous functions inside.
+;; We create patterns as a function of schema so flag/option distinction
+;; is baked into the predicates.
 
-;; Pattern: end-of-options marker followed by remaining tokens
-(def end-opts-pattern
-  "Matches -- followed by everything else (which becomes positional)"
-  (p/compile [(list '?end #(= :end-opts (:type %))) '?rest*]))
+(defn make-patterns
+  "Create token stream patterns with schema-aware predicates.
 
-;; Pattern: long option with embedded value (--name=value)
-(def long-opt-pattern
-  "Matches --name=value token"
-  (p/compile [(list '?opt #(= :long-opt (:type %))) '?rest*]))
+   Returns a vector of [case-key pattern] pairs in priority order:
+   - :end-opts   - The -- marker
+   - :long-opt   - --name=value (has embedded value)
+   - :opt-value  - Non-flag option followed by value
+   - :flag       - Boolean flag (no value)
+   - :opt-missing - Option needs value but none follows
+   - :positional - Regular positional argument
 
-;; Pattern: option followed by positional value
-(def opt-value-pattern
-  "Matches option token followed by positional (the value)"
-  (p/compile [(list '?opt #(#{:short-opt :long-flag} (:type %)))
-              (list '?val #(= :positional (:type %)))
-              '?rest*]))
+   NOTE: Map/set/keyword predicates in the library work as key-lookup functions,
+   not as submap matchers. For token type matching we need anonymous functions."
+  [schema]
+  [[:end-opts
+    (p/compile [(list '?end #(= :end-opts (:type %))) '?rest*])]
 
-;; Pattern: standalone flag or option
-(def single-opt-pattern
-  "Matches a single option/flag token"
-  (p/compile [(list '?opt #(#{:short-opt :long-flag} (:type %))) '?rest*]))
+   [:long-opt
+    (p/compile [(list '?opt #(= :long-opt (:type %))) '?rest*])]
 
-;; Pattern: positional argument
-(def positional-pattern
-  "Matches a positional argument"
-  (p/compile [(list '?pos #(= :positional (:type %))) '?rest*]))
+   [:opt-value
+    (p/compile [(list '?opt #(and (#{:short-opt :long-flag} (:type %))
+                                  (not (flag? schema %))))
+                (list '?val #(= :positional (:type %)))
+                '?rest*])]
+
+   [:flag
+    (p/compile [(list '?opt #(and (#{:short-opt :long-flag} (:type %))
+                                  (flag? schema %)))
+                '?rest*])]
+
+   [:opt-missing
+    (p/compile [(list '?opt #(and (#{:short-opt :long-flag} (:type %))
+                                  (not (flag? schema %))))
+                '?rest*])]
+
+   [:positional
+    (p/compile [(list '?pos #(= :positional (:type %))) '?rest*])]])
+
+(defn match-first
+  "Try patterns in order, return [case-key match] for first match, or nil."
+  [patterns tokens]
+  (some (fn [[case-key pattern]]
+          (when-let [match (p/query pattern tokens)]
+            [case-key match]))
+        patterns))
 
 (comment
   ;; Test the patterns
-  (p/query end-opts-pattern [{:type :end-opts}
-                             {:type :positional :value "-not-flag"}])
-  ;=> {end {:type :end-opts}, rest ({:type :positional, :value "-not-flag"})}
+  (def test-patterns (make-patterns example-schema))
 
-  (p/query long-opt-pattern [{:type :long-opt :name "output" :value "file.txt"}
-                             {:type :positional :value "arg"}])
-  ;=> {opt {:type :long-opt, :name "output", :value "file.txt"},
-  ;    rest ({:type :positional, :value "arg"})}
+  ;; Matches :end-opts case
+  (match-first test-patterns [{:type :end-opts} {:type :positional :value "x"}])
+  ;=> [:end-opts {end {:type :end-opts}, rest ({:type :positional, :value "x"})}]
 
-  (p/query opt-value-pattern [{:type :short-opt :char \f}
-                              {:type :positional :value "file.txt"}
-                              {:type :long-flag :name "verbose"}])
-  ;=> {opt {:type :short-opt, :char \f},
-  ;    val {:type :positional, :value "file.txt"},
-  ;    rest ({:type :long-flag, :name "verbose"})}
+  ;; Matches :long-opt case
+  (match-first test-patterns [{:type :long-opt :name "output" :value "file.txt"}])
+  ;=> [:long-opt {opt {:type :long-opt, :name "output", :value "file.txt"}, rest ()}]
+
+  ;; Matches :opt-value case (-f expects value, so matches opt+val)
+  (match-first test-patterns [{:type :short-opt :char \f}
+                              {:type :positional :value "file.txt"}])
+  ;=> [:opt-value {opt {:type :short-opt, :char \f},
+  ;                val {:type :positional, :value "file.txt"}, rest ()}]
+
+  ;; Matches :flag case (-v is a flag)
+  (match-first test-patterns [{:type :short-opt :char \v}
+                              {:type :positional :value "file.txt"}])
+  ;=> [:flag {opt {:type :short-opt, :char \v},
+  ;           rest ({:type :positional, :value "file.txt"})}]
   )
 
 ;;-----------------------------------------------------------------------------
@@ -338,56 +370,37 @@
 ;; Pattern-based token processor
 ;;-----------------------------------------------------------------------------
 
+(def ^:private handlers
+  "Map of case keys to handler functions."
+  {:end-opts    handle-end-opts
+   :long-opt    handle-long-opt
+   :opt-value   handle-opt-value
+   :flag        handle-flag
+   :opt-missing handle-opt-missing-value
+   :positional  handle-positional})
+
 (defn process-tokens
   "Process token stream using pattern matching.
-   Each iteration matches a pattern and applies its handler."
+
+   Uses match-first to try patterns in order and dispatch to handlers."
   [schema tokens]
-  (let [;; Build pattern rules based on schema
-        ;; Order matters: more specific patterns first!
-        make-rules (fn [after-end-opts?]
-                     (if after-end-opts?
-                       ;; After --, everything is positional
-                       [[positional-pattern handle-positional]
-                        [single-opt-pattern
-                         (fn [{:syms [opt rest]} result _]
-                           [(update result :positional conj (reconstruct-token opt))
-                            rest])]]
-                       ;; Normal parsing rules
-                       [[end-opts-pattern handle-end-opts]
-                        [long-opt-pattern handle-long-opt]
-                        ;; Option + value (only if NOT a flag)
-                        [opt-value-pattern
-                         (fn [match result schema]
-                           (let [opt (get match 'opt)]
-                             (when-not (flag? schema opt)
-                               (handle-opt-value match result schema))))]
-                        ;; Flag
-                        [single-opt-pattern
-                         (fn [match result schema]
-                           (let [opt (get match 'opt)]
-                             (if (flag? schema opt)
-                               (handle-flag match result schema)
-                               ;; Option without value - error
-                               (handle-opt-missing-value match result schema))))]
-                        [positional-pattern handle-positional]]))]
+  (let [patterns (make-patterns schema)]
     (loop [tokens (vec tokens)
            result {:flags #{} :options {} :positional [] :errors []}
            after-end-opts? false]
       (if (empty? tokens)
         result
-        ;; Try patterns until one matches and returns non-nil
-        (let [rules (make-rules after-end-opts?)
-              match-result (some (fn [[pattern handler]]
-                                   (when-let [match (p/query pattern tokens)]
-                                     (when-let [r (handler match result schema)]
-                                       r)))
-                                 rules)]
-          (if match-result
-            (let [[new-result remaining] match-result
-                  ;; Check if we hit end-of-opts
-                  hit-end-opts? (and (not after-end-opts?)
-                                     (= :end-opts (:type (first tokens))))]
-              (recur (vec remaining) new-result (or after-end-opts? hit-end-opts?)))
+        (if after-end-opts?
+          ;; After --, everything is positional
+          (let [tok (first tokens)]
+            (recur (vec (rest tokens))
+                   (update result :positional conj (reconstruct-token tok))
+                   true))
+          ;; Try patterns in order, dispatch to matching handler
+          (if-let [[case-key match] (match-first patterns tokens)]
+            (let [handler (get handlers case-key)
+                  [new-result remaining] (handler match result schema)]
+              (recur (vec remaining) new-result (= case-key :end-opts)))
             ;; No pattern matched - unknown token
             (recur (vec (rest tokens))
                    (update result :errors conj {:error :unknown-token :token (first tokens)})
@@ -618,7 +631,7 @@
   )
 
 ;;=============================================================================
-;; PART 10: Key Takeaways
+;; PART 10: Key Takeaways & Suggested Library Enhancements
 ;;=============================================================================
 ;;
 ;; This demo showcased several powerful pattern matching features:
@@ -631,6 +644,8 @@
 ;; 2. PREDICATE MATCHING
 ;;    - Filter by type: #(= :short-opt (:type %))
 ;;    - Combine predicates: #(#{:short-opt :long-flag} (:type %))
+;;    - Set predicates: (? :pred #{:a :b}) for membership test
+;;    - Map predicates: (? :pred {:k v}) for KEY lookup (not submap)
 ;;
 ;; 3. STREAM PROCESSING PATTERNS
 ;;    - :filter - Collect all elements matching predicate
@@ -646,6 +661,35 @@
 ;;    - Build complex parsers from simple patterns
 ;;    - Each pattern handles one concern
 ;;    - Combine with p/query for readable parsing code
+;;
+;;-----------------------------------------------------------------------------
+;; SUGGESTED LIBRARY ENHANCEMENTS
+;;-----------------------------------------------------------------------------
+;;
+;; 1. SUBMAP PREDICATE - Match maps by field values
+;;    Current: #(= :end-opts (:type %))   ; verbose anonymous function
+;;    Suggested: (? :submap {:type :end-opts})  ; match if value contains k/v pairs
+;;    Or: (? :pred= {:type :end-opts})    ; field equality check
+;;
+;;    This would make token matching much cleaner:
+;;      [(list '?tok #(= :flag (:type %))) '?rest*]  ; current
+;;      ['(?tok (? :submap {:type :flag})) '?rest*]  ; proposed
+;;
+;; 2. :match-case WITH PATTERN DATA
+;;    Current: :match-case requires pre-compiled matchers (core namespace)
+;;    Suggested: Allow pattern data in :match-case, compile on the fly
+;;
+;;    Would enable single-pattern token stream parsing:
+;;      (? :match-case
+;;         [:end-opts   [(?end (? :submap {:type :end-opts})) ?rest*]
+;;          :flag       [(?opt (? :submap {:type :flag})) ?rest*]
+;;          :positional [(?pos (? :submap {:type :positional})) ?rest*]]
+;;         'which)
+;;
+;; 3. SHORTHAND FOR FIELD PREDICATES
+;;    Current: #(#{:a :b} (:type %))
+;;    Suggested: {:type #{:a :b}} as pattern (not key lookup)
+;;    Or: (? :field :type #{:a :b})  ; check (:type val) is in set
 ;;
 ;; The combination of sequence matching, predicates, and filtering makes
 ;; flybot.pullable ideal for stream processing and parsing tasks!
