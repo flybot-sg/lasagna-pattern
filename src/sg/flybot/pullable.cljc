@@ -273,17 +273,32 @@
 ;; Pattern-based binding forms
 ;;=============================================================================
 
+(defn- plain-var-symbol?
+  "Check if x is a plain symbol that should become a variable binding."
+  [x]
+  (and (symbol? x)
+       (not (core/named-var? x))  ; not ?x syntax
+       (not= '? x)                ; not the pattern marker
+       (not= '_ x)                ; not underscore
+       (not (#{'if 'do 'let 'fn 'quote 'var 'def 'loop 'recur
+               'throw 'try 'catch 'finally 'new 'set!} x))))
+
 (defn- extract-var-symbols
   "Extract variable symbols from a pattern.
-   Returns a set of symbols (without the ? prefix).
-   E.g., '{:a ?a :b [?b0 ?_]} -> #{a b0}"
+   Recognizes both plain symbols (x, foo) and ?x syntax.
+   E.g., '{:a a :b [b0 ?_]} -> #{a b0}"
   [pattern]
   (let [vars (atom #{})]
     (walk/prewalk
      (fn [x]
-       (when-let [[sym _] (core/named-var? x)]
-         (when sym  ;; skip wildcards (?_)
-           (swap! vars conj sym)))
+       (cond
+         ;; ?x syntax - extract name without ?
+         (core/named-var? x)
+         (let [[sym _] (core/named-var? x)]
+           (when sym (swap! vars conj sym)))
+         ;; Plain symbol - use as-is
+         (plain-var-symbol? x)
+         (swap! vars conj x))
        x)
      pattern)
     @vars))
@@ -292,18 +307,19 @@
   "Pattern-based let binding.
 
    Matches pattern against data, then evaluates body with bound variables.
-   Variables in pattern use ?x syntax, body uses plain symbols (x, not ?x).
+   Variables in pattern can use plain symbols (a, b) or ?x syntax.
+   Body uses plain symbols.
 
    Returns MatchFailure on match failure, otherwise the result of body.
 
    Examples:
-     (plet [{:a ?a :b ?b} {:a 3 :b 4}] (* a b))
+     (plet [{:a a :b b} {:a 3 :b 4}] (* a b))
      ;=> 12
 
-     (plet [{:a {:x ?x}} {:a {:x 5}}] x)
+     (plet [{:a {:x x}} {:a {:x 5}}] x)
      ;=> 5
 
-     (plet [{:a ?a} {:b 3}] a)
+     (plet [{:a 1} {:a 2}] :never)
      ;=> #MatchFailure{...}"
   [[pattern data] & body]
   (let [var-syms (extract-var-symbols pattern)]
@@ -320,26 +336,29 @@
    Creates a function that matches its argument against pattern,
    then substitutes bound variables into body and evaluates it.
 
-   Both pattern and body use ?x syntax for variables.
+   Pattern uses plain symbols (a, b) or ?x syntax.
+   Body uses plain symbols for variable references.
 
    Returns MatchFailure on match failure, otherwise the evaluated result.
 
    Examples:
-     (def f (pfn {:a ?a :b ?b} (+ ?a ?b)))
+     (def f (pfn {:a a :b b} (+ a b)))
      (f {:a 3 :b 4})
      ;=> 7
 
-     (def ex1 (pfn {:a ?a :b [?b0 ?_ ?b2]} [(* ?a ?b2) (+ ?a ?b0)]))
+     (def ex1 (pfn {:a a :b [b0 _ b2]} [(* a b2) (+ a b0)]))
      (ex1 {:a 3 :b [2 0 4]})
      ;=> [12 5]"
   [pattern body]
-  `(let [matcher# (compile '~pattern)
-         subst-fn# (core/substitute '~body)]
-     (fn [data#]
-       (let [result# (matcher# data#)]
-         (if (core/failure? result#)
-           result#
-           (subst-fn# result#))))))
+  (let [var-syms (extract-var-symbols pattern)]
+    `(let [matcher# (compile '~pattern)]
+       (fn [data#]
+         (let [result# (matcher# data#)]
+           (if (core/failure? result#)
+             result#
+             (let [~'vars## (:vars result#)
+                   ~@(mapcat (fn [s] [s `(get ~'vars## '~s)]) var-syms)]
+               ~body)))))))
 
 ^:rct/test
 (comment
@@ -448,44 +467,48 @@
   ;;-------------------------------------------------------------------
   ;; extract-var-symbols - helper for plet
   ;;-------------------------------------------------------------------
-  ;; extracts var names from pattern (without ? prefix)
+  ;; extracts plain symbols as var names
+  (extract-var-symbols '{:a a :b b}) ;=>> #{'a 'b}
+  ;; also works with ?x syntax (backward compat)
   (extract-var-symbols '{:a ?a :b ?b}) ;=>> #{'a 'b}
   ;; handles nested patterns
-  (extract-var-symbols '{:a ?a :b {:c ?c}}) ;=>> #{'a 'c}
+  (extract-var-symbols '{:a a :b {:c c}}) ;=>> #{'a 'c}
   ;; handles sequence patterns
-  (extract-var-symbols '[?x ?y ?z]) ;=>> #{'x 'y 'z}
-  ;; skips wildcards
-  (extract-var-symbols '[?a ?_ ?b]) ;=>> #{'a 'b}
-  ;; handles quantifiers
-  (extract-var-symbols '[?head ?tail+]) ;=>> #{'head 'tail}
+  (extract-var-symbols '[x y z]) ;=>> #{'x 'y 'z}
+  ;; skips wildcards (_ and ?_)
+  (extract-var-symbols '[a _ b]) ;=>> #{'a 'b}
+  ;; handles quantifiers (?x+ syntax still works)
+  (extract-var-symbols '[head ?tail+]) ;=>> #{'head 'tail}
 
   ;;-------------------------------------------------------------------
-  ;; plet - pattern-based let binding
+  ;; plet - pattern-based let binding (new plain symbol syntax)
   ;;-------------------------------------------------------------------
-  ;; basic map destructuring
-  (plet [{:a ?a :b ?b} {:a 3 :b 4}] (* a b)) ;=> 12
+  ;; basic map destructuring with plain symbols
+  (plet [{:a a :b b} {:a 3 :b 4}] (* a b)) ;=> 12
   ;; nested pattern
-  (plet [{:a {:x ?x}} {:a {:x 5}}] x) ;=> 5
+  (plet [{:a {:x x}} {:a {:x 5}}] x) ;=> 5
   ;; sequence pattern
-  (plet [[?first ?second] [10 20]] (+ first second)) ;=> 30
-  ;; match failure returns MatchFailure (use exact value to force failure)
+  (plet [[first second] [10 20]] (+ first second)) ;=> 30
+  ;; match failure returns MatchFailure
   (plet [{:a 1} {:a 2}] :never-reached) ;=>> failure?
   ;; multiple expressions in body
-  (plet [{:x ?x} {:x 5}] (let [y 10] (+ x y))) ;=> 15
+  (plet [{:x x} {:x 5}] (let [y 10] (+ x y))) ;=> 15
+  ;; backward compat: ?x syntax still works
+  (plet [{:a ?a :b ?b} {:a 3 :b 4}] (* a b)) ;=> 12
 
   ;;-------------------------------------------------------------------
-  ;; pfn - pattern-based function
+  ;; pfn - pattern-based function (new plain symbol syntax)
   ;;-------------------------------------------------------------------
-  ;; basic usage
-  (let [f (pfn {:a ?a :b ?b} (+ ?a ?b))]
+  ;; basic usage with plain symbols
+  (let [f (pfn {:a a :b b} (+ a b))]
     (f {:a 3 :b 4})) ;=> 7
   ;; with sequence pattern and vector result
-  (let [ex1 (pfn {:a ?a :b [?b0 ?_ ?b2]} [(* ?a ?b2) (+ ?a ?b0)])]
+  (let [ex1 (pfn {:a a :b [b0 _ b2]} [(* a b2) (+ a b0)])]
     (ex1 {:a 3 :b [2 0 4]})) ;=> [12 5]
-  ;; match failure returns MatchFailure (use exact value to force failure)
+  ;; match failure returns MatchFailure
   (let [f (pfn {:a 1} :matched)]
     (f {:a 2})) ;=>> failure?
   ;; nested pattern
-  (let [f (pfn {:outer {:inner ?x}} (* ?x ?x))]
+  (let [f (pfn {:outer {:inner x}} (* x x))]
     (f {:outer {:inner 7}})) ;=> 49
   )
