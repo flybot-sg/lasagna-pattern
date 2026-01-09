@@ -86,7 +86,12 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 ;; Core form
 (? :type args...)
 
-;; Variable bindings (symbol form)
+;; Variable bindings - plain symbols (preferred)
+x       ; bind value to 'x
+_       ; wildcard (match anything, no binding)
+''foo   ; match literal symbol 'foo
+
+;; Variable bindings - ?x syntax (also supported)
 ?x      ; bind to 'x
 ?x?     ; optional (0 or 1)
 ?x+     ; one or more (lazy - matches minimum)
@@ -103,14 +108,13 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 (?x even? [2 3] !) ; greedy, 2-3 elements with predicate
 
 ;; Examples
+{:a x :b y}                   ; bind :a to x, :b to y (plain symbols)
+[head _ tail]                 ; head, ignore middle, tail
+{:type ''response}            ; match literal symbol 'response
 (? :val 5)                    ; exact value
 (? :pred even?)               ; predicate
-(? :var a (? :val 3))         ; bind to 'a
-(? :map {:a ?a :b ?b})        ; map pattern
-(? :seq [?first ?rest])       ; sequence pattern
-[?head ?tail+]                ; head + rest (1 or more, lazy)
-[?prefix* ?last]              ; prefix (0 or more, lazy) + last
-[?head*! ?tail]               ; head (greedy) + tail
+[head ?tail+]                 ; head + rest (1 or more, lazy)
+[?prefix* last]               ; prefix (0 or more, lazy) + last
 #"\d+"                        ; regex (matches strings, returns groups)
 ```
 
@@ -291,12 +295,16 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 ;; Runtime variable substitution
 (p/substitute-vars '(+ ?x ?y) {'x 3 'y 5})  ;=> (+ 3 5)
 
-;; Pattern-based binding forms
-(p/plet [{:a ?a :b ?b} {:a 3 :b 4}] (* a b))  ;=> 12
-(p/plet [{:a ?a} {:b 3}] a)                    ;=> MatchFailure
+;; Pattern-based binding forms (plain symbol syntax)
+(p/plet [{:a a :b b} {:a 3 :b 4}] (* a b))  ;=> 12
+(p/plet [{:a 1} {:a 2}] :never)              ;=> MatchFailure
 
-(def f (p/pfn {:a ?a :b ?b} (+ ?a ?b)))
+(def f (p/pfn {:a a :b b} (+ a b)))
 (f {:a 3 :b 4})  ;=> 7
+
+;; With sequence patterns
+(def ex1 (p/pfn {:a a :b [b0 _ b2]} [(* a b2) (+ a b0)]))
+(ex1 {:a 3 :b [2 0 4]})  ;=> [12 5]
 
 ;; Low-level (sg.flybot.pullable.core)
 (ptn->matcher pattern) → matcher-fn

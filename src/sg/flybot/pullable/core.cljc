@@ -1217,12 +1217,55 @@
 
 (declare regex-matcher)
 
+(defn- double-quoted-symbol?
+  "Check if x is a double-quoted symbol form: ''sym -> (quote (quote sym)).
+   Returns the inner symbol if true, nil otherwise."
+  [x]
+  (when (and (seq? x)
+             (= 2 (count x))
+             (= 'quote (first x)))
+    (let [inner (second x)]
+      (when (and (seq? inner)
+                 (= 2 (count inner))
+                 (= 'quote (first inner))
+                 (symbol? (second inner)))
+        (second inner)))))
+
+(defn- plain-var-symbol?
+  "Check if x is a plain symbol that should become a variable binding.
+   Returns the symbol name if true, nil otherwise.
+
+   A symbol becomes a variable if it:
+   - Is a symbol (not keyword, not other type)
+   - Is not already ?x syntax
+   - Is not ? (used in pattern forms)
+   - Is not _ (reserved for possible future use)
+   - Is not a special form (if, do, quote, etc.)"
+  [x]
+  (when (and (symbol? x)
+             (not (named-var? x))  ; not ?x syntax
+             (not= '? x)           ; not the pattern marker
+             (not= '_ x)           ; not underscore
+             (not (#{'if 'do 'let 'fn 'quote 'var 'def 'loop 'recur
+                     'throw 'try 'catch 'finally 'new 'set!} x)))
+    x))
+
 (defn- scalar-element
   "Convert a scalar value to a matcher.
-   Functions and sets become predicates (sets test membership)."
+   - _ is a wildcard (matches anything, no binding)
+   - Plain symbols become variable bindings
+   - Double-quoted symbols ''sym match literal symbols
+   - Functions and sets become predicates (sets test membership)
+   - Other values are matched exactly"
   [x]
   (cond
     (matcher-type x) x
+    ;; Underscore is a wildcard
+    (= '_ x) wildcard
+    ;; Double-quoted symbol: ''sym -> match literal symbol
+    (double-quoted-symbol? x) (mval (double-quoted-symbol? x))
+    ;; Plain symbol -> variable binding
+    (plain-var-symbol? x) (mvar (plain-var-symbol? x) wildcard)
     (fn? x) (mpred x)
     (set? x) (mpred x)
     (regex? x) (regex-matcher x)
@@ -1230,7 +1273,13 @@
 
 (defn ptn->matcher
   "Compile a pattern to a matcher function.
-   Optionally takes custom rules that are tried before core-rules."
+   Optionally takes custom rules that are tried before core-rules.
+
+   Symbol handling in patterns:
+   - Plain symbols (x, foo, bar) become variable bindings
+   - ?x, ?x+, ?x* syntax also works for variables with quantifiers
+   - ''sym (double-quoted) matches the literal symbol sym
+   - _ is reserved (currently unused)"
   ([ptn]
    (ptn->matcher ptn [core-rule]))
   ([ptn rules]
@@ -1239,9 +1288,14 @@
      ;; then postwalk for everything else
      (let [prewalk-fn (fn [x]
                         (cond
+                          ;; Double-quoted symbol: ''sym -> match literal symbol
+                          (double-quoted-symbol? x)
+                          (mval (double-quoted-symbol? x))
+
                           ;; Regex patterns become regex matchers
                           (regex? x)
                           (regex-matcher x)
+
                           ;; Check list-var pattern first (before children transform)
                           (parse-list-var x)
                           (let [{:keys [sym pred update-fn min-len max-len greedy?]} (parse-list-var x)
@@ -1255,10 +1309,21 @@
                               (let [effective-max (when-not (zero? max-len) max-len)]
                                 (mzrepeat child min-len {:max-len effective-max :greedy? greedy? :sym sym}))
                               (if sym (mvar sym child) child)))
-                          ;; Named-var symbols like ?x, ?x+, ?x* -> (? :named-var sym flags)
-                          (named-var->form x)
-                          (named-var->form x)
+
+                          ;; Named-var symbols like ?x, ?x+, ?x* -> matcher directly
+                          ;; (Must convert to matcher here, not intermediate form,
+                          ;; to prevent prewalk from descending into the form)
+                          (named-var? x)
+                          (let [[sym flags] (named-var? x)]
+                            (cond
+                              (flags :one-or-more)  (repeat-matcher sym 1 (flags :greedy))
+                              (flags :zero-or-more) (repeat-matcher sym 0 (flags :greedy))
+                              :else (cond->> wildcard
+                                      sym (mvar sym)
+                                      (flags :optional) mzoption)))
+
                           ;; Otherwise pass through
+                          ;; (Plain symbols are handled in scalar-element context)
                           :else x))
            postwalk-fn (fn [x] (or (rule-of mch x) x))]
        (->> ptn
@@ -1696,4 +1761,26 @@
   (query [#{:a :b} '?x] [:c 42]) ;=> nil
   ;; set with variable binding in map
   (query '{:type ?t :status #{:ok :warn}} {:type "test" :status :ok}) ;=>> '{t "test"}
+
+  ;;-------------------------------------------------------------------
+  ;; Plain symbols as variables (new syntax)
+  ;;-------------------------------------------------------------------
+  ;; plain symbol in map pattern becomes variable
+  (query '{:a x :b y} {:a 1 :b 2}) ;=>> '{x 1 y 2}
+  ;; plain symbol in vector pattern becomes variable
+  (query '[x y z] [1 2 3]) ;=>> '{x 1 y 2 z 3}
+  ;; mixed with ?x syntax (both work)
+  (query '{:a x :b ?y} {:a 1 :b 2}) ;=>> '{x 1 y 2}
+  ;; nested patterns with plain symbols
+  (query '{:outer {:inner val}} {:outer {:inner 42}}) ;=>> '{val 42}
+
+  ;;-------------------------------------------------------------------
+  ;; Double-quoted symbols for literal matching
+  ;;-------------------------------------------------------------------
+  ;; ''sym matches the literal symbol
+  (query '{:type ''foo} {:type 'foo}) ;=>> {}
+  ;; ''sym fails if value is not that symbol
+  (query '{:type ''foo} {:type 'bar}) ;=> nil
+  ;; ''sym in vector
+  (query '[''start x ''end] ['start 42 'end]) ;=>> '{x 42}
   )
