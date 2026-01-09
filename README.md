@@ -5,7 +5,6 @@ Work-in-progress pull-based data transformation engine for Clojure/ClojureScript
 ## Status
 - Active development; APIs are unstable.
 - Implemented: internal engine in `sg.flybot.pullable.core`.
-- Planned: stable public API in `sg.flybot.pullable`, utilities in `sg.flybot.pullable.util`, and advanced features in `sg.flybot.pullable.core2`.
 
 ## Installation
 Not yet released to a registry. Once a public API is stabilized, a git or tag-based dependency will be provided here.
@@ -26,7 +25,6 @@ Not yet released to a registry. Once a public API is stabilized, a git or tag-ba
 
 ### Workflow
 - Follow CODE_STYLE.md for conventions.
-- Use the `clojure-mcp` server for evaluation during development.
 
 ### Running Tests
 This project uses [Kaocha](https://github.com/lambdaisland/kaocha) and rich-comment-tests. Run regression tests with:

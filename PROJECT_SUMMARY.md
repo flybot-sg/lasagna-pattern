@@ -111,6 +111,32 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 [?head ?tail+]                ; head + rest (1 or more, lazy)
 [?prefix* ?last]              ; prefix (0 or more, lazy) + last
 [?head*! ?tail]               ; head (greedy) + tail
+#"\d+"                        ; regex (matches strings, returns groups)
+```
+
+### Regex Matching
+
+Regex patterns automatically match strings and return capture groups:
+
+```clojure
+;; Basic regex - returns [full-match] or [full-match group1 group2 ...]
+((ptn->matcher #"hello" core-rules) (vmr "hello"))
+;=> {:val ["hello"]}
+
+((ptn->matcher #"(\d+)-(\d+)" core-rules) (vmr "12-34"))
+;=> {:val ["12-34" "12" "34"]}
+
+;; Regex in map - transforms matched value to groups
+((ptn->matcher {:phone #"(\d{3})-(\d{4})"} core-rules) (vmr {:phone "555-1234"}))
+;=> {:val {:phone ["555-1234" "555" "1234"]}}
+
+;; Regex in vector - validates string element
+(query ['?name #"\d+"] ["Alice" "42"])
+;=> {name "Alice"}
+
+;; Bind regex groups with (? :regex pattern sym)
+(query (list '? :regex #"(\w+)@(\w+)" 'parts) "user@host")
+;=> {parts ["user@host" "user" "host"]}
 ```
 
 ### Lazy vs Greedy Matching
@@ -177,6 +203,7 @@ For more control over matching, use the list form: `(?x pred? [min max]? !?)`
 | `:filter` | `(? :filter <pred> [<sym>])` | Filter sequence elements by predicate |
 | `:first` | `(? :first <pred> [<sym>])` | Find first element matching predicate |
 | `:sub` | `(? :sub <fn> [<matcher>])` | Apply fn to transform matched value |
+| `:regex` | `(? :regex <pattern> [<sym>])` | Match string against regex, return groups |
 
 **Variable References in Args:** Use `$var` syntax in `:pred` args to reference bound variables:
 ```clojure
