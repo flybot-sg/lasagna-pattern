@@ -1,7 +1,8 @@
 .lsp/
 .clj-kondo/.cache/
 .clj-kondo/imports/
-.calva/output-window/
+.calva/
+.claude/
 .cpcache/
 .nrepl*
 .rebel*
