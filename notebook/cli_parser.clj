@@ -231,11 +231,8 @@
 ;; This is where pattern matching really shines! We define patterns for
 ;; different token sequences and use them to consume the token stream.
 ;;
-;; NOTE: We'd like to use :match-case here to try patterns in order and know
-;; which matched. However, :match-case currently requires pre-compiled matchers
-;; (from core namespace), not pattern data. This is a potential library
-;; enhancement - supporting pattern syntax inside :match-case would make
-;; this code more concise.
+;; Using plain symbols for variables makes patterns more readable:
+;;   [end ?rest*]  instead of  [?end ?rest*]
 
 ;;-----------------------------------------------------------------------------
 ;; Pattern factory - creates schema-aware patterns
@@ -258,29 +255,29 @@
    not as submap matchers. For token type matching we need anonymous functions."
   [schema]
   [[:end-opts
-    (p/compile [(list '?end #(= :end-opts (:type %))) '?rest*])]
+    (p/compile [(list 'end #(= :end-opts (:type %))) '?rest*])]
 
    [:long-opt
-    (p/compile [(list '?opt #(= :long-opt (:type %))) '?rest*])]
+    (p/compile [(list 'opt #(= :long-opt (:type %))) '?rest*])]
 
    [:opt-value
-    (p/compile [(list '?opt #(and (#{:short-opt :long-flag} (:type %))
-                                  (not (flag? schema %))))
-                (list '?val #(= :positional (:type %)))
+    (p/compile [(list 'opt #(and (#{:short-opt :long-flag} (:type %))
+                                 (not (flag? schema %))))
+                (list 'val #(= :positional (:type %)))
                 '?rest*])]
 
    [:flag
-    (p/compile [(list '?opt #(and (#{:short-opt :long-flag} (:type %))
-                                  (flag? schema %)))
+    (p/compile [(list 'opt #(and (#{:short-opt :long-flag} (:type %))
+                                 (flag? schema %)))
                 '?rest*])]
 
    [:opt-missing
-    (p/compile [(list '?opt #(and (#{:short-opt :long-flag} (:type %))
-                                  (not (flag? schema %))))
+    (p/compile [(list 'opt #(and (#{:short-opt :long-flag} (:type %))
+                                 (not (flag? schema %))))
                 '?rest*])]
 
    [:positional
-    (p/compile [(list '?pos #(= :positional (:type %))) '?rest*])]])
+    (p/compile [(list 'pos #(= :positional (:type %))) '?rest*])]])
 
 (defn match-first
   "Try patterns in order, return [case-key match] for first match, or nil."
@@ -517,19 +514,19 @@
 
 (comment
   ;;-------------------------------------------------------------------
-  ;; Basic head + rest patterns
+  ;; Basic head + rest patterns (using plain symbols)
   ;;-------------------------------------------------------------------
 
   ;; Match first element and rest
-  (p/query '[?head ?rest*] [:a :b :c :d])
+  (p/query '[head ?rest*] [:a :b :c :d])
   ;=> {head :a, rest (:b :c :d)}
 
   ;; Match first N elements
-  (p/query '[?a ?b ?c ?rest*] [:x :y :z 1 2 3])
+  (p/query '[a b c ?rest*] [:x :y :z 1 2 3])
   ;=> {a :x, b :y, c :z, rest (1 2 3)}
 
   ;; Greedy vs lazy: get all but last
-  (p/query '[?init*! ?last] [:a :b :c :d])
+  (p/query '[?init*! last] [:a :b :c :d])
   ;=> {init (:a :b :c), last :d}
 
   ;;-------------------------------------------------------------------
@@ -549,8 +546,8 @@
   ;;-------------------------------------------------------------------
 
   ;; Match short-opt followed by positional (option + value)
-  (p/query '[(?opt #(= :short-opt (:type %)))
-             (?val #(= :positional (:type %)))
+  (p/query '[(opt #(= :short-opt (:type %)))
+             (val #(= :positional (:type %)))
              ?rest*]
            [{:type :short-opt :char \f}
             {:type :positional :value "file.txt"}
@@ -560,7 +557,7 @@
   ;    rest ({:type :long-flag, :name "verbose"})}
 
   ;; Match any flag (short or long)
-  (p/query '[(?flag #(#{:short-opt :long-flag} (:type %))) ?rest*]
+  (p/query '[(flag #(#{:short-opt :long-flag} (:type %))) ?rest*]
            [{:type :long-flag :name "verbose"}
             {:type :positional :value "file.txt"}])
   ;=> {flag {:type :long-flag, :name "verbose"}
@@ -602,8 +599,8 @@
 
 (comment
   ;; Using patterns to match option + value pair
-  (p/query '[(?opt #(= :short-opt (:type %)))
-             (?val #(= :positional (:type %)))
+  (p/query '[(opt #(= :short-opt (:type %)))
+             (val #(= :positional (:type %)))
              ?rest*]
            [{:type :short-opt :char \f}
             {:type :positional :value "file.txt"}
@@ -613,21 +610,11 @@
   ;    rest ({:type :long-flag, :name "verbose"})}
 
   ;; Using patterns to match a flag followed by anything
-  (p/query '[(?flag #(= :long-flag (:type %))) ?rest*]
+  (p/query '[(flag #(= :long-flag (:type %))) ?rest*]
            [{:type :long-flag :name "verbose"}
             {:type :positional :value "file.txt"}])
   ;=> {flag {:type :long-flag, :name "verbose"}
   ;    rest ({:type :positional, :value "file.txt"})}
-
-  ;; Pattern that matches tokens until end-of-opts
-  ;; Using greedy + lazy: consume all non-end-opts, then end-opts, then rest
-  (p/query '[(?before #(not= :end-opts (:type %))) *
-             (?end #(= :end-opts (:type %))) ?
-             ?after*]
-           [{:type :long-flag :name "verbose"}
-            {:type :end-opts}
-            {:type :positional :value "-not-a-flag"}])
-  ;; Note: This requires lazy matching by default
   )
 
 ;;=============================================================================
@@ -637,9 +624,9 @@
 ;; This demo showcased several powerful pattern matching features:
 ;;
 ;; 1. SEQUENCE PATTERNS - The core strength
-;;    - Match head + rest: [?head ?rest*]
-;;    - Lazy vs greedy: [?init*! ?last] gets all but last
-;;    - Match with predicates: [(?x pred?) ?rest*]
+;;    - Match head + rest: [head ?rest*]
+;;    - Lazy vs greedy: [?init*! last] gets all but last
+;;    - Match with predicates: [(x pred?) ?rest*]
 ;;
 ;; 2. PREDICATE MATCHING
 ;;    - Filter by type: #(= :short-opt (:type %))
@@ -662,6 +649,12 @@
 ;;    - Each pattern handles one concern
 ;;    - Combine with p/query for readable parsing code
 ;;
+;; 6. NEW PLAIN SYMBOL SYNTAX
+;;    - Use plain symbols for variables: [head ?tail*] or {name age}
+;;    - Use _ for wildcard: [first _ third]
+;;    - Use ''sym for literal symbols: {type ''response}
+;;    - More Clojure-like and readable
+;;
 ;;-----------------------------------------------------------------------------
 ;; SUGGESTED LIBRARY ENHANCEMENTS
 ;;-----------------------------------------------------------------------------
@@ -672,8 +665,8 @@
 ;;    Or: (? :pred= {:type :end-opts})    ; field equality check
 ;;
 ;;    This would make token matching much cleaner:
-;;      [(list '?tok #(= :flag (:type %))) '?rest*]  ; current
-;;      ['(?tok (? :submap {:type :flag})) '?rest*]  ; proposed
+;;      [(list 'tok #(= :flag (:type %))) '?rest*]  ; current
+;;      ['(tok (? :submap {:type :flag})) '?rest*]  ; proposed
 ;;
 ;; 2. :match-case WITH PATTERN DATA
 ;;    Current: :match-case requires pre-compiled matchers (core namespace)
@@ -681,9 +674,9 @@
 ;;
 ;;    Would enable single-pattern token stream parsing:
 ;;      (? :match-case
-;;         [:end-opts   [(?end (? :submap {:type :end-opts})) ?rest*]
-;;          :flag       [(?opt (? :submap {:type :flag})) ?rest*]
-;;          :positional [(?pos (? :submap {:type :positional})) ?rest*]]
+;;         [:end-opts   [(end (? :submap {:type :end-opts})) ?rest*]
+;;          :flag       [(opt (? :submap {:type :flag})) ?rest*]
+;;          :positional [(pos (? :submap {:type :positional})) ?rest*]]
 ;;         'which)
 ;;
 ;; 3. SHORTHAND FOR FIELD PREDICATES

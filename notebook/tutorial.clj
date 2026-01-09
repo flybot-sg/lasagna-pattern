@@ -16,7 +16,7 @@
 ;;
 ;; Key concepts:
 ;; - Pattern: A template that describes the shape of data you want to match
-;; - Variables: Placeholders (like ?x, ?name) that capture values from the data
+;; - Variables: Plain symbols (like x, name) that capture values from the data
 ;; - Matcher: A compiled pattern that can be applied to data
 ;;
 ;; The library is inspired by Datomic Pull and GraphQL, providing a small,
@@ -30,20 +30,20 @@
 
 (comment
   ;; Match a map and extract values
-  (p/query '{:name ?name :age ?age}
+  (p/query '{:name name :age age}
            {:name "Alice" :age 30})
   ;=> {name "Alice", age 30}
 
-  ;; Variables are symbols starting with ?
+  ;; Variables are plain symbols in the pattern
   ;; The result is a map of variable bindings (symbol -> value)
 
   ;; Match a vector and extract elements
-  (p/query '[?first ?second ?third]
+  (p/query '[first second third]
            [1 2 3])
   ;=> {first 1, second 2, third 3}
 
   ;; When the pattern doesn't match, returns nil
-  (p/query '[?x ?y] [1 2 3])  ; pattern expects 2 elements, data has 3
+  (p/query '[x y] [1 2 3])  ; pattern expects 2 elements, data has 3
   ;=> nil
   )
 
@@ -57,7 +57,7 @@
 
 (comment
   ;; Compile a pattern once
-  (def person-pattern (p/compile '{:name ?name :age ?age}))
+  (def person-pattern (p/compile '{:name name :age age}))
 
   ;; Use it many times - much faster than raw patterns
   (p/query person-pattern {:name "Alice" :age 30})
@@ -79,7 +79,7 @@
 ;; There are multiple ways to get results from a pattern match:
 
 (comment
-  (def m (p/compile '{:x ?x}))
+  (def m (p/compile '{:x x}))
 
   ;; 1. query - returns vars map or nil (most common)
   (p/query m {:x 42})  ;=> {x 42}
@@ -104,34 +104,34 @@
 ;; PART 5: Variable Binding Syntax
 ;;=============================================================================
 ;;
-;; Variables use the ?name syntax. Several modifiers are available:
+;; Plain symbols become variables. Several modifiers are available:
 
 (comment
   ;;-------------------------------------------------------------------
-  ;; Basic binding: ?x captures a single value
+  ;; Basic binding: x captures a single value
   ;;-------------------------------------------------------------------
-  (p/query '[?x] [42])
+  (p/query '[x] [42])
   ;=> {x 42}
 
   ;;-------------------------------------------------------------------
-  ;; Wildcard: ?_ matches anything but doesn't bind
+  ;; Wildcard: _ matches anything but doesn't bind
   ;;-------------------------------------------------------------------
-  (p/query '[?_ ?x ?_] [1 2 3])
+  (p/query '[_ x _] [1 2 3])
   ;=> {x 2}  ; only x is bound
 
   ;;-------------------------------------------------------------------
-  ;; Optional: ?x? matches 0 or 1 element
+  ;; Optional: ?x? matches 0 or 1 element (use ?x syntax for quantifiers)
   ;;-------------------------------------------------------------------
-  (p/query '[?x ?y?] [1 2])
+  (p/query '[x ?y?] [1 2])
   ;=> {x 1, y 2}
 
-  (p/query '[?x ?y?] [1])  ; y? matches nothing (optional)
+  (p/query '[x ?y?] [1])  ; y? matches nothing (optional)
   ;=> {x 1}
 
   ;;-------------------------------------------------------------------
   ;; One-or-more: ?x+ captures remaining elements (at least 1)
   ;;-------------------------------------------------------------------
-  (p/query '[?first ?rest+] [1 2 3 4])
+  (p/query '[first ?rest+] [1 2 3 4])
   ;=> {first 1, rest (2 3 4)}
 
   (p/query '[?rest+] [])  ; fails - needs at least 1 element
@@ -140,10 +140,10 @@
   ;;-------------------------------------------------------------------
   ;; Zero-or-more: ?x* captures remaining elements (0 or more)
   ;;-------------------------------------------------------------------
-  (p/query '[?first ?rest*] [1 2 3])
+  (p/query '[first ?rest*] [1 2 3])
   ;=> {first 1, rest (2 3)}
 
-  (p/query '[?first ?rest*] [1])  ; rest* can be empty
+  (p/query '[first ?rest*] [1])  ; rest* can be empty
   ;=> {first 1, rest ()}
   )
 
@@ -177,11 +177,11 @@
   ;; Use this for head/tail patterns
   ;;-------------------------------------------------------------------
   ;; First element + rest (lazy)
-  (p/query '[?head ?tail*] [:a :b :c])
+  (p/query '[head ?tail*] [:a :b :c])
   ;=> {head :a, tail (:b :c)}
 
   ;; All but last element (greedy)
-  (p/query '[?init*! ?last] [:a :b :c])
+  (p/query '[?init*! last] [:a :b :c])
   ;=> {init (:a :b), last :c}
   )
 
@@ -245,33 +245,33 @@
   ;;-------------------------------------------------------------------
   ;; Basic map matching
   ;;-------------------------------------------------------------------
-  (p/query '{:name ?name :age ?age}
+  (p/query '{:name name :age age}
            {:name "Alice" :age 30 :city "NYC"})
   ;=> {name "Alice", age 30}  ; extra keys ignored
 
   ;; Missing key binds to nil
-  (p/query '{:name ?name :age ?age}
+  (p/query '{:name name :age age}
            {:name "Alice"})
   ;=> {name "Alice", age nil}
 
   ;;-------------------------------------------------------------------
   ;; Nested maps
   ;;-------------------------------------------------------------------
-  (p/query '{:user {:name ?name :profile {:bio ?bio}}}
+  (p/query '{:user {:name name :profile {:bio bio}}}
            {:user {:name "Bob" :profile {:bio "Developer"}}})
   ;=> {name "Bob", bio "Developer"}
 
   ;;-------------------------------------------------------------------
   ;; Combining maps and vectors
   ;;-------------------------------------------------------------------
-  (p/query '{:items [?first ?rest*]}
+  (p/query '{:items [first ?rest*]}
            {:items ["apple" "banana" "cherry"]})
   ;=> {first "apple", rest ("banana" "cherry")}
 
   ;;-------------------------------------------------------------------
   ;; Nested map/vector combinations
   ;;-------------------------------------------------------------------
-  (p/query '{:users [{:name ?name1} {:name ?name2}]}
+  (p/query '{:users [{:name name1} {:name name2}]}
            {:users [{:name "Alice"} {:name "Bob"}]})
   ;=> {name1 "Alice", name2 "Bob"}
   )
@@ -287,17 +287,17 @@
   ;;-------------------------------------------------------------------
   ;; Sequence unification - same variable must match same value
   ;;-------------------------------------------------------------------
-  (p/query '[?x ?x] [1 1])  ; both 1 - matches
+  (p/query '[x x] [1 1])  ; both 1 - matches
   ;=> {x 1}
 
-  (p/query '[?x ?x] [1 2])  ; 1 != 2 - fails
+  (p/query '[x x] [1 2])  ; 1 != 2 - fails
   ;=> nil
 
   ;; Useful for finding duplicates or equality checks
-  (p/query '[?a ?b ?a] [1 2 1])  ; first and third must match
+  (p/query '[a b a] [1 2 1])  ; first and third must match
   ;=> {a 1, b 2}
 
-  (p/query '[?a ?b ?a] [1 2 3])  ; 1 != 3 - fails
+  (p/query '[a b a] [1 2 3])  ; 1 != 3 - fails
   ;=> nil
   )
 
@@ -309,22 +309,29 @@
 
 (comment
   ;; Exact value in sequence
-  (p/query '[1 ?x 3] [1 2 3])
+  (p/query '[1 x 3] [1 2 3])
   ;=> {x 2}
 
-  (p/query '[1 ?x 3] [1 2 4])  ; 3 != 4
+  (p/query '[1 x 3] [1 2 4])  ; 3 != 4
   ;=> nil
 
   ;; Exact value in map
-  (p/query '{:type "user" :name ?name} {:type "user" :name "Alice"})
+  (p/query '{:type "user" :name name} {:type "user" :name "Alice"})
   ;=> {name "Alice"}
 
-  (p/query '{:type "user" :name ?name} {:type "admin" :name "Bob"})
+  (p/query '{:type "user" :name name} {:type "admin" :name "Bob"})
   ;=> nil  ; "user" != "admin"
 
   ;; Keywords, numbers, strings all work
-  (p/query '[?x :separator ?y] [1 :separator 2])
+  (p/query '[x :separator y] [1 :separator 2])
   ;=> {x 1, y 2}
+
+  ;; Use ''sym to match literal symbols
+  (p/query '{:type ''response} {:type 'response})
+  ;=> {}
+
+  (p/query '[''begin x ''end] ['begin 42 'end])
+  ;=> {x 42}
   )
 
 ;;=============================================================================
@@ -376,7 +383,51 @@
   )
 
 ;;=============================================================================
-;; PART 12: Error Handling and Debugging
+;; PART 12: Pattern-Based Binding Forms
+;;=============================================================================
+;;
+;; Use plet and pfn for pattern-based destructuring with evaluation.
+
+(comment
+  ;;-------------------------------------------------------------------
+  ;; plet - pattern-based let binding
+  ;;-------------------------------------------------------------------
+  (p/plet [{:a a :b b} {:a 3 :b 4}]
+          (* a b))
+  ;=> 12
+
+  (p/plet [{:name name :age age} {:name "Alice" :age 30}]
+          (str name " is " age " years old"))
+  ;=> "Alice is 30 years old"
+
+  ;; Nested patterns work
+  (p/plet [{:user {:name name}} {:user {:name "Bob"}}]
+          (str "Hello, " name))
+  ;=> "Hello, Bob"
+
+  ;; Returns MatchFailure on mismatch (not nil, not throws)
+  (p/plet [{:required 5} {:required 3}]
+          :never-reached)
+  ;=> #MatchFailure{...}
+
+  ;;-------------------------------------------------------------------
+  ;; pfn - pattern-based function
+  ;;-------------------------------------------------------------------
+  (def add-coords (p/pfn {:x x :y y} (+ x y)))
+  (add-coords {:x 3 :y 4})
+  ;=> 7
+
+  (def process (p/pfn {:a a :b [b0 _ b2]} [(* a b2) (+ a b0)]))
+  (process {:a 3 :b [2 0 4]})
+  ;=> [12 5]
+
+  ;; Returns MatchFailure on mismatch
+  (add-coords {:x 3})  ; missing :y
+  ;=> #MatchFailure{...}
+  )
+
+;;=============================================================================
+;; PART 13: Error Handling and Debugging
 ;;=============================================================================
 ;;
 ;; When patterns don't match, get detailed diagnostics.
@@ -420,7 +471,7 @@
   )
 
 ;;=============================================================================
-;; PART 13: Practical Examples
+;; PART 14: Practical Examples
 ;;=============================================================================
 
 (comment
@@ -428,7 +479,7 @@
   ;; Parsing command-line args
   ;;-------------------------------------------------------------------
   (defn parse-args [args]
-    (p/query '[?cmd ?file ?opts*] args))
+    (p/query '[cmd file ?opts*] args))
 
   (parse-args ["copy" "file.txt" "--verbose" "--force"])
   ;=> {cmd "copy", file "file.txt", opts ("--verbose" "--force")}
@@ -437,8 +488,8 @@
   ;; Destructuring API responses
   ;;-------------------------------------------------------------------
   (def api-pattern
-    (p/compile '{:status ?status
-                 :data {:users [?first-user ?rest*]}}))
+    (p/compile '{:status status
+                 :data {:users [first-user ?rest*]}}))
 
   (p/query api-pattern
            {:status 200
@@ -449,8 +500,8 @@
   ;; Extracting nested data
   ;;-------------------------------------------------------------------
   (def config-pattern
-    (p/compile '{:database {:host ?host :port ?port}
-                 :features [?first-feature ?more*]}))
+    (p/compile '{:database {:host host :port port}
+                 :features [first-feature ?more*]}))
 
   (p/query config-pattern
            {:database {:host "localhost" :port 5432}
@@ -465,12 +516,12 @@
       (p/query '[ping] msg)
       :pong
 
-      (p/query '[echo ?text] msg)
-      (let [{:syms [text]} (p/query '[echo ?text] msg)]
+      (p/query '[echo text] msg)
+      (let [{:syms [text]} (p/query '[echo text] msg)]
         [:echoed text])
 
-      (p/query '[add ?a ?b] msg)
-      (let [{:syms [a b]} (p/query '[add ?a ?b] msg)]
+      (p/query '[add a b] msg)
+      (let [{:syms [a b]} (p/query '[add a b] msg)]
         [:sum (+ a b)])
 
       :else
@@ -485,7 +536,7 @@
   ;;-------------------------------------------------------------------
   ;; Simple constant folding
   (defn fold-add [expr]
-    (when-let [vars (p/query '[+ ?a ?b] expr)]
+    (when-let [vars (p/query '[+ a b] expr)]
       (let [{:syms [a b]} vars]
         (when (and (number? a) (number? b))
           (+ a b)))))
@@ -496,35 +547,43 @@
   )
 
 ;;=============================================================================
-;; PART 14: Tips and Best Practices
+;; PART 15: Tips and Best Practices
 ;;=============================================================================
 
 (comment
   ;; 1. Compile patterns that are used repeatedly
-  ;; BAD:  (map #(p/query '{:x ?x} %) data)  ; compiles N times
-  ;; GOOD: (let [p (p/compile '{:x ?x})] (map #(p/query p %) data))
+  ;; BAD:  (map #(p/query '{:x x} %) data)  ; compiles N times
+  ;; GOOD: (let [p (p/compile '{:x x})] (map #(p/query p %) data))
 
   ;; 2. Use match-result for validation with error messages
   (defn validate-user [user]
-    (let [result (p/match-result '{:name ?name :age ?age} user)]
+    (let [result (p/match-result '{:name name :age age} user)]
       (if (p/failure? result)
         {:error (:reason result) :path (:path result)}
         {:valid true :data (:vars result)})))
 
   ;; 3. Use lazy quantifiers (default) for head/tail patterns
-  (p/query '[?head ?tail*] [1 2 3])  ; head gets first, tail gets rest
+  (p/query '[head ?tail*] [1 2 3])  ; head gets first, tail gets rest
 
   ;; 4. Use greedy quantifiers for init/last patterns
-  (p/query '[?init*! ?last] [1 2 3])  ; init gets all but last
+  (p/query '[?init*! last] [1 2 3])  ; init gets all but last
 
   ;; 5. Sequence variable unification catches inconsistencies
-  (p/query '[?x ?y ?x] [1 2 1])  ;=> {x 1, y 2}
-  (p/query '[?x ?y ?x] [1 2 3])  ;=> nil (1 != 3)
+  (p/query '[x y x] [1 2 1])  ;=> {x 1, y 2}
+  (p/query '[x y x] [1 2 3])  ;=> nil (1 != 3)
 
-  ;; 6. Use ?_ to ignore values you don't need
-  (p/query '[?_ ?middle ?_] [1 2 3])  ;=> {middle 2}
+  ;; 6. Use _ to ignore values you don't need
+  (p/query '[_ middle _] [1 2 3])  ;=> {middle 2}
 
-  ;; 7. Use rewrite-rule for simple transformations
+  ;; 7. Use plet/pfn for pattern-based computation
+  (p/plet [{:x x :y y} {:x 3 :y 4}]
+          (Math/sqrt (+ (* x x) (* y y))))  ;=> 5.0
+
+  ;; 8. Use ''sym for literal symbol matching
+  (p/query '{:op ''add :args args} {:op 'add :args [1 2]})
+  ;=> {args [1 2]}
+
+  ;; 9. Use rewrite-rule for simple transformations
   (def normalize-let
     (p/rewrite-rule '[let [?binding ?value] ?body]
                     '(let* [?binding ?value] ?body))))
@@ -536,11 +595,15 @@
 ;; You've completed the flybot.pullable tutorial!
 ;;
 ;; Key takeaways:
+;; - Use plain symbols for variables: {x, name, age}
+;; - Use _ for wildcard (match anything, no binding)
+;; - Use ''sym for literal symbol matching
 ;; - Use p/query for extracting variable bindings
 ;; - Use p/compile for performance-critical code
-;; - Variable syntax: ?x, ?x?, ?x+, ?x*, ?x+!, ?x*!
+;; - Quantifier syntax: ?x?, ?x+, ?x*, ?x+!, ?x*!
 ;; - Map and vector patterns match structurally
 ;; - List-form (?x pred? [min max]? !?) for fine control
+;; - plet/pfn for pattern-based computation
 ;; - rewrite-rule for pattern-based transformations
 ;; - match-result for detailed error diagnostics
 ;;
