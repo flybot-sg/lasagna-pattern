@@ -51,6 +51,19 @@ bb clean
 
 **Pattern notation:** `(? :type args...)` forms, plus `?x`, `?x?`, `??x` for variable bindings
 
+## Design Principles
+
+**Rule Simplicity is Highest Priority**
+
+When implementing or modifying the pattern DSL:
+1. Prefer simple, flat argument structures over nested containers (e.g., inline pairs vs vector wrappers)
+2. Use matchers to parse syntax sugar patterns ("dogfooding" - eat your own dog food)
+3. Core matchers (`(? :type ...)`) are low-level primitives; syntax sugar should be built using them
+4. Avoid special-case handling; if a pattern needs prewalk protection, consider redesigning the syntax
+5. When choosing between implementation complexity and syntax flexibility, favor simplicity
+
+**Example:** `:match-case` uses inline pairs `(? :match-case :k1 ptn1 :k2 ptn2 sym)` instead of a vector wrapper, eliminating the need for special prewalk handling.
+
 ## Development Workflow
 
 - Use the `clojure-mcp` MCP server for REPL evaluation during development

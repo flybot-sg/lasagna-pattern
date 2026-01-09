@@ -53,7 +53,7 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
    - `:depth` - Tracks match progress (for "best failure" selection)
 3. **Matcher**: Function `(mr) → ValMatchResult | MatchFailure` that transforms/validates match results
 4. **Pattern**: Declarative DSL that compiles to matchers
-5. **IMatcher Protocol**: Provides `-query`, `-match-result`, `-match!` methods. Implemented by `CompiledMatcher` and extended to raw patterns (maps, vectors, lists)
+5. **IMatcher Protocol**: Provides `-query`, `-match-result`, `-match!` methods. Implemented by `CompiledMatcher` and extended to raw patterns (maps, vectors, lists, symbols)
 
 ### Matcher Primitives (in `sg.flybot.pullable.core`)
 
@@ -83,6 +83,13 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 ### Pattern DSL Syntax
 
 ```clojure
+;; Top-level patterns - symbols and literals work directly
+(query 'x 3)           ;=> {x 3}     ; symbol binds value
+(query 3 3)            ;=> {}        ; literal matches exactly
+(query 3 4)            ;=> nil       ; literal mismatch
+(query "hello" "hello") ;=> {}       ; string literal
+(query :foo :foo)      ;=> {}        ; keyword literal
+
 ;; Core form
 (? :type args...)
 
@@ -138,9 +145,33 @@ Regex patterns automatically match strings and return capture groups:
 (query ['?name #"\d+"] ["Alice" "42"])
 ;=> {name "Alice"}
 
-;; Bind regex groups with (? :regex pattern sym)
-(query (list '? :regex #"(\w+)@(\w+)" 'parts) "user@host")
+;; Bind regex groups using :var
+(query (list '? :var 'parts (list '? :regex #"(\w+)@(\w+)")) "user@host")
 ;=> {parts ["user@host" "user" "host"]}
+```
+
+### Match-case with Patterns
+
+`:match-case` supports patterns (like regex) that are automatically compiled.
+Uses inline key-pattern pairs (no vector wrapper):
+
+```clojure
+;; CLI option parser example - match first successful pattern
+(def opt-matcher
+  (compile '(? :match-case
+              :long-opt-with-value #"--([a-zA-Z]+)=(.+)"
+              :long-opt #"--([a-zA-Z]+)"
+              :short-opt #"-([a-zA-Z])"
+              opt-type)))
+
+(query opt-matcher "--name=Alice")
+;=> {opt-type :long-opt-with-value}  ; val is ["--name=Alice" "name" "Alice"]
+
+(query opt-matcher "--verbose")
+;=> {opt-type :long-opt}             ; val is ["--verbose" "verbose"]
+
+(query opt-matcher "-v")
+;=> {opt-type :short-opt}            ; val is ["-v" "v"]
 ```
 
 ### Lazy vs Greedy Matching
@@ -224,7 +255,7 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 
 | Type | Syntax | Description |
 |------|--------|-------------|
-| `:pred` | `(? :pred <pred> [<args>...])` | Match if (pred args... val) is truthy. Pred can be fn, map (key lookup), or set (membership) |
+| `:pred` | `(? :pred <pred>)` | Match if (pred val) is truthy. Pred can be fn, map (key lookup), or set (membership) |
 | `:val` | `(? :val <value>)` | Match exact value |
 | `:map` | `(? :map <map>)` | Match map structure |
 | `:seq` | `(? :seq [<matchers>...] [:min <n>] [:max <n>] [:as <sym>] [:greedy])` | Match sequence (optionally repeated) |
@@ -235,18 +266,12 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 | `:or` | `(? :or <matcher>...)` | Match first successful alternative |
 | `:not` | `(? :not <matcher>)` | Succeed if child matcher fails |
 | `:->` | `(? :-> <matcher>...)` | Chain matchers sequentially |
-| `:match-case` | `(? :match-case [<key> <matcher>...] [<sym>])` | Match first case, bind key to sym |
+| `:match-case` | `(? :match-case <key> <pattern>... [<sym>])` | Match first case, bind key to sym (patterns auto-compiled) |
 | `:filter` | `(? :filter <pred> [<sym>])` | Filter sequence elements by predicate (fn/map/set) |
 | `:first` | `(? :first <pred> [<sym>])` | Find first element matching predicate (fn/map/set) |
-| `:sub` | `(? :sub <ifn> [<matcher>])` | Apply ifn to transform matched value |
+| `:sub` | `(? :sub [<matcher>] <ifn>)` | Apply ifn to transform matched value |
 | `:update` | `(? :update <fn>)` | Apply fn to value (use :var to bind) |
-| `:regex` | `(? :regex <pattern> [<sym>])` | Match string against regex, return groups |
-
-**Variable References in Args:** Use `$var` syntax in `:pred` args to reference bound variables:
-```clojure
-;; (< value-of-a current-val)
-(? :pred < $a)
-```
+| `:regex` | `(? :regex <pattern>)` | Match string against regex, return groups |
 
 **Note:** Invalid patterns throw descriptive exceptions:
 ```clojure
@@ -294,17 +319,6 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 
 ;; Runtime variable substitution
 (p/substitute-vars '(+ ?x ?y) {'x 3 'y 5})  ;=> (+ 3 5)
-
-;; Pattern-based binding forms (plain symbol syntax)
-(p/plet [{:a a :b b} {:a 3 :b 4}] (* a b))  ;=> 12
-(p/plet [{:a 1} {:a 2}] :never)              ;=> MatchFailure
-
-(def f (p/pfn {:a a :b b} (+ a b)))
-(f {:a 3 :b 4})  ;=> 7
-
-;; With sequence patterns
-(def ex1 (p/pfn {:a a :b [b0 _ b2]} [(* a b2) (+ a b0)]))
-(ex1 {:a 3 :b [2 0 4]})  ;=> [12 5]
 
 ;; Low-level (sg.flybot.pullable.core)
 (ptn->matcher pattern) → matcher-fn
