@@ -217,6 +217,12 @@
   "returns the first matched element"
   (comp first filter))
 
+(defn regex?
+  "Returns true if x is a regex pattern"
+  [x]
+  #?(:clj (instance? java.util.regex.Pattern x)
+     :cljs (regexp? x)))
+
 (defn mor
   "a matcher tests `matchers` and returns the first success, or the best (deepest) failure"
   [matchers]
@@ -1018,25 +1024,44 @@
   (mnor ?kv-matchers ?sym))
 
 (defmatcher :filter "(? :filter <pred> [<sym>])"
-  (mzsubseq [(mzone (mvar 'pred (mpred fn?)))
+  (mzsubseq [(mzone (mvar 'pred (mpred ifn?)))
              (mzoption (mvar 'sym (mpred symbol?)))]
             nil)
   (mzfilter ?pred {:sym ?sym}))
 
 (defmatcher :first "(? :first <pred> [<sym>])"
-  (mzsubseq [(mzone (mvar 'pred (mpred fn?)))
+  (mzsubseq [(mzone (mvar 'pred (mpred ifn?)))
              (mzoption (mvar 'sym (mpred symbol?)))]
             nil)
   (mzfirst ?pred {:sym ?sym}))
 
 (defmatcher :sub "(? :sub <fn> [<matcher>])"
-  (mzsubseq [(mzone (mvar 'f (mpred fn?)))
+  (mzsubseq [(mzone (mvar 'f (mpred ifn?)))
              (mzoption (mvar 'child (mpred matcher-type)))]
             nil)
   (fn [vars]
     (let [f (get vars 'f)
           child (or (get vars 'child) wildcard)]
       (mchain [child (msub f)]))))
+
+(defmatcher :regex "(? :regex <pattern> [<sym>])"
+  (mzsubseq [(mzone (mvar 'pattern (mpred regex?)))
+             (mzoption (mvar 'sym (mpred symbol?)))]
+            nil)
+  (fn [vars]
+    (let [pattern (get vars 'pattern)
+          sym (get vars 'sym)]
+      (matcher :regex
+               (fn [mr]
+                 (let [v (:val mr)]
+                   (if-not (string? v)
+                     (fail (str "expected string for regex match, got " (type v)) :regex v)
+                     (if-let [result (re-matches pattern v)]
+                       ;; re-matches returns: string (no groups), or vector [full-match & groups]
+                       (let [groups (if (string? result) [result] result)]
+                         (cond-> (assoc mr :val groups)
+                           sym (-bind sym groups)))
+                       (fail (str "regex " pattern " did not match: " (pr-str v)) :regex v)))))))))
 
 (def ^:private matcher-specs
   "Unified specifications for each matcher type, populated by defmatcher."
@@ -1135,25 +1160,30 @@
                   (let [[min-len max-len] arg]
                     (recur rest-args (assoc result :min-len min-len :max-len max-len)))
 
-                  ;; Predicate function (actual fn or symbol to resolve)
-                  (fn? arg)
-                  (recur rest-args (assoc result :pred arg))
-
-                  ;; Predicate symbol - resolve it
+                  ;; Predicate symbol - resolve it first (before ifn? check)
                   (symbol? arg)
                   (if-let [resolved (resolve arg)]
                     (recur rest-args (assoc result :pred @resolved))
                     nil)  ;; Symbol doesn't resolve - invalid
 
+                  ;; Predicate: function, map (key lookup), or set (membership test)
+                  (or (fn? arg) (map? arg) (set? arg))
+                  (recur rest-args (assoc result :pred arg))
+
                   ;; Invalid - not a list-var
                   :else nil)))))))))
 
+(declare regex-matcher)
+
 (defn- scalar-element
-  "Convert a scalar value to a matcher"
+  "Convert a scalar value to a matcher.
+   Functions and sets become predicates (sets test membership)."
   [x]
   (cond
     (matcher-type x) x
     (fn? x) (mpred x)
+    (set? x) (mpred x)
+    (regex? x) (regex-matcher x)
     :else (mval x)))
 
 (defn ptn->matcher
@@ -1167,6 +1197,9 @@
      ;; then postwalk for everything else
      (let [prewalk-fn (fn [x]
                         (cond
+                          ;; Regex patterns become regex matchers
+                          (regex? x)
+                          (regex-matcher x)
                           ;; Check list-var pattern first (before children transform)
                           (parse-list-var x)
                           (let [{:keys [sym pred min-len max-len greedy?]} (parse-list-var x)
@@ -1212,6 +1245,24 @@
   (mchain [(mpred map?)
            (msub map-matcher)]))
 
+(defn- regex-matcher
+  "Create a regex matcher from a pattern"
+  [pattern]
+  (matcher :regex
+           (fn [mr]
+             (let [v (:val mr)]
+               (if-not (string? v)
+                 (fail (str "expected string for regex match, got " (type v)) :regex v)
+                 (if-let [result (re-matches pattern v)]
+                   (let [groups (if (string? result) [result] result)]
+                     (assoc mr :val groups))
+                   (fail (str "regex " pattern " did not match: " (pr-str v)) :regex v)))))))
+
+(def regex-rule
+  "Rule for matching regex patterns against strings"
+  (mchain [(mpred regex?)
+           (msub regex-matcher)]))
+
 (defn- repeat-matcher
   "Create a repeating matcher for + and * quantifiers.
    Default is lazy (match minimum), use greedy? true to match maximum."
@@ -1220,8 +1271,8 @@
   (mzrepeat wildcard min-len {:max-len nil :greedy? greedy? :sym sym}))
 
 (def core-rules
-  "Default rules for pattern compilation: vector, map, and core forms"
-  [vector-rule map-rule core-rule])
+  "Default rules for pattern compilation: vector, map, regex, and core forms"
+  [vector-rule map-rule regex-rule core-rule])
 
 ^:rct/test
 (comment
@@ -1238,6 +1289,14 @@
   ((ptn->matcher (list '? :seq [(list '? :one (mvar 'a wildcard))
                                 (list '? :one (list '? :pred < '$a))])) (vmr [2 5])) ;=>>
   {:val [2 5] :vars '{a 2}}
+  ;; set as predicate - membership test (value in set)
+  ((rule-of core-rule (list '? :pred #{:a :b :c})) (vmr :a)) ;=>> {:val :a}
+  ;; set as predicate - failure case (value not in set)
+  ((rule-of core-rule (list '? :pred #{:a :b :c})) (vmr :d)) ;=>> failure?
+  ;; map as predicate - key lookup returns truthy
+  ((rule-of core-rule (list '? :pred {:a 1 :b 2})) (vmr :a)) ;=>> {:val :a}
+  ;; map as predicate - key lookup returns falsy (nil)
+  ((rule-of core-rule (list '? :pred {:a 1 :b 2})) (vmr :c)) ;=>> failure?
 
   ;;-------------------------------------------------------------------
   ;; val - exact value matching
@@ -1281,6 +1340,9 @@
   ;;-------------------------------------------------------------------
   ((ptn->matcher (list '? :seq [(list '? :filter even? 'evens)])) (vmr [1 2 3 4 5 6])) ;=>>
   {:vars '{evens [2 4 6]}}
+  ;; filter with set predicate - collects elements in set
+  ((ptn->matcher (list '? :seq [(list '? :filter #{:a :b} 'matched)])) (vmr [:a :c :b :d])) ;=>>
+  {:vars '{matched [:a :b]}}
 
   ;;-------------------------------------------------------------------
   ;; first - find first matching element
@@ -1290,6 +1352,9 @@
   {:val 6 :vars '{first-even 6}}
   ;; fails when no element matches
   ((ptn->matcher (list '? :seq [(list '? :first neg?)])) (vmr [1 2 3])) ;=>> failure?
+  ;; first with set predicate - finds first element in set
+  ((ptn->matcher (list '? :seq [(list '? :first #{:x :y} 'found)])) (vmr [:a :b :x :y])) ;=>>
+  {:val :x :vars '{found :x}}
 
   ;;-------------------------------------------------------------------
   ;; sub - value transformation
@@ -1308,6 +1373,35 @@
   ((rule-of core-rule (list '? :not (mpred even?))) (vmr 3)) ;=>> {:val 3}
   ;; fails when child succeeds
   ((rule-of core-rule (list '? :not (mpred even?))) (vmr 4)) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; regex - regex pattern matching (strings only)
+  ;;-------------------------------------------------------------------
+  ;; basic match without groups - returns full match in vector
+  ((rule-of core-rule (list '? :regex #"hello")) (vmr "hello")) ;=>> {:val ["hello"]}
+  ;; match with capture groups - returns [full-match group1 group2 ...]
+  ((rule-of core-rule (list '? :regex #"(\d+)-(\d+)")) (vmr "123-456")) ;=>> {:val ["123-456" "123" "456"]}
+  ;; bind groups to symbol
+  ((rule-of core-rule (list '? :regex #"(\w+)@(\w+)" 'groups)) (vmr "user@host")) ;=>>
+  {:val ["user@host" "user" "host"] :vars '{groups ["user@host" "user" "host"]}}
+  ;; fails on non-string input
+  ((rule-of core-rule (list '? :regex #"\d+")) (vmr 123)) ;=>> failure?
+  ;; fails when pattern doesn't match
+  ((rule-of core-rule (list '? :regex #"^\d+$")) (vmr "abc")) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; regex-rule - automatic regex pattern conversion
+  ;;-------------------------------------------------------------------
+  ;; regex literal automatically becomes matcher
+  ((ptn->matcher #"hello" core-rules) (vmr "hello")) ;=>> {:val ["hello"]}
+  ;; with capture groups
+  ((ptn->matcher #"(\d+)-(\d+)" core-rules) (vmr "12-34")) ;=>> {:val ["12-34" "12" "34"]}
+  ;; regex in map pattern (transforms value to groups)
+  ((ptn->matcher {:name #"(\w+) (\w+)"} core-rules) (vmr {:name "John Doe"})) ;=>> {:val {:name ["John Doe" "John" "Doe"]}}
+  ;; regex in vector pattern with variable binding
+  (query '[?first ?second] ["hello" "123"]) ;=>> '{first "hello" second "123"}
+  ;; regex validates string in vector (use vector literal, not quote)
+  (query ['?x #"\d+"] ["hello" "123"]) ;=>> '{x "hello"}
 
   ;;-------------------------------------------------------------------
   ;; repeat - repeated element matching
@@ -1508,6 +1602,12 @@
   ;; with predicate succeeds or fails based on predicate
   (query '[(?x even?)] [4]) ;=>> '{x 4}
   (query '[(?x even?)] [3]) ;=> nil
+  ;; with set as predicate - membership test
+  (query '[(?x #{:a :b :c})] [:b]) ;=>> '{x :b}
+  (query '[(?x #{:a :b :c})] [:d]) ;=> nil
+  ;; with map as predicate - key lookup
+  (query '[(?x {:valid true :invalid false})] [:valid]) ;=>> '{x :valid}
+  (query '[(?x {:valid true :invalid false})] [:unknown]) ;=> nil
   ;; with length range [min max]
   (query '[(?x [2 4])] [1 2 3]) ;=>> '{x (1 2 3)}
   (query '[(?x [2 4])] [1]) ;=> nil
@@ -1533,4 +1633,16 @@
   (match-result cm "not a map") ;=>> failure?
   ;; match! - returns vars (throws on failure)
   (match! cm {:a 42}) ;=>> '{a 42}
+
+  ;;-------------------------------------------------------------------
+  ;; Sets as predicates in patterns (scalar-element)
+  ;;-------------------------------------------------------------------
+  ;; set in map pattern - tests membership
+  (query {:status #{:active :pending}} {:status :active}) ;=>> {}
+  (query {:status #{:active :pending}} {:status :inactive}) ;=> nil
+  ;; set in vector pattern - tests membership
+  (query [#{:a :b} '?x] [:a 42]) ;=>> '{x 42}
+  (query [#{:a :b} '?x] [:c 42]) ;=> nil
+  ;; set with variable binding in map
+  (query '{:type ?t :status #{:ok :warn}} {:type "test" :status :ok}) ;=>> '{t "test"}
   )
