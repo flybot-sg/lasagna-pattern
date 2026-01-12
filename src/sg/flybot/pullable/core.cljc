@@ -7,7 +7,6 @@
    - Pattern DSL and compilation (ptn->matcher, defmatcher, core-rules)"
   (:require
    [clojure.pprint :refer [cl-format]]
-   [clojure.walk :as walk]
    [clojure.zip :as zip]))
 
 ;;=============================================================================
@@ -640,20 +639,14 @@
        :quantifier (case suffix "?" :optional "+" :one-or-more "*" :zero-or-more)
        :greedy? (= "!" greedy)})))
 
-(defn template-var?
-  "Check if a symbol should be substituted in output templates.
-   Returns the symbol itself if it's a valid template variable.
-   Excludes special symbols, special forms, and symbols that resolve to vars."
-  [v]
-  (when (and (symbol? v)
-             (not= '_ v)
-             (not= '? v)
-             (not (#{'if 'do 'let 'fn 'quote 'var 'def 'loop 'recur
-                     'throw 'try 'catch 'finally 'new 'set!} v))
-             ;; Don't substitute symbols that resolve to existing vars (like +, -, etc.)
-             #?(:clj (not (resolve v))
-                :cljs true))
-    v))
+(defn- quantifier->min-max
+  "Convert a quantifier keyword to [min max] where max=0 means unbounded.
+   Returns nil for :optional (handled differently)."
+  [quantifier]
+  (case quantifier
+    :zero-or-more [0 0]
+    :one-or-more [1 0]
+    nil))
 
 ^:rct/test
 (comment
@@ -671,104 +664,6 @@
   (parse-matching-var '_*) ;=>> {:sym nil :quantifier :zero-or-more :greedy? false}
   ;; parse-matching-var returns nil for plain symbols without quantifier
   (parse-matching-var 'x)) ;=> nil)
-
-(defmacro substitute
-  "Returns a function that substitutes template vars in `form`
-   with values from `:vars` in the match result, then evaluates the form.
-
-   Example:
-     ((substitute '(+ 5 x y)) {:vars {'x 3 'y 0}}) ;=> 8"
-  [form]
-  (let [actual-form (if (and (seq? form) (= 'quote (first form)))
-                      (second form)
-                      form)]
-    `(fn [{:keys [~'vars]}]
-       ~(walk/postwalk
-         (fn [x]
-           (if-let [sym (template-var? x)]
-             `(get ~'vars '~sym)
-             x))
-         actual-form))))
-
-(defn- build-form
-  "Build code that constructs a form at runtime with var substitutions.
-   Returns code that builds the data structure without evaluating it."
-  [form vars-sym]
-  (cond
-    ;; Template variable - substitute with value from vars
-    (template-var? form)
-    (let [sym (template-var? form)]
-      `(get ~vars-sym '~sym))
-
-    ;; List - build with list*
-    (list? form)
-    `(list ~@(map #(build-form % vars-sym) form))
-
-    ;; Vector - build with vector
-    (vector? form)
-    `(vector ~@(map #(build-form % vars-sym) form))
-
-    ;; Map - build with hash-map
-    (map? form)
-    `(hash-map ~@(mapcat (fn [[k v]]
-                           [(build-form k vars-sym)
-                            (build-form v vars-sym)])
-                         form))
-
-    ;; Set - build with hash-set
-    (set? form)
-    `(hash-set ~@(map #(build-form % vars-sym) form))
-
-    ;; Other values - quote them
-    :else
-    `'~form))
-
-(defmacro substitute-form
-  "Returns a function that substitutes template vars in `form`
-   with values from `:vars` in the match result, returning the form without evaluating.
-
-   Example:
-     ((substitute-form '(* 2 x)) {:vars {'x 5}}) ;=> (* 2 5)"
-  [form]
-  (let [actual-form (if (and (seq? form) (= 'quote (first form)))
-                      (second form)
-                      form)
-        vars-sym (gensym "vars")]
-    `(fn [{:keys [~'vars]}]
-       (let [~vars-sym ~'vars]
-         ~(build-form actual-form vars-sym)))))
-
-(defn substitute-vars
-  "Runtime substitution: walk `form` and replace template symbols with values from `vars` map.
-   Unlike `substitute-form` (a macro), this works with dynamic patterns at runtime.
-
-   Example:
-     (substitute-vars '(+ x x) {'x 5}) ;=> (+ 5 5)"
-  [form vars]
-  (walk/postwalk
-   (fn [x]
-     (if-let [sym (template-var? x)]
-       (get vars sym x)
-       x))
-   form))
-
-^:rct/test
-(comment
-  ;; substitute evaluates form with vars replaced
-  ((substitute '(+ 5 x y)) {:vars {'x 3 'y 0}}) ;=>> 8
-  ;; substitute nested expressions
-  ((substitute '(* a (+ b 1))) {:vars {'a 2 'b 3}}) ;=>> 8
-  ;; substitute works with map literals
-  ((substitute '{:result v}) {:vars {'v 42}}) ;=>> {:result 42}
-  ;; substitute-form returns unevaluated form (data construction)
-  ((substitute-form '(* 2 x)) {:vars {'x 5}}) ;=>> '(* 2 5)
-  ((substitute-form '[a b c]) {:vars {'a 1 'b 2 'c 3}}) ;=>> [1 2 3]
-  ((substitute-form '{:sum x :product y}) {:vars {'x 10 'y 20}}) ;=>> {:sum 10 :product 20}
-  ;; substitute-vars (runtime) replaces vars without evaluating
-  (substitute-vars '(+ x x) {'x 5}) ;=>> '(+ 5 5)
-  (substitute-vars '{:a a :b b} {'a 1 'b 2}) ;=>> {:a 1 :b 2}
-  ;; substitute-vars leaves unbound vars as-is
-  (substitute-vars '(f x y) {'x 10})) ;=>> '(f 10 y)
 
 ;;=============================================================================
 ;; SECTION 4: Pattern DSL and Compilation
@@ -1051,19 +946,29 @@
 (defn- parse-list-var
   "Parse a list-form variable like (x even? [2 4] :update inc !).
    Fixed order: (sym pred? [min max]? :update fn? !?)
+   Also handles quantifier suffixes: (x* fn?) is equivalent to (x fn? [0 0]).
    Returns nil if not a valid list-var, or the parsed vars map."
   [x]
   (when (and (list? x) (seq x))
     (let [result (list-var-matcher (vmr (seq x)))]
       (when-not (failure? result)
         (let [{:syms [sym pred len update-fn greedy]} (:vars result)
-              [min-len max-len] len]
-          {:sym (when (not= '_ sym) sym)
+              ;; Check if symbol has quantifier suffix (x*, x+, x?)
+              quantified (when sym (parse-matching-var sym))
+              ;; Extract base symbol and quantifier-derived min/max
+              base-sym (if quantified (:sym quantified) sym)
+              [quant-min quant-max] (quantifier->min-max (:quantifier quantified))
+              quant-greedy? (:greedy? quantified)
+              ;; Explicit [min max] overrides quantifier-derived values
+              [explicit-min explicit-max] len
+              final-min (or explicit-min quant-min)
+              final-max (or explicit-max quant-max)]
+          {:sym (when (and base-sym (not= '_ base-sym)) base-sym)
            :pred pred
            :update-fn update-fn
-           :min-len min-len
-           :max-len max-len
-           :greedy? (some? greedy)})))))
+           :min-len final-min
+           :max-len final-max
+           :greedy? (or (some? greedy) quant-greedy?)})))))
 
 (declare regex-matcher)
 
@@ -1160,13 +1065,14 @@
 
                  ;; Matching-var symbols like x*, x+, x? (no recursion needed)
                  (parse-matching-var x)
-                 (let [{:keys [sym quantifier greedy?]} (parse-matching-var x)]
-                   (case quantifier
-                     :one-or-more  (repeat-matcher sym 1 greedy?)
-                     :zero-or-more (repeat-matcher sym 0 greedy?)
-                     :optional     (cond->> wildcard
-                                     sym (mvar sym)
-                                     true mzoption)))
+                 (let [{:keys [sym quantifier greedy?]} (parse-matching-var x)
+                       [min-len _] (quantifier->min-max quantifier)]
+                   (if min-len
+                     (repeat-matcher sym min-len greedy?)
+                     ;; :optional - single element, not a repeat
+                     (cond->> wildcard
+                       sym (mvar sym)
+                       true mzoption)))
 
                  ;; Collections: recurse into children first, then apply rules
                  (map? x)

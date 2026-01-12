@@ -370,64 +370,10 @@
 
   (swap-args '(f 1 2))
   ;=> (f 2 1)
-
-  ;;-------------------------------------------------------------------
-  ;; substitute-vars - runtime variable substitution
-  ;;-------------------------------------------------------------------
-  ;; Useful for building forms dynamically
-  (p/substitute-vars '(+ ?x ?y) '{x 3 y 5})
-  ;=> (+ 3 5)
-
-  (p/substitute-vars '{:name ?name :age ?age} '{name "Alice" age 30})
-  ;=> {:name "Alice", :age 30}
   )
 
 ;;=============================================================================
-;; PART 12: Pattern-Based Binding Forms
-;;=============================================================================
-;;
-;; Use plet and pfn for pattern-based destructuring with evaluation.
-
-(comment
-  ;;-------------------------------------------------------------------
-  ;; plet - pattern-based let binding
-  ;;-------------------------------------------------------------------
-  (p/plet [{:a a :b b} {:a 3 :b 4}]
-          (* a b))
-  ;=> 12
-
-  (p/plet [{:name name :age age} {:name "Alice" :age 30}]
-          (str name " is " age " years old"))
-  ;=> "Alice is 30 years old"
-
-  ;; Nested patterns work
-  (p/plet [{:user {:name name}} {:user {:name "Bob"}}]
-          (str "Hello, " name))
-  ;=> "Hello, Bob"
-
-  ;; Returns MatchFailure on mismatch (not nil, not throws)
-  (p/plet [{:required 5} {:required 3}]
-          :never-reached)
-  ;=> #MatchFailure{...}
-
-  ;;-------------------------------------------------------------------
-  ;; pfn - pattern-based function
-  ;;-------------------------------------------------------------------
-  (def add-coords (p/pfn {:x x :y y} (+ x y)))
-  (add-coords {:x 3 :y 4})
-  ;=> 7
-
-  (def process (p/pfn {:a a :b [b0 _ b2]} [(* a b2) (+ a b0)]))
-  (process {:a 3 :b [2 0 4]})
-  ;=> [12 5]
-
-  ;; Returns MatchFailure on mismatch
-  (add-coords {:x 3})  ; missing :y
-  ;=> #MatchFailure{...}
-  )
-
-;;=============================================================================
-;; PART 13: Error Handling and Debugging
+;; PART 12: Error Handling and Debugging
 ;;=============================================================================
 ;;
 ;; When patterns don't match, get detailed diagnostics.

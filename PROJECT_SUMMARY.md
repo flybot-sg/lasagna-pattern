@@ -74,9 +74,6 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 | `msub` | Value substitution |
 | `mf` | Full match-result transformation |
 | `wildcard` | Match anything |
-| `substitute` | Macro: transform match result using pattern vars (evaluates result) |
-| `substitute-form` | Macro: substitute vars and return unevaluated form |
-| `substitute-vars` | Runtime var substitution (works with dynamic patterns) |
 | `mchain` | Chain matchers sequentially |
 | `mzcollect` | Collect matching elements into a binding |
 
@@ -317,17 +314,10 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 (double->add '(* 2 5))      ;=> (+ 5 5)
 (double->add '(+ 1 2))      ;=> nil (no match)
 
-;; Runtime variable substitution
-(p/substitute-vars '(+ ?x ?y) {'x 3 'y 5})  ;=> (+ 3 5)
-
 ;; Low-level (sg.flybot.pullable.core)
 (ptn->matcher pattern) → matcher-fn
 (vmr value)            → ValMatchResult (with :vars defaulting to {})
 ;; Note: Sequence matching preserves collection types (vectors stay vectors, lists stay lists)
-
-;; Transformation macros
-((substitute '(+ ?x ?y)) {:vars {'x 3 'y 5}})  ;=> 8  (evaluates result)
-((substitute-form '(* 2 ?x)) {:vars {'x 5}})   ;=> (* 2 5)  (returns unevaluated form)
 ```
 
 ## Testing
