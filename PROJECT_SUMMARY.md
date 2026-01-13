@@ -38,9 +38,19 @@ pull2/
 
 ### Pattern System Flow
 
+Pattern compilation happens in two phases:
+
 ```
-Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
+Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matcher function
 ```
+
+**Phase 1 - Outer (`ptn->core`)**: Rewrites syntax sugar into normalized core `(? :type ...)` patterns
+- `'[x]` → `'(? :seq [(? :one (? :var x (? :any)))])`
+- `'x` → `'(? :var x (? :any))`
+- `#"\d+"` → `'(? :regex #"\d+")`
+- `even?` → `'(? :pred even?)`
+
+**Phase 2 - Inner (`core->matcher`)**: Compiles core patterns to matchers via defmatcher specs
 
 ### Key Abstractions
 
@@ -76,6 +86,15 @@ Pattern (Clojure data) → ptn->matcher → matcher function → ValMatchResult
 | `wildcard` | Match anything |
 | `mchain` | Chain matchers sequentially |
 | `mzcollect` | Collect matching elements into a binding |
+
+### Compilation Functions (in `sg.flybot.pullable.core`)
+
+| Function | Purpose |
+|----------|---------|
+| `ptn->matcher` | Main entry point: compiles pattern to matcher (chains ptn->core + core->matcher) |
+| `ptn->core` | Phase 1: rewrites syntax sugar to core `(? :type ...)` patterns |
+| `core->matcher` | Phase 2: compiles core patterns to matchers via defmatcher specs |
+| `core-rule` | Matcher that validates and builds core `(? :type ...)` patterns |
 
 ### Pattern DSL Syntax
 
@@ -128,14 +147,14 @@ Regex patterns automatically match strings and return capture groups:
 
 ```clojure
 ;; Basic regex - returns [full-match] or [full-match group1 group2 ...]
-((ptn->matcher #"hello" core-rules) (vmr "hello"))
+((ptn->matcher #"hello") (vmr "hello"))
 ;=> {:val ["hello"]}
 
-((ptn->matcher #"(\d+)-(\d+)" core-rules) (vmr "12-34"))
+((ptn->matcher #"(\d+)-(\d+)") (vmr "12-34"))
 ;=> {:val ["12-34" "12" "34"]}
 
 ;; Regex in map - transforms matched value to groups
-((ptn->matcher {:phone #"(\d{3})-(\d{4})"} core-rules) (vmr {:phone "555-1234"}))
+((ptn->matcher {:phone #"(\d{3})-(\d{4})"}) (vmr {:phone "555-1234"}))
 ;=> {:val {:phone ["555-1234" "555" "1234"]}}
 
 ;; Regex in vector - validates string element
@@ -252,6 +271,7 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 
 | Type | Syntax | Description |
 |------|--------|-------------|
+| `:any` | `(? :any)` | Match anything (wildcard) |
 | `:pred` | `(? :pred <pred>)` | Match if (pred val) is truthy. Pred can be fn, map (key lookup), or set (membership) |
 | `:val` | `(? :val <value>)` | Match exact value |
 | `:map` | `(? :map <map>)` | Match map structure |
