@@ -430,12 +430,12 @@
 
 (def mterm
   "a matcher tests if it is the end of a seq"
-  (matcher :term
+  (matcher :subseq
            (fn [zmr]
              (let [zip (:val zmr)]
                (if (zip/end? zip)
                  zmr
-                 (fail (str "expected end of sequence, but found: " (pr-str (zip/node zip))) :term (zip/node zip)))))))
+                 (fail (str "expected end of sequence, but found: " (pr-str (zip/node zip))) :subseq (zip/node zip)))))))
 
 ^:rct/test
 (comment
@@ -491,7 +491,7 @@
   (let [start-z (:val zmr)]
     (loop [[len & more] lengths]
       (if (nil? len)
-        (fail "no length worked" :repeat items)
+        (fail "no length worked" :subseq items)
         (let [z-at-len (nth (iterate zip-advance start-z) len)
               attempt (nxt-matcher (assoc zmr :val z-at-len))]
           (if (failure? attempt)
@@ -512,13 +512,13 @@
        (vary-meta zc assoc
                   ::optional (fn [_c nxt]
                                (let [nxt-matcher (mzsubseq nxt nil)]
-                                 (matcher :repeat
+                                 (matcher :subseq
                                           (fn [zmr]
                                             ;; Collect all matching elements up to max-len (nil = unbounded)
                                             (let [[items _final-z] (try-match-elements child zmr max-len)
                                                   item-count (count items)]
                                               (if (< item-count min-len)
-                                                (fail (str "need at least " min-len " elements, got " item-count) :repeat items)
+                                                (fail (str "need at least " min-len " elements, got " item-count) :subseq items)
                                                 ;; Generate length sequence based on greedy vs lazy
                                                 (let [lengths (if greedy?
                                                                 (range item-count (dec min-len) -1)
@@ -664,12 +664,16 @@
    type - keyword like :pred, :val, etc.
    args - human-readable argument format string
    parse - matcher that validates and extracts arguments
-   make - a (fn [vars] ...) that creates the matcher from parsed vars"
-  [type args parse make]
-  `(swap! matcher-specs* assoc ~type
-          {:args ~args
-           :parse ~parse
-           :make ~make}))
+   make - a (fn [vars] ...) that creates the matcher from parsed vars
+   opts - optional map with :subseq? true for subsequence matchers"
+  ([type args parse make]
+   `(defmatcher ~type ~args ~parse ~make {}))
+  ([type args parse make opts]
+   `(swap! matcher-specs* assoc ~type
+           (merge {:args ~args
+                   :parse ~parse
+                   :make ~make}
+                  ~opts))))
 
 (defn- parse-keyword-args
   "Parse keyword arguments from a flat sequence.
@@ -707,7 +711,8 @@
 
 (defmatcher :optional "(? :optional <matcher>)"
   (mzone (mvar 'child (mpred matcher-type)))
-  (fn [vars] (mzoption (get vars 'child))))
+  (fn [vars] (mzoption (get vars 'child)))
+  {:subseq? true})
 
 (defmatcher :repeat "(? :repeat <matcher> :min <n> [:max <n>] [:as <sym>] [:greedy])"
   ;; Collect matcher and all remaining args
@@ -722,7 +727,8 @@
           max-len (:max kw-args)
           sym (:as kw-args)
           greedy? (contains? kw-args :greedy)]
-      (mzrepeat child min-len {:max-len max-len :greedy? greedy? :sym sym}))))
+      (mzrepeat child min-len {:max-len max-len :greedy? greedy? :sym sym})))
+  {:subseq? true})
 
 (defmatcher :seq "(? :seq [<matchers>...])"
   (mzone (mvar 'children (mpred #(every? matcher-type %))))
@@ -731,7 +737,8 @@
 
 (defmatcher :term "(? :term)"
   mterm
-  (fn [_vars] mterm))
+  (fn [_vars] mterm)
+  {:subseq? true})
 
 (defmatcher :var "(? :var <sym> <matcher>)"
   (mzsubseq [(mzone (mvar 'sym (mpred symbol?)))
@@ -780,13 +787,15 @@
   (mzsubseq [(mzone (mvar 'pred (mpred ifn?)))
              (mzoption (mvar 'sym (mpred symbol?)))]
             nil)
-  (fn [vars] (mzfilter (get vars 'pred) {:sym (get vars 'sym)})))
+  (fn [vars] (mzfilter (get vars 'pred) {:sym (get vars 'sym)}))
+  {:subseq? true})
 
 (defmatcher :first "(? :first <pred> [<sym>])"
   (mzsubseq [(mzone (mvar 'pred (mpred ifn?)))
              (mzoption (mvar 'sym (mpred symbol?)))]
             nil)
-  (fn [vars] (mzfirst (get vars 'pred) {:sym (get vars 'sym)})))
+  (fn [vars] (mzfirst (get vars 'pred) {:sym (get vars 'sym)}))
+  {:subseq? true})
 
 (defmatcher :sub "(? :sub [<matcher>] <fn>)"
   (mzsubseq [(mzoption (mvar 'child (mpred matcher-type)))
@@ -938,13 +947,14 @@
     x))
 
 (defn- subseq-type?
-  "Check if pattern type is a subsequence matcher (not wrapped in :one)"
+  "Check if pattern type is a subsequence matcher (not wrapped in :one).
+   Looks up :subseq? flag from the defmatcher spec."
   [t]
-  (#{:optional :repeat :filter :first :term} t))
+  (:subseq? (get @matcher-specs* t)))
 
 (defn- wrap-for-seq
   "Wrap a core pattern for use in sequence context.
-   Subsequence patterns (:optional, :repeat, :filter, :first) are not wrapped.
+   Subsequence patterns (those with :subseq? true in spec) are not wrapped.
    Other patterns get wrapped in (? :one ...)"
   [ptn]
   (if (and (core-pattern? ptn) (subseq-type? (second ptn)))
