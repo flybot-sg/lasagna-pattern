@@ -90,8 +90,7 @@
 
 ^:rct/test
 (comment
+  ;; simple symbol binding
   ((compile 'x) 3) ;=>> {:vars {'x 3}}
-  ((compile '[1 _ 3 x [5 y]]) [1 2 3 4 [5 6]]) ;=>> {:vars '{x 4 y 6}}
-  ((compile {:a (list 'a even? inc) :b {:c 'a}}) {:a 0 :b {:c 1}}) ;=>> {:vars '{a 1}}
-  ((compile [(list 'x* fn? #(% 3))]) [inc dec]) ;=>>
-  {:vars '{x [4 2]}})
+  ;; nested structure with wildcards
+  ((compile '[1 _ 3 x [5 y]]) [1 2 3 4 [5 6]])) ;=>> {:vars '{x 4 y 6}})

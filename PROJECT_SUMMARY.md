@@ -63,7 +63,6 @@ Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matc
    - `:depth` - Tracks match progress (for "best failure" selection)
 3. **Matcher**: Function `(mr) → ValMatchResult | MatchFailure` that transforms/validates match results
 4. **Pattern**: Declarative DSL that compiles to matchers
-5. **IMatcher Protocol**: Provides `-query`, `-match-result`, `-match!` methods. Implemented by `CompiledMatcher` and extended to raw patterns (maps, vectors, lists, symbols)
 
 ### Matcher Primitives (in `sg.flybot.pullable.core`)
 
@@ -122,13 +121,6 @@ _       ; wildcard (match anything, no binding)
 ?x+!    ; one or more (greedy - matches maximum)
 ?x*!    ; zero or more (greedy - matches maximum)
 ?_      ; wildcard (no binding)
-
-;; Variable bindings (list form) - more control
-(?x)              ; bind single value to x
-(?x even?)        ; bind single value with predicate
-(?x [2 4])        ; bind 2-4 elements
-(?x [1 0])        ; bind 1+ elements (0 = unbounded)
-(?x even? [2 3] !) ; greedy, 2-3 elements with predicate
 
 ;; Examples
 {:a x :b y}                   ; bind :a to x, :b to y (plain symbols)
@@ -205,41 +197,6 @@ Add `!` suffix for **greedy** matching - matches the maximum possible.
 (query '[?a+! ?b+] [1 2 3])   ;=> {a (1 2) b (3)}
 ```
 
-### List-form Named Variables
-
-For more control over matching, use the list form: `(?x pred? [min max]? !?)` or `(?x :update fn)`
-
-| Form | Description |
-|------|-------------|
-| `(?x)` | Single value, bind to x |
-| `(?x even?)` | Single value with predicate |
-| `(?x :update inc)` | Apply fn, bind result to x |
-| `(?x [2 4])` | 2-4 elements (lazy) |
-| `(?x [1 0])` | 1+ elements (max=0 means unbounded) |
-| `(?x even? [2 3])` | 2-3 elements, each must satisfy predicate |
-| `(?x [0 5] !)` | 0-5 elements (greedy) |
-
-```clojure
-;; Single value with predicate
-(query '[(?x even?)] [4])          ;=> {x 4}
-(query '[(?x even?)] [3])          ;=> nil
-
-;; Update and bind result
-(transform '{:a (?x :update inc)} {:a 5})
-;=> {:result {:a 6} :vars {x 6}}
-
-;; Subsequence with length range
-(query '[(?x [2 4])] [1 2 3])      ;=> {x (1 2 3)}
-(query '[(?x [2 4])] [1])          ;=> nil (too short)
-
-;; With predicate and length
-(query '[(?x even? [2 3])] [2 4 6]) ;=> {x (2 4 6)}
-
-;; Lazy vs greedy
-(query '[(?x [0 5]) ?y*] [1 2 3])   ;=> {x () y (1 2 3)}    ; lazy
-(query '[(?x [0 5] !) ?y*] [1 2 3]) ;=> {x (1 2 3) y ()}    ; greedy
-```
-
 ### Maps and Sets as Predicates
 
 Maps and sets can be used as predicates anywhere a predicate function is accepted:
@@ -259,9 +216,6 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 (query {:status #{:active :pending}} {:status :active})  ;=> {}
 (query {:status #{:active :pending}} {:status :closed})  ;=> nil
 
-;; Set in list-form variable
-(query '[(?x #{:a :b :c})] [:b])  ;=> {x :b}
-
 ;; Set in :filter - collect matching elements
 (query (list '? :seq [(list '? :filter #{:a :b} 'matched)]) [:a :c :b :d])
 ;=> {matched [:a :b]}
@@ -275,7 +229,8 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 | `:pred` | `(? :pred <pred>)` | Match if (pred val) is truthy. Pred can be fn, map (key lookup), or set (membership) |
 | `:val` | `(? :val <value>)` | Match exact value |
 | `:map` | `(? :map <map>)` | Match map structure |
-| `:seq` | `(? :seq [<matchers>...] [:min <n>] [:max <n>] [:as <sym>] [:greedy])` | Match sequence (optionally repeated) |
+| `:seq` | `(? :seq [<matchers>...])` | Match sequence of matchers |
+| `:term` | `(? :term)` | Assert end of sequence (no more elements) |
 | `:var` | `(? :var <sym> <matcher>)` | Bind match to variable |
 | `:one` | `(? :one <matcher>)` | Match single element in seq |
 | `:optional` | `(? :optional <matcher>)` | Optional element in seq |
@@ -319,10 +274,6 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 ;; Transform: returns both updated data and bindings
 (p/transform '{:count (? :update inc)} {:count 5 :name "test"})
 ;=> {:result {:count 6 :name "test"} :vars {}}
-
-;; Shorthand: (?x :update fn) combines binding and update
-(p/transform '{:x (?n :update inc)} {:x 10})
-;=> {:result {:x 11} :vars {n 11}}
 
 (p/transform! '{:x (? :pred even?)} {:x 3})  ;=> throws on mismatch
 
