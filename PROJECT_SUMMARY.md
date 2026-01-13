@@ -45,7 +45,7 @@ Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matc
 ```
 
 **Phase 1 - Outer (`ptn->core`)**: Rewrites syntax sugar into normalized core `(? :type ...)` patterns
-- `'[x]` → `'(? :seq [(? :one (? :var x (? :any)))])`
+- `'[x]` → `'(? :seq [(? :one (? :var x (? :any))) (? :term)])`
 - `'x` → `'(? :var x (? :any))`
 - `#"\d+"` → `'(? :regex #"\d+")`
 - `even?` → `'(? :pred even?)`
@@ -85,6 +85,7 @@ Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matc
 | `wildcard` | Match anything |
 | `mchain` | Chain matchers sequentially |
 | `mzcollect` | Collect matching elements into a binding |
+| `mterm` | Assert end of sequence |
 
 ### Compilation Functions (in `sg.flybot.pullable.core`)
 
@@ -113,14 +114,13 @@ x       ; bind value to 'x
 _       ; wildcard (match anything, no binding)
 ''foo   ; match literal symbol 'foo
 
-;; Variable bindings - ?x syntax (also supported)
-?x      ; bind to 'x
-?x?     ; optional (0 or 1)
-?x+     ; one or more (lazy - matches minimum)
-?x*     ; zero or more (lazy - matches minimum)
-?x+!    ; one or more (greedy - matches maximum)
-?x*!    ; zero or more (greedy - matches maximum)
-?_      ; wildcard (no binding)
+;; Quantified variable bindings (in sequences)
+x?      ; optional (0 or 1)
+x+      ; one or more (lazy - matches minimum)
+x*      ; zero or more (lazy - matches minimum)
+x+!     ; one or more (greedy - matches maximum)
+x*!     ; zero or more (greedy - matches maximum)
+_*      ; zero or more wildcard (no binding)
 
 ;; Examples
 {:a x :b y}                   ; bind :a to x, :b to y (plain symbols)
@@ -128,8 +128,8 @@ _       ; wildcard (match anything, no binding)
 {:type ''response}            ; match literal symbol 'response
 (? :val 5)                    ; exact value
 (? :pred even?)               ; predicate
-[head ?tail+]                 ; head + rest (1 or more, lazy)
-[?prefix* last]               ; prefix (0 or more, lazy) + last
+[head tail+]                  ; head + rest (1 or more, lazy)
+[prefix* last]                ; prefix (0 or more, lazy) + last
 #"\d+"                        ; regex (matches strings, returns groups)
 ```
 
@@ -189,12 +189,12 @@ Add `!` suffix for **greedy** matching - matches the maximum possible.
 
 ```clojure
 ;; Lazy (default): first quantifier takes minimum
-(query '[?a* ?b*] [1 2 3])    ;=> {a () b (1 2 3)}
-(query '[?a+ ?b+] [1 2 3])    ;=> {a (1) b (2 3)}
+(query '[a* b*] [1 2 3])    ;=> {a () b (1 2 3)}
+(query '[a+ b+] [1 2 3])    ;=> {a (1) b (2 3)}
 
 ;; Greedy: first quantifier takes maximum
-(query '[?a*! ?b*] [1 2 3])   ;=> {a (1 2 3) b ()}
-(query '[?a+! ?b+] [1 2 3])   ;=> {a (1 2) b (3)}
+(query '[a*! b*] [1 2 3])   ;=> {a (1 2 3) b ()}
+(query '[a+! b+] [1 2 3])   ;=> {a (1 2) b (3)}
 ```
 
 ### Maps and Sets as Predicates
