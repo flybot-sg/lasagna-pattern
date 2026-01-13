@@ -82,9 +82,9 @@
      ;=> {name \"Alice\" age 30}"
   ([pattern]
    (compile pattern []))
-  ([pattern rules]
-   (let [all-rules (into (vec rules) core/core-rules)
-         matcher-fn (core/ptn->matcher pattern all-rules)]
+  ([pattern _rules]
+   ;; Note: custom rules are not currently supported in the two-phase compilation
+   (let [matcher-fn (core/ptn->matcher pattern)]
      (fn [data]
        (matcher-fn (core/vmr data))))))
 

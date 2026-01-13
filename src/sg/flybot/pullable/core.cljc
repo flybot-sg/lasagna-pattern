@@ -4,7 +4,7 @@
    This namespace provides the pattern matching implementation:
    - Match result types (ValMatchResult, MatchFailure)
    - Matcher primitives (mpred, mval, mmap, mseq, mor, etc.)
-   - Pattern DSL and compilation (ptn->matcher, defmatcher, core-rules)"
+   - Pattern DSL and compilation (ptn->matcher, ptn->core, core->matcher, defmatcher)"
   (:require
    [clojure.pprint :refer [cl-format]]
    [clojure.zip :as zip]))
@@ -35,7 +35,7 @@
 ;; |--------|----------------------------|------------------------------------------------|
 ;; | m-     | matcher constructors       | mpred, mval, mmap, mseq, mor, mvar, mchain     |
 ;; | mz-    | zipper sub-matchers        | mzone, mzrepeat, mzfilter, mzfirst, mzoption   |
-;; | -rule  | pattern compilation rules  | core-rule, map-rule, vector-rule               |
+;; | -rule  | pattern compilation rules  | core-rule                                      |
 
 (defprotocol IMatchResult
   (-fapply [mr f]
@@ -625,10 +625,6 @@
                            result)))
                      mr children))))
 
-;;=============================================================================
-;; SECTION 3: Pattern Variable Parsing
-;;=============================================================================
-
 (defn parse-matching-var
   "Parse a quantified variable symbol like x?, x+, x*, x+!, x*!.
    Returns map with :sym, :quantifier, :greedy? or nil if not a matching-var."
@@ -666,7 +662,7 @@
   (parse-matching-var 'x)) ;=> nil)
 
 ;;=============================================================================
-;; SECTION 4: Pattern DSL and Compilation
+;; SECTION 3: Pattern DSL and Compilation
 ;;=============================================================================
 
 (declare repeat-matcher)
@@ -706,6 +702,10 @@
 (defmatcher :val "(? :val <value>)"
   (mzone (mvar 'val identity))
   (fn [vars] (mval (get vars 'val))))
+
+(defmatcher :any "(? :any)"
+  mterm  ;; no args expected
+  (fn [_vars] wildcard))
 
 (defmatcher :map "(? :map <map>)"
   (mzone (mvar 'map (mpred map?)))
@@ -762,8 +762,8 @@
                                                      [mterm]))))
                                 rep-range)]
           (wrap-sym (mor alternatives)))
-        ;; Basic case - just match sequence once
-        (wrap-sym (mseq children))))))
+        ;; Basic case - add mterm for termination
+        (wrap-sym (mseq (conj (vec children) mterm)))))))
 
 (defmatcher :var "(? :var <sym> <matcher>)"
   (mzsubseq [(mzone (mvar 'sym (mpred symbol?)))
@@ -858,11 +858,11 @@
   ;; Note: function args require `list` to pass actual fn values
   ;;-------------------------------------------------------------------
   ;; basic update: applies function to value
-  ((ptn->matcher (list '? :update inc) core-rules) (vmr 5))
+  ((ptn->matcher (list '? :update inc)) (vmr 5))
   ;=>> {:val 6 :vars {}}
 
   ;; compose with :var to bind result
-  ((ptn->matcher (list '? :var 'n (list '? :update inc)) core-rules) (vmr 5)))
+  ((ptn->matcher (list '? :var 'n (list '? :update inc))) (vmr 5)))
   ;=>> {:val 6 :vars {'n 6}}
 
 (defmatcher :regex "(? :regex <pattern>)"
@@ -970,8 +970,6 @@
            :max-len final-max
            :greedy? (or (some? greedy) quant-greedy?)})))))
 
-(declare regex-matcher)
-
 (defn- double-quoted-symbol?
   "Check if x is a double-quoted symbol form: ''sym -> (quote (quote sym)).
    Returns the inner symbol if true, nil otherwise."
@@ -1005,147 +1003,261 @@
                      'throw 'try 'catch 'finally 'new 'set!} x)))
     x))
 
-(defn- scalar-element
-  "Convert a scalar value to a matcher.
-   - _ is a wildcard (matches anything, no binding)
-   - Plain symbols become variable bindings
-   - Double-quoted symbols ''sym match literal symbols
-   - Functions and sets become predicates (sets test membership)
-   - Other values are matched exactly"
+(defn- core-pattern?
+  "Check if x is a core (? :type ...) pattern"
   [x]
+  (and (seq? x) (= '? (first x)) (keyword? (second x))))
+
+(defn- subseq-type?
+  "Check if pattern type is a subsequence matcher (not wrapped in :one)"
+  [t]
+  (#{:optional :repeat :filter :first} t))
+
+(defn- wrap-for-seq
+  "Wrap a core pattern for use in sequence context.
+   Subsequence patterns (:optional, :repeat, :filter, :first) are not wrapped.
+   Other patterns get wrapped in (? :one ...)"
+  [ptn]
+  (if (and (core-pattern? ptn) (subseq-type? (second ptn)))
+    ptn
+    (list '? :one ptn)))
+
+(defn- matching-var->core
+  "Convert a parsed matching-var to core pattern"
+  [{:keys [sym quantifier greedy?]}]
+  (case quantifier
+    :optional
+    (let [inner (if sym (list '? :var sym '(? :any)) '(? :any))]
+      (list '? :optional inner))
+
+    :one-or-more
+    (cond-> (list '? :repeat '(? :any) :min 1)
+      sym (concat [:as sym])
+      greedy? (concat [:greedy])
+      true (->> (apply list)))
+
+    :zero-or-more
+    (cond-> (list '? :repeat '(? :any) :min 0)
+      sym (concat [:as sym])
+      greedy? (concat [:greedy])
+      true (->> (apply list)))))
+
+(defn- list-var->core
+  "Convert a parsed list-var to core pattern"
+  [{:keys [sym pred update-fn min-len max-len greedy?]}]
+  (let [base-ptn (if pred (list '? :pred pred) '(? :any))
+        with-update (if update-fn
+                      (list '? :-> base-ptn (list '? :update update-fn))
+                      base-ptn)]
+    (if min-len
+      ;; Repeated element - use :repeat
+      (cond-> (list '? :repeat with-update :min min-len)
+        (and max-len (not (zero? max-len))) (concat [:max max-len])
+        sym (concat [:as sym])
+        greedy? (concat [:greedy])
+        true (->> (apply list)))
+      ;; Single element
+      (if sym
+        (list '? :var sym with-update)
+        with-update))))
+
+;;-------------------------------------------------------------------
+;; Rewrite rules for ptn->core
+;; Each rule takes (x rewrite) and returns rewritten pattern or nil
+;;-------------------------------------------------------------------
+
+(defn- rewrite-arg
+  "Rewrite an argument in a core pattern.
+   Some arg types should stay as-is (keywords, numbers, raw functions)."
+  [rewrite arg]
   (cond
-    (matcher-type x) x
-    ;; Underscore is a wildcard
-    (= '_ x) wildcard
-    ;; Double-quoted symbol: ''sym -> match literal symbol
-    (double-quoted-symbol? x) (mval (double-quoted-symbol? x))
-    ;; Plain symbol -> variable binding
-    (plain-var-symbol? x) (mvar (plain-var-symbol? x) wildcard)
-    (fn? x) (mpred x)
-    (set? x) (mpred x)
-    (regex? x) (regex-matcher x)
-    :else (mval x)))
+    (vector? arg) (mapv rewrite arg)
+    (map? arg) (into {} (map (fn [[k v]] [k (rewrite v)])) arg)
+    (or (keyword? arg) (number? arg)) arg
+    (symbol? arg) arg
+    (or (fn? arg) (set? arg)) arg
+    (regex? arg) arg
+    :else (rewrite arg)))
+
+(defn- rw-core-pattern
+  "Rewrite existing core pattern - recurse into args"
+  [x rewrite]
+  (when (core-pattern? x)
+    (let [[q t & args] x]
+      (if (= :match-case t)
+        ;; :match-case has patterns at odd indices
+        (apply list q t (map-indexed
+                         (fn [i arg] (if (odd? i) (rewrite arg) arg))
+                         args))
+        (apply list q t (map (partial rewrite-arg rewrite) args))))))
+
+(defn- rw-double-quoted
+  "Rewrite double-quoted symbol: ''sym -> (? :val sym)"
+  [x _rewrite]
+  (when-let [sym (double-quoted-symbol? x)]
+    (list '? :val sym)))
+
+(defn- rw-regex
+  "Rewrite regex: #\"...\" -> (? :regex #\"...\")"
+  [x _rewrite]
+  (when (regex? x)
+    (list '? :regex x)))
+
+(defn- rw-list-var
+  "Rewrite list-var pattern: (sym pred? ...) -> core pattern"
+  [x _rewrite]
+  (when-let [parsed (parse-list-var x)]
+    (list-var->core parsed)))
+
+(defn- rw-matching-var
+  "Rewrite quantified symbol: x*, x+, x? -> core pattern"
+  [x _rewrite]
+  (when-let [parsed (parse-matching-var x)]
+    (matching-var->core parsed)))
+
+(defn- rw-vector
+  "Rewrite vector: [a b] -> (? :seq [...])"
+  [x rewrite]
+  (when (and (vector? x) (not (map-entry? x)))
+    (list '? :seq (mapv #(wrap-for-seq (rewrite %)) x))))
+
+(defn- rw-map
+  "Rewrite map: {:k v} -> (? :map {:k ...})"
+  [x rewrite]
+  (when (map? x)
+    (list '? :map (into {} (map (fn [[k v]] [k (rewrite v)])) x))))
+
+(defn- rw-seq
+  "Rewrite seq: recurse into it"
+  [x rewrite]
+  (when (seq? x)
+    (apply list (map rewrite x))))
+
+(defn- rw-function
+  "Rewrite function: even? -> (? :pred even?)"
+  [x _rewrite]
+  (when (fn? x)
+    (list '? :pred x)))
+
+(defn- rw-set
+  "Rewrite set: #{:a :b} -> (? :pred #{:a :b})"
+  [x _rewrite]
+  (when (set? x)
+    (list '? :pred x)))
+
+(defn- rw-wildcard
+  "Rewrite wildcard: _ -> (? :any)"
+  [x _rewrite]
+  (when (= '_ x)
+    '(? :any)))
+
+(defn- rw-plain-symbol
+  "Rewrite plain symbol: x -> (? :var x (? :any))"
+  [x _rewrite]
+  (when (plain-var-symbol? x)
+    (list '? :var x '(? :any))))
+
+(defn- rw-literal
+  "Rewrite literal value: 5 -> (? :val 5)"
+  [x _rewrite]
+  (list '? :val x))
+
+(def ^:private rewrite-rules
+  "Ordered rewrite rules for ptn->core. First match wins."
+  [rw-core-pattern
+   rw-double-quoted
+   rw-regex
+   rw-list-var
+   rw-matching-var
+   rw-vector
+   rw-map
+   rw-seq
+   rw-function
+   rw-set
+   rw-wildcard
+   rw-plain-symbol
+   rw-literal])
+
+(defn ptn->core
+  "Transform syntax sugar patterns into normalized (? :type ...) core patterns.
+   This is Phase 1 of compilation - no matchers are created."
+  [ptn]
+  (letfn [(rewrite [x]
+            (some #(% x rewrite) rewrite-rules))]
+    (rewrite ptn)))
+
+(declare core->matcher)
+
+(defn- compile-core-arg
+  "Compile an argument from a core pattern - recursively compiles nested patterns"
+  [arg]
+  (cond
+    ;; Already a matcher - return as-is
+    (matcher-type arg)
+    arg
+    ;; Core pattern - compile recursively
+    (core-pattern? arg)
+    (core->matcher arg)
+    ;; Vector of children - compile each
+    (vector? arg)
+    (mapv compile-core-arg arg)
+    ;; Map of children - compile values
+    (map? arg)
+    (into {} (map (fn [[k v]] [k (compile-core-arg v)])) arg)
+    ;; Other values (keywords, numbers, symbols) - keep as-is
+    :else
+    arg))
+
+(defn core->matcher
+  "Compile a normalized core pattern to a matcher (Phase 2).
+   Expects only (? :type ...) core patterns from ptn->core.
+   Recursively compiles nested patterns before building the outer matcher."
+  [ptn]
+  (cond
+    ;; Already a matcher - return as-is
+    (matcher-type ptn)
+    ptn
+
+    ;; Core pattern - compile it
+    (core-pattern? ptn)
+    (let [[_ t & args] ptn
+          ;; Recursively compile nested patterns in args first
+          compiled-args (map compile-core-arg args)
+          ;; Build the pattern with compiled args for core-rule processing
+          compiled-ptn (apply list '? t compiled-args)]
+      ;; Use core-rule to validate and build the final matcher
+      (or (rule-of core-rule compiled-ptn)
+          (throw (ex-info "Failed to compile core pattern" {:pattern ptn}))))
+
+    ;; Should not happen if ptn->core ran correctly
+    :else
+    (throw (ex-info "Expected core pattern in Phase 2" {:pattern ptn}))))
 
 (defn ptn->matcher
   "Compile a pattern to a matcher function.
-   Optionally takes custom rules that are tried before core-rules.
+
+   Compilation happens in two phases:
+   1. Outer (ptn->core): Transform syntax sugar to core (? :type ...) patterns
+   2. Inner (core->matcher): Compile core patterns to matchers via defmatcher specs
 
    Symbol handling in patterns:
    - Plain symbols (x, foo, bar) become variable bindings
-   - ?x, ?x+, ?x* syntax also works for variables with quantifiers
+   - x*, x+, x? syntax for quantified variables
    - ''sym (double-quoted) matches the literal symbol sym
-   - _ is reserved (currently unused)"
+   - _ is wildcard (matches anything, no binding)"
   ([ptn]
-   (ptn->matcher ptn [core-rule]))
-  ([ptn rules]
-   (when-let [mch (mor rules)]
-     ;; Custom recursive transformer - check special forms BEFORE recursing into children
-     (letfn [(transform [x]
-               (cond
-                 ;; Double-quoted symbol: ''sym -> match literal symbol (no recursion needed)
-                 (double-quoted-symbol? x)
-                 (mval (double-quoted-symbol? x))
-
-                 ;; Regex patterns become regex matchers (no recursion needed)
-                 (regex? x)
-                 (regex-matcher x)
-
-                 ;; List-var pattern: (sym pred? [min max]? :update fn? !?)
-                 ;; Must check BEFORE recursing to preserve pred as raw value
-                 (parse-list-var x)
-                 (let [{:keys [sym pred update-fn min-len max-len greedy?]} (parse-list-var x)
-                       base-child (if pred (mpred pred) wildcard)
-                       child (if update-fn
-                               (mchain [base-child (msub update-fn)])
-                               base-child)]
-                   (if min-len
-                     (let [effective-max (when-not (zero? max-len) max-len)]
-                       (mzrepeat child min-len {:max-len effective-max :greedy? greedy? :sym sym}))
-                     (if sym (mvar sym child) child)))
-
-                 ;; Matching-var symbols like x*, x+, x? (no recursion needed)
-                 (parse-matching-var x)
-                 (let [{:keys [sym quantifier greedy?]} (parse-matching-var x)
-                       [min-len _] (quantifier->min-max quantifier)]
-                   (if min-len
-                     (repeat-matcher sym min-len greedy?)
-                     ;; :optional - single element, not a repeat
-                     (cond->> wildcard
-                       sym (mvar sym)
-                       true mzoption)))
-
-                 ;; Collections: recurse into children first, then apply rules
-                 (map? x)
-                 (let [transformed (into {} (map (fn [[k v]] [k (transform v)])) x)]
-                   (or (rule-of mch transformed) transformed))
-
-                 (vector? x)
-                 (let [transformed (mapv transform x)]
-                   (or (rule-of mch transformed) transformed))
-
-                 (seq? x)
-                 (let [transformed (apply list (map transform x))]
-                   (or (rule-of mch transformed) transformed))
-
-                 ;; Other values: apply rules directly
-                 :else (or (rule-of mch x) x)))]
-       (let [result (transform ptn)]
-         (if (matcher-type result) result (scalar-element result)))))))
-
-(defn- wrap-element
-  "Wrap an element for use in a sequence matcher"
-  [x]
-  (let [mt (matcher-type x)]
-    (cond-> x (not mt) scalar-element (not= mt :subseq) mzone)))
-
-(defn- seq-matcher
-  "Create a sequence matcher from elements"
-  [x]
-  (-> (map wrap-element x) (concat [mterm]) mseq))
-
-(def vector-rule
-  "Rule for matching vectors as sequences"
-  (mchain [(mpred #(and (vector? %) (not (map-entry? %))))
-           (msub seq-matcher)]))
-
-(defn- map-matcher
-  "Create a map matcher from key-value pairs"
-  [x]
-  (-> (map (fn [[k v]] [k (scalar-element v)]) x) mmap))
-
-(def map-rule
-  "Rule for matching maps"
-  (mchain [(mpred map?)
-           (msub map-matcher)]))
-
-(defn- regex-matcher
-  "Create a regex matcher from a pattern"
-  [pattern]
-  (matcher :regex
-           (fn [mr]
-             (let [v (:val mr)]
-               (if-not (string? v)
-                 (fail (str "expected string for regex match, got " (type v)) :regex v)
-                 (if-let [result (re-matches pattern v)]
-                   (let [groups (if (string? result) [result] result)]
-                     (assoc mr :val groups))
-                   (fail (str "regex " pattern " did not match: " (pr-str v)) :regex v)))))))
-
-(def regex-rule
-  "Rule for matching regex patterns against strings"
-  (mchain [(mpred regex?)
-           (msub regex-matcher)]))
+   (-> ptn ptn->core core->matcher))
+  ([ptn _rules]
+   ;; Custom rules not yet supported in new architecture
+   (-> ptn ptn->core core->matcher)))
 
 (defn- repeat-matcher
   "Create a repeating matcher for + and * quantifiers.
-   Default is lazy (match minimum), use greedy? true to match maximum."
+   Default is lazy (match minimum), use greedy? true to match maximum.
+   Used by :matching-var defmatcher."
   [sym min-len greedy?]
   ;; Use mzrepeat with nil max-len for unbounded matching (uses actual sequence length)
   (mzrepeat wildcard min-len {:max-len nil :greedy? greedy? :sym sym}))
-
-(def core-rules
-  "Default rules for pattern compilation: vector, map, regex, and core forms"
-  [vector-rule map-rule regex-rule core-rule])
 
 ^:rct/test
 (comment
@@ -1259,18 +1371,18 @@
   ((rule-of core-rule (list '? :regex #"^\d+$")) (vmr "abc")) ;=>> failure?
 
   ;;-------------------------------------------------------------------
-  ;; regex-rule - automatic regex pattern conversion
+  ;; regex - automatic regex pattern conversion
   ;;-------------------------------------------------------------------
   ;; regex literal automatically becomes matcher
-  ((ptn->matcher #"hello" core-rules) (vmr "hello")) ;=>> {:val ["hello"]}
+  ((ptn->matcher #"hello") (vmr "hello")) ;=>> {:val ["hello"]}
   ;; with capture groups
-  ((ptn->matcher #"(\d+)-(\d+)" core-rules) (vmr "12-34")) ;=>> {:val ["12-34" "12" "34"]}
+  ((ptn->matcher #"(\d+)-(\d+)") (vmr "12-34")) ;=>> {:val ["12-34" "12" "34"]}
   ;; regex in map pattern (transforms value to groups)
-  ((ptn->matcher {:name #"(\w+) (\w+)"} core-rules) (vmr {:name "John Doe"})) ;=>> {:val {:name ["John Doe" "John" "Doe"]}}
+  ((ptn->matcher {:name #"(\w+) (\w+)"}) (vmr {:name "John Doe"})) ;=>> {:val {:name ["John Doe" "John" "Doe"]}}
   ;; regex in vector pattern with variable binding
-  (:vars ((ptn->matcher '[first second] core-rules) (vmr ["hello" "123"]))) ;=>> '{first "hello" second "123"}
+  (:vars ((ptn->matcher '[first second]) (vmr ["hello" "123"]))) ;=>> '{first "hello" second "123"}
   ;; regex validates string in vector (use vector literal, not quote)
-  (:vars ((ptn->matcher ['x #"\d+"] core-rules) (vmr ["hello" "123"]))) ;=>> '{x "hello"}
+  (:vars ((ptn->matcher ['x #"\d+"]) (vmr ["hello" "123"]))) ;=>> '{x "hello"}
 
   ;;-------------------------------------------------------------------
   ;; repeat - repeated element matching
@@ -1304,7 +1416,7 @@
   {:vars '{a 3}}
   ;; optional element in sequence
   ((ptn->matcher '(? :seq [(? :optional (? :val 1)) (? :one (? :val 10))])) (vmr [10])) ;=>> {:val [10]}
-  ;; map-rule compiles map literals
-  ((ptn->matcher '{:a (? :var a (? :val 5))} [map-rule core-rule]) (vmr {:a 5}))) ;=>> {:val {:a 5}}
+  ;; map pattern with nested core forms
+  ((ptn->matcher '{:a (? :var a (? :val 5))}) (vmr {:a 5}))) ;=>> {:val {:a 5}}
 
 
