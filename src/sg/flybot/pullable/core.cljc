@@ -7,6 +7,7 @@
    - Pattern DSL and compilation (ptn->matcher, ptn->core, core->matcher, defmatcher)"
   (:require
    [clojure.pprint :refer [cl-format]]
+   [clojure.walk :as walk]
    [clojure.zip :as zip]))
 
 ;;=============================================================================
@@ -881,52 +882,23 @@
   [x]
   (and (seq? x) (= '? (first x)) (keyword? (second x))))
 
-(declare core->matcher)
-
-(defn- compile-core-arg
-  "Compile an argument from a core pattern - recursively compiles nested patterns"
-  [arg]
-  (cond
-    ;; Already a matcher - return as-is
-    (matcher-type arg)
-    arg
-    ;; Core pattern - compile recursively
-    (core-pattern? arg)
-    (core->matcher arg)
-    ;; Vector of children - compile each
-    (vector? arg)
-    (mapv compile-core-arg arg)
-    ;; Map of children - compile values
-    (map? arg)
-    (into {} (map (fn [[k v]] [k (compile-core-arg v)])) arg)
-    ;; Other values (keywords, numbers, symbols) - keep as-is
-    :else
-    arg))
-
 (defn core->matcher
   "Compile a normalized core pattern to a matcher.
    Expects only (? :type ...) core patterns.
-   Recursively compiles nested patterns before building the outer matcher."
+   Uses postwalk to compile bottom-up, avoiding stack overflow on deep nesting."
   [ptn]
-  (cond
-    ;; Already a matcher - return as-is
-    (matcher-type ptn)
-    ptn
-
-    ;; Core pattern - compile it
-    (core-pattern? ptn)
-    (let [[_ t & args] ptn
-          ;; Recursively compile nested patterns in args first
-          compiled-args (map compile-core-arg args)
-          ;; Build the pattern with compiled args for core-rule processing
-          compiled-ptn (apply list '? t compiled-args)]
-      ;; Use core-rule to validate and build the final matcher
-      (or (rule-of core-rule compiled-ptn)
-          (throw (ex-info "Failed to compile core pattern" {:pattern ptn}))))
-
-    ;; Should not happen if ptn->core ran correctly
-    :else
-    (throw (ex-info "Expected core pattern" {:pattern ptn}))))
+  (walk/postwalk
+   (fn [x]
+     (cond
+       ;; Already a matcher - return as-is
+       (matcher-type x) x
+       ;; Core pattern with compiled children - build matcher
+       (core-pattern? x)
+       (or (rule-of core-rule x)
+           (throw (ex-info "Failed to compile core pattern" {:pattern x})))
+       ;; Other values - keep as-is
+       :else x))
+   ptn))
 
 ;;-----------------------------------------------------------------------------
 ;; Syntax Sugar Rewriting (ptn->core)
