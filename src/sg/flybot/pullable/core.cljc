@@ -8,7 +8,8 @@
   (:require
    [clojure.pprint :refer [cl-format]]
    [clojure.walk :as walk]
-   [clojure.zip :as zip]))
+   [clojure.zip :as zip]
+   [sg.flybot.pullable.util :refer [vars->]]))
 
 ;;=============================================================================
 ;; SECTION 1: Match Result Types
@@ -56,7 +57,7 @@
 (defrecord MatchFailure [reason matcher-type path value depth])
 
 (defn failure?
-  "Returns true if x is a MatchFailure"
+  "Returns true if x is a MatchFailure."
   [x]
   (instance? MatchFailure x))
 
@@ -627,48 +628,40 @@
                      mr children))))
 
 (defn parse-matching-var
-  "Parse a quantified variable symbol like x?, x+, x*, x+!, x*!.
+  "Parse a quantified variable symbol like ?x?, ?x+, ?x*, ?x+!, ?x*!.
+   Variables must start with ? prefix.
    Returns map with :sym, :quantifier, :greedy? or nil if not a matching-var."
   [v]
   (when (symbol? v)
-    (when-let [[_ base suffix greedy] (re-matches #"(.+)([\?\+\*])(\!?)" (name v))]
-      {:sym (when (not= "_" base) (symbol base))
+    (when-let [[_ base suffix greedy] (re-matches #"\?(\S+)([\?\+\*])(\!?)" (name v))]
+      {:sym (when (not= "_" base) (symbol (str "?" base)))
        :quantifier (case suffix "?" :optional "+" :one-or-more "*" :zero-or-more)
        :greedy? (= "!" greedy)})))
 
 ^:rct/test
 (comment
-  ;; parse-matching-var parses optional x?
-  (parse-matching-var 'x?) ;=>> {:sym 'x :quantifier :optional :greedy? false}
-  ;; parse-matching-var parses one-or-more x+ (lazy)
-  (parse-matching-var 'x+) ;=>> {:sym 'x :quantifier :one-or-more :greedy? false}
-  ;; parse-matching-var parses zero-or-more x* (lazy)
-  (parse-matching-var 'x*) ;=>> {:sym 'x :quantifier :zero-or-more :greedy? false}
-  ;; parse-matching-var parses greedy one-or-more x+!
-  (parse-matching-var 'x+!) ;=>> {:sym 'x :quantifier :one-or-more :greedy? true}
-  ;; parse-matching-var parses greedy zero-or-more x*!
-  (parse-matching-var 'x*!) ;=>> {:sym 'x :quantifier :zero-or-more :greedy? true}
-  ;; parse-matching-var wildcard _* returns nil symbol
-  (parse-matching-var '_*) ;=>> {:sym nil :quantifier :zero-or-more :greedy? false}
-  ;; parse-matching-var returns nil for plain symbols without quantifier
-  (parse-matching-var 'x)) ;=> nil)
+  ;; parse-matching-var parses optional ?x?
+  (parse-matching-var '?x?) ;=>> {:sym '?x :quantifier :optional :greedy? false}
+  ;; parse-matching-var parses one-or-more ?x+ (lazy)
+  (parse-matching-var '?x+) ;=>> {:sym '?x :quantifier :one-or-more :greedy? false}
+  ;; parse-matching-var parses zero-or-more ?x* (lazy)
+  (parse-matching-var '?x*) ;=>> {:sym '?x :quantifier :zero-or-more :greedy? false}
+  ;; parse-matching-var parses greedy one-or-more ?x+!
+  (parse-matching-var '?x+!) ;=>> {:sym '?x :quantifier :one-or-more :greedy? true}
+  ;; parse-matching-var parses greedy zero-or-more ?x*!
+  (parse-matching-var '?x*!) ;=>> {:sym '?x :quantifier :zero-or-more :greedy? true}
+  ;; parse-matching-var wildcard ?_* returns nil symbol
+  (parse-matching-var '?_*) ;=>> {:sym nil :quantifier :zero-or-more :greedy? false}
+  ;; parse-matching-var returns nil for plain symbols without ? prefix
+  (parse-matching-var 'x?) ;=> nil
+  ;; parse-matching-var returns nil for ?x without quantifier
+  (parse-matching-var '?x)) ;=> nil
 
 ;;=============================================================================
 ;; SECTION 3: Pattern DSL and Compilation
 ;;=============================================================================
 
 (def ^:private matcher-specs* (atom {}))
-
-(defmacro vars->
-  "Create a fn that destructures vars map.
-   (vars-> [sym child] (mvar sym child))
-   expands to:
-   (fn [vars] (let [sym (get vars 'sym) child (get vars 'child)] (mvar sym child)))"
-  [bindings & body]
-  (let [vars-sym (gensym "vars")]
-    `(fn [~vars-sym]
-       (let [~@(mapcat (fn [sym] [sym `(get ~vars-sym '~sym)]) bindings)]
-         ~@body))))
 
 (defmacro defmatcher
   "Define a matcher type specification.
@@ -685,20 +678,6 @@
                    :parse ~parse
                    :make ~make}
                   ~opts))))
-
-(defn- parse-keyword-args
-  "Parse keyword arguments from a flat sequence.
-   Returns map of keyword->value pairs.
-   Example: [:min 2 :max 4 :as x] -> {:min 2 :max 4 :as x}"
-  [args]
-  (loop [args args
-         result {}]
-    (if (empty? args)
-      result
-      (let [[k v & rest] args]
-        (if (keyword? k)
-          (recur rest (assoc result k v))
-          result)))))
 
 (defmatcher :pred "(? :pred <fn>)"
   (mzone (mvar 'f identity))
@@ -724,6 +703,20 @@
   (mzone (mvar 'child (mpred matcher-type)))
   (vars-> [child] (mzoption child))
   {:subseq? true})
+
+(defn- parse-keyword-args
+  "Parse keyword arguments from a flat sequence.
+   Returns map of keyword->value pairs.
+   Example: [:min 2 :max 4 :as x] -> {:min 2 :max 4 :as x}"
+  [args]
+  (loop [args args
+         result {}]
+    (if (empty? args)
+      result
+      (let [[k v & rest] args]
+        (if (keyword? k)
+          (recur rest (assoc result k v))
+          result)))))
 
 (defmatcher :repeat "(? :repeat <matcher> :min <n> [:max <n>] [:as <sym>] [:greedy])"
   ;; Collect matcher and all remaining args
@@ -825,8 +818,8 @@
   ;=>> {:val 6 :vars {}}
 
   ;; compose with :var to bind result
-  ((ptn->matcher (list '? :var 'n (list '? :update inc))) (vmr 5)))
-  ;=>> {:val 6 :vars {'n 6}}
+  ((ptn->matcher (list '? :var 'n (list '? :update inc))) (vmr 5)) ;=>>
+  {:val 6 :vars {'n 6}})
 
 (defmatcher :regex "(? :regex <pattern>)"
   (mzone (mvar 'pattern (mpred regex?)))
@@ -895,54 +888,36 @@
    Expects only (? :type ...) core patterns.
    Uses postwalk to compile bottom-up, avoiding stack overflow on deep nesting."
   [ptn]
-  (walk/postwalk
-   (fn [x]
-     (cond
-       ;; Already a matcher - return as-is
-       (matcher-type x) x
-       ;; Core pattern with compiled children - build matcher
-       (core-pattern? x)
-       (or (rule-of core-rule x)
-           (throw (ex-info "Failed to compile core pattern" {:pattern x})))
-       ;; Other values - keep as-is
-       :else x))
-   ptn))
+  (walk/postwalk (fn [x]
+                   (cond
+                     ;; Already a matcher - return as-is
+                     (matcher-type x) x
+                     ;; Core pattern with compiled children - build matcher
+                     (core-pattern? x)
+                     (or (rule-of core-rule x)
+                         (throw (ex-info "Failed to compile core pattern" {:pattern x})))
+                     ;; Other values - keep as-is
+                     :else x))
+                 ptn))
 
 ;;-----------------------------------------------------------------------------
 ;; Syntax Sugar Rewriting (ptn->core)
 ;;-----------------------------------------------------------------------------
 
-(defn- double-quoted-symbol?
-  "Check if x is a double-quoted symbol form: ''sym -> (quote (quote sym)).
-   Returns the inner symbol if true, nil otherwise."
-  [x]
-  (when (and (seq? x)
-             (= 2 (count x))
-             (= 'quote (first x)))
-    (let [inner (second x)]
-      (when (and (seq? inner)
-                 (= 2 (count inner))
-                 (= 'quote (first inner))
-                 (symbol? (second inner)))
-        (second inner)))))
-
 (defn- plain-var-symbol?
-  "Check if x is a plain symbol that should become a variable binding.
-   Returns the symbol name if true, nil otherwise.
+  "Check if x is a symbol that should become a variable binding.
+   Returns the symbol if true, nil otherwise.
 
    A symbol becomes a variable if it:
-   - Is a symbol (not keyword, not other type)
-   - Does not have a quantifier suffix (x*, x+, x?)
-   - Is not ? (used in pattern forms)
-   - Is not _ (reserved for possible future use)
-   - Is not a special form (if, do, quote, etc.)"
+   - Is a symbol starting with ? (e.g., ?x, ?name)
+   - Does not have a quantifier suffix (?x*, ?x+, ?x?)
+   - Is not just ? (used in pattern forms)"
   [x]
   (when (and (symbol? x)
-             (not (parse-matching-var x))  ; not x*, x+, x? syntax
-             (not= '? x)           ; not the pattern marker
-             (not= '_ x)           ; not underscore
-             (not (#{'if 'do 'let 'fn 'quote 'var 'def 'loop 'recur
-                     'throw 'try 'catch 'finally 'new 'set!} x)))
+             (let [n (name x)]
+               (and (= \? (first n))
+                    (> (count n) 1)))  ; must have more than just ?
+             (not (parse-matching-var x)))  ; not ?x*, ?x+, ?x? syntax
     x))
 
 (defn- subseq-type?
@@ -981,6 +956,27 @@
       true (->> (apply list)))))
 
 ;;-------------------------------------------------------------------
+;; Bootstrap rule macro (uses core->matcher, no syntax sugar)
+;;-------------------------------------------------------------------
+
+(defmacro rule
+  "Create a rewrite rule from a core pattern and output template.
+   Uses core->matcher directly to avoid circular dependency with ptn->core.
+   The special symbol $ in form is bound to the matched value."
+  [pattern form]
+  `(let [matcher# (core->matcher ~pattern)]
+     (fn [x# _rewrite#]
+       (let [result# (matcher# (vmr x#))]
+         (when-not (failure? result#)
+           (let [vars# (assoc (:vars result#) '~'$ (:val result#))]
+             (walk/postwalk
+              (fn [v#]
+                (if (and (symbol? v#) (contains? vars# v#))
+                  (get vars# v#)
+                  v#))
+              ~form)))))))
+
+;;-------------------------------------------------------------------
 ;; Rewrite rules for ptn->core
 ;; Each rule takes (x rewrite) and returns rewritten pattern or nil
 ;;-------------------------------------------------------------------
@@ -1015,17 +1011,9 @@
           (apply list q t (if sym (cons sym rewritten-kv) rewritten-kv)))
         (apply list q t (map (partial rewrite-arg rewrite) args))))))
 
-(defn- rw-double-quoted
-  "Rewrite double-quoted symbol: ''sym -> (? :val sym)"
-  [x _rewrite]
-  (when-let [sym (double-quoted-symbol? x)]
-    (list '? :val sym)))
-
-(defn- rw-regex
+(def ^:private rw-regex
   "Rewrite regex: #\"...\" -> (? :regex #\"...\")"
-  [x _rewrite]
-  (when (regex? x)
-    (list '? :regex x)))
+  (rule (list '? :pred regex?) '(? :regex $)))
 
 (defn- rw-matching-var
   "Rewrite quantified symbol: x*, x+, x? -> core pattern"
@@ -1051,39 +1039,29 @@
   (when (seq? x)
     (apply list (map rewrite x))))
 
-(defn- rw-function
+(def ^:private rw-function
   "Rewrite function: even? -> (? :pred even?)"
-  [x _rewrite]
-  (when (fn? x)
-    (list '? :pred x)))
+  (rule (list '? :pred fn?) '(? :pred $)))
 
-(defn- rw-set
+(def ^:private rw-set
   "Rewrite set: #{:a :b} -> (? :pred #{:a :b})"
-  [x _rewrite]
-  (when (set? x)
-    (list '? :pred x)))
+  (rule (list '? :pred set?) '(? :pred $)))
 
-(defn- rw-wildcard
+(def ^:private rw-wildcard
   "Rewrite wildcard: _ -> (? :any)"
-  [x _rewrite]
-  (when (= '_ x)
-    '(? :any)))
+  (rule '(? :val _) '(? :any)))
 
-(defn- rw-plain-symbol
-  "Rewrite plain symbol: x -> (? :var x (? :any))"
-  [x _rewrite]
-  (when (plain-var-symbol? x)
-    (list '? :var x '(? :any))))
+(def ^:private rw-plain-symbol
+  "Rewrite ?-prefixed symbol: ?x -> (? :var ?x (? :any))"
+  (rule (list '? :pred plain-var-symbol?) '(? :var $ (? :any))))
 
-(defn- rw-literal
+(def ^:private rw-literal
   "Rewrite literal value: 5 -> (? :val 5)"
-  [x _rewrite]
-  (list '? :val x))
+  (rule '(? :any) '(? :val $)))
 
 (def ^:private rewrite-rules
   "Ordered rewrite rules for ptn->core. First match wins."
   [rw-core-pattern
-   rw-double-quoted
    rw-regex
    rw-matching-var
    rw-vector
@@ -1115,14 +1093,11 @@
    2. Inner (core->matcher): Compile core patterns to matchers via defmatcher specs
 
    Symbol handling in patterns:
-   - Plain symbols (x, foo, bar) become variable bindings
-   - x*, x+, x? syntax for quantified variables
-   - ''sym (double-quoted) matches the literal symbol sym
+   - ?-prefixed symbols (?x, ?name) become variable bindings
+   - ?x*, ?x+, ?x? syntax for quantified variables
+   - Plain symbols (x, foo) match the literal symbol
    - _ is wildcard (matches anything, no binding)"
   ([ptn]
-   (-> ptn ptn->core core->matcher))
-  ([ptn _rules]
-   ;; Custom rules not yet supported in new architecture
    (-> ptn ptn->core core->matcher)))
 
 ^:rct/test
@@ -1248,10 +1223,10 @@
   ((ptn->matcher #"(\d+)-(\d+)") (vmr "12-34")) ;=>> {:val ["12-34" "12" "34"]}
   ;; regex in map pattern (transforms value to groups)
   ((ptn->matcher {:name #"(\w+) (\w+)"}) (vmr {:name "John Doe"})) ;=>> {:val {:name ["John Doe" "John" "Doe"]}}
-  ;; regex in vector pattern with variable binding
-  (:vars ((ptn->matcher '[first second]) (vmr ["hello" "123"]))) ;=>> '{first "hello" second "123"}
+  ;; vector pattern with variable binding (using ?-prefix)
+  (:vars ((ptn->matcher '[?first ?second]) (vmr ["hello" "123"]))) ;=>> '{?first "hello" ?second "123"}
   ;; regex validates string in vector (use vector literal, not quote)
-  (:vars ((ptn->matcher ['x #"\d+"]) (vmr ["hello" "123"]))) ;=>> '{x "hello"}
+  (:vars ((ptn->matcher ['?x #"\d+"]) (vmr ["hello" "123"]))) ;=>> '{?x "hello"}
 
   ;;-------------------------------------------------------------------
   ;; repeat - repeated element matching
@@ -1274,6 +1249,57 @@
   ;; optional element in sequence
   ((ptn->matcher '(? :seq [(? :optional (? :val 1)) (? :one (? :val 10))])) (vmr [10])) ;=>> {:val [10]}
   ;; map pattern with nested core forms
-  ((ptn->matcher '{:a (? :var a (? :val 5))}) (vmr {:a 5}))) ;=>> {:val {:a 5}}
+  ((ptn->matcher '{:a (? :var a (? :val 5))}) (vmr {:a 5})) ;=>> 
+  {:val {:a 5}})
 
+(defn- extract-pattern-vars
+  "Extract all ?-prefixed variable symbols from a pattern (at macro time).
+   Excludes quantified vars like ?x*, ?x+, ?x?"
+  [pattern]
+  (let [vars (atom #{})]
+    (walk/postwalk
+     (fn [x]
+       (when (and (symbol? x)
+                  (let [n (name x)]
+                    (and (= \? (first n))
+                         (> (count n) 1)
+                         (not (re-matches #"\?\S+[\?\+\*]\!?" n)))))
+         (swap! vars conj x))
+       x)
+     pattern)
+    @vars))
 
+(defmacro qfn
+  "Query function - pattern match and evaluate body with bindings. $ binds to matched value."
+  [pattern body]
+  (let [vars (extract-pattern-vars pattern)
+        data-sym (gensym "data")
+        result-sym (gensym "result")]
+    `(let [matcher# (ptn->matcher '~pattern)]
+       (fn [~data-sym]
+         (let [~result-sym (matcher# (vmr ~data-sym))]
+           (if (failure? ~result-sym)
+             ~result-sym
+             (let [~'$ (:val ~result-sym)
+                   ~@(mapcat (fn [v] [v `(get (:vars ~result-sym) '~v)]) vars)]
+               ~body)))))))
+
+^:rct/test
+(comment
+  ;;-------------------------------------------------------------------
+  ;; qfn - query function with pattern matching
+  ;;-------------------------------------------------------------------
+  ;; basic: evaluates body with bound variable
+  ((qfn ?x (+ ?x 2)) 3) ;=> 5
+  ;; map pattern with arithmetic
+  ((qfn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2}) ;=> 3
+  ;; special $ binds to matched value
+  ((qfn ?x (inc $)) 42) ;=> 43
+  ;; $ with map pattern binds to full matched map
+  ((qfn {:a ?x} (assoc $ :result ?x)) {:a 1 :b 2}) ;=> {:a 1 :b 2 :result 1}
+  ;; failure case: returns MatchFailure when pattern doesn't match
+  ((qfn {:a ?x} ?x) "not a map") ;=>> failure?
+  ;; sequence pattern
+  ((qfn [?a ?b ?c] (+ ?a ?b ?c)) [1 2 3]) ;=> 6
+  ;; can use any expression in body
+  ((qfn {:name ?n} (str "Hello, " ?n "!")) {:name "Alice"})) ;=> "Hello, Alice!")
