@@ -1,3 +1,6 @@
 {:hooks
  {:analyze-call
-  {sg.flybot.pullable.util/cond-let hooks.cond-let/cond-let}}}
+  {sg.flybot.pullable.util/cond-let hooks.cond-let/cond-let
+   sg.flybot.pullable.core/vars-> hooks.vars-arrow/vars->}}
+ :lint-as
+ {sg.flybot.pullable.core/defmatcher clojure.core/comment}}
