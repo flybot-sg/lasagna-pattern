@@ -23,7 +23,8 @@ pull2/
 │   └── sg/flybot/
 │       ├── pullable.cljc          # Public API (compile function)
 │       └── pullable/
-│           └── core.cljc          # Core matcher/pattern engine
+│           ├── core.cljc          # Core matcher/pattern engine
+│           └── util.cljc          # Pure utility functions/macros
 ├── test/
 │   └── sg/flybot/
 │       └── integrated_test.cljc
@@ -45,8 +46,9 @@ Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matc
 ```
 
 **Phase 1 - Outer (`ptn->core`)**: Rewrites syntax sugar into normalized core `(? :type ...)` patterns
-- `'[x]` → `'(? :seq [(? :one (? :var x (? :any))) (? :term)])`
-- `'x` → `'(? :var x (? :any))`
+- `'[?x]` → `'(? :seq [(? :one (? :var ?x (? :any))) (? :term)])`
+- `'?x` → `'(? :var ?x (? :any))`
+- `'foo` → `'(? :val foo)` (plain symbols match literal values)
 - `#"\d+"` → `'(? :regex #"\d+")`
 - `even?` → `'(? :pred even?)`
 
@@ -100,7 +102,8 @@ Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matc
 
 ```clojure
 ;; Top-level patterns - symbols and literals work directly
-(query 'x 3)           ;=> {x 3}     ; symbol binds value
+(query '?x 3)          ;=> {?x 3}    ; ?-prefixed symbol binds value
+(query 'foo 'foo)      ;=> {}        ; plain symbol matches literal
 (query 3 3)            ;=> {}        ; literal matches exactly
 (query 3 4)            ;=> nil       ; literal mismatch
 (query "hello" "hello") ;=> {}       ; string literal
@@ -109,27 +112,27 @@ Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matc
 ;; Core form
 (? :type args...)
 
-;; Variable bindings - plain symbols (preferred)
-x       ; bind value to 'x
+;; Variable bindings - must use ? prefix
+?x      ; bind value to '?x
 _       ; wildcard (match anything, no binding)
-''foo   ; match literal symbol 'foo
+foo     ; match literal symbol 'foo (no ? prefix)
 
 ;; Quantified variable bindings (in sequences)
-x?      ; optional (0 or 1)
-x+      ; one or more (lazy - matches minimum)
-x*      ; zero or more (lazy - matches minimum)
-x+!     ; one or more (greedy - matches maximum)
-x*!     ; zero or more (greedy - matches maximum)
-_*      ; zero or more wildcard (no binding)
+?x?     ; optional (0 or 1)
+?x+     ; one or more (lazy - matches minimum)
+?x*     ; zero or more (lazy - matches minimum)
+?x+!    ; one or more (greedy - matches maximum)
+?x*!    ; zero or more (greedy - matches maximum)
+?_*     ; zero or more wildcard (no binding)
 
 ;; Examples
-{:a x :b y}                   ; bind :a to x, :b to y (plain symbols)
-[head _ tail]                 ; head, ignore middle, tail
-{:type ''response}            ; match literal symbol 'response
+{:a ?x :b ?y}                 ; bind :a to ?x, :b to ?y
+[?head _ ?tail]               ; head, ignore middle, tail
+{:type response}              ; match literal symbol 'response
 (? :val 5)                    ; exact value
 (? :pred even?)               ; predicate
-[head tail+]                  ; head + rest (1 or more, lazy)
-[prefix* last]                ; prefix (0 or more, lazy) + last
+[?head ?tail+]                ; head + rest (1 or more, lazy)
+[?prefix* ?last]              ; prefix (0 or more, lazy) + last
 #"\d+"                        ; regex (matches strings, returns groups)
 ```
 
@@ -151,11 +154,11 @@ Regex patterns automatically match strings and return capture groups:
 
 ;; Regex in vector - validates string element
 (query ['?name #"\d+"] ["Alice" "42"])
-;=> {name "Alice"}
+;=> {?name "Alice"}
 
 ;; Bind regex groups using :var
-(query (list '? :var 'parts (list '? :regex #"(\w+)@(\w+)")) "user@host")
-;=> {parts ["user@host" "user" "host"]}
+(query (list '? :var '?parts (list '? :regex #"(\w+)@(\w+)")) "user@host")
+;=> {?parts ["user@host" "user" "host"]}
 ```
 
 ### Case Matching with Patterns
@@ -166,19 +169,19 @@ Symbol binding comes first, then key-pattern pairs:
 ```clojure
 ;; CLI option parser example - match first successful pattern
 (def opt-matcher
-  (compile '(? :case opt-type
+  (compile '(? :case ?opt-type
               :long-opt-with-value #"--([a-zA-Z]+)=(.+)"
               :long-opt #"--([a-zA-Z]+)"
               :short-opt #"-([a-zA-Z])")))
 
 (query opt-matcher "--name=Alice")
-;=> {opt-type :long-opt-with-value}  ; val is ["--name=Alice" "name" "Alice"]
+;=> {?opt-type :long-opt-with-value}  ; val is ["--name=Alice" "name" "Alice"]
 
 (query opt-matcher "--verbose")
-;=> {opt-type :long-opt}             ; val is ["--verbose" "verbose"]
+;=> {?opt-type :long-opt}             ; val is ["--verbose" "verbose"]
 
 (query opt-matcher "-v")
-;=> {opt-type :short-opt}            ; val is ["-v" "v"]
+;=> {?opt-type :short-opt}            ; val is ["-v" "v"]
 ```
 
 ### Lazy vs Greedy Matching
@@ -188,12 +191,12 @@ Add `!` suffix for **greedy** matching - matches the maximum possible.
 
 ```clojure
 ;; Lazy (default): first quantifier takes minimum
-(query '[a* b*] [1 2 3])    ;=> {a () b (1 2 3)}
-(query '[a+ b+] [1 2 3])    ;=> {a (1) b (2 3)}
+(query '[?a* ?b*] [1 2 3])    ;=> {?a () ?b (1 2 3)}
+(query '[?a+ ?b+] [1 2 3])    ;=> {?a (1) ?b (2 3)}
 
 ;; Greedy: first quantifier takes maximum
-(query '[a*! b*] [1 2 3])   ;=> {a (1 2 3) b ()}
-(query '[a+! b+] [1 2 3])   ;=> {a (1 2) b (3)}
+(query '[?a*! ?b*] [1 2 3])   ;=> {?a (1 2 3) ?b ()}
+(query '[?a+! ?b+] [1 2 3])   ;=> {?a (1 2) ?b (3)}
 ```
 
 ### Maps and Sets as Predicates
@@ -216,8 +219,8 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 (query {:status #{:active :pending}} {:status :closed})  ;=> nil
 
 ;; Set in :filter - collect matching elements
-(query (list '? :seq [(list '? :filter #{:a :b} 'matched)]) [:a :c :b :d])
-;=> {matched [:a :b]}
+(query (list '? :seq [(list '? :filter #{:a :b} '?matched)]) [:a :c :b :d])
+;=> {?matched [:a :b]}
 ```
 
 ### Pattern Types Reference
@@ -266,9 +269,9 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 
 ;; Multiple ways to use compiled matcher:
 (m {:name "Alice" :age 30})        ;=> ValMatchResult (raw, for chaining)
-(p/query m {:name "Alice" :age 30}) ;=> {name "Alice" age 30} or nil
+(p/query m {:name "Alice" :age 30}) ;=> {?name "Alice" ?age 30} or nil
 (p/match-result m {:name "Alice"})  ;=> MatchFailure with diagnostics
-(p/match! m {:name "Alice" :age 30}) ;=> {name "Alice" age 30} or throws
+(p/match! m {:name "Alice" :age 30}) ;=> {?name "Alice" ?age 30} or throws
 
 ;; Transform: returns both updated data and bindings
 (p/transform '{:count (? :update inc)} {:count 5 :name "test"})
@@ -277,7 +280,7 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 (p/transform! '{:x (? :pred even?)} {:x 3})  ;=> throws on mismatch
 
 ;; Also works with raw patterns (compiles each time, for REPL):
-(p/query '{:x ?x} {:x 42})  ;=> {x 42}
+(p/query '{:x ?x} {:x 42})  ;=> {?x 42}
 
 ;; Term rewriting (pattern-based transformation)
 (def double->add (p/rewrite-rule '[* 2 ?x] '(+ ?x ?x)))
@@ -335,3 +338,4 @@ Uses **Jujutsu (jj)**, not Git. Check status with `jj status`.
 |-----------|--------|---------|
 | `sg.flybot.pullable` | Implemented | Public API (`compile` function) |
 | `sg.flybot.pullable.core` | Implemented | Core engine, matchers, MatchFailure |
+| `sg.flybot.pullable.util` | Implemented | Pure utility functions/macros (e.g., `vars->`) |
