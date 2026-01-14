@@ -765,22 +765,20 @@
   (mzcollect matcher-type 'steps)
   (fn [vars] (mchain (get vars 'steps))))
 
-(defmatcher :match-case "(? :match-case <key> <matcher>... [<sym>])"
-  ;; Collect all remaining args - parsed in builder to handle optional trailing sym
-  (mzcollect (constantly true) 'items 2)
+(defmatcher :case "(? :case [<sym>] <key> <matcher>...)"
+  ;; First optional sym, then collect key-matcher pairs
+  (mzsubseq [(mzoption (mvar 'sym (mpred symbol?)))
+             (mzcollect (constantly true) 'items 2)]
+            nil)
   (fn [vars]
-    (let [items (get vars 'items)
-          n (count items)
-          ;; If odd count, last item is sym for binding the matched key
-          [kv-items sym] (if (odd? n)
-                           [(butlast items) (last items)]
-                           [items nil])
+    (let [sym (get vars 'sym)
+          kv-items (get vars 'items)
           ;; Validate structure: even count, matchers at odd indices
           _ (when-not (and (even? (count kv-items))
                            (every? matcher-type (take-nth 2 (rest kv-items))))
-              (throw (ex-info (str "Invalid :match-case arguments. Expected: "
-                                   "(? :match-case <key> <matcher>... [<sym>])")
-                              {:items items})))]
+              (throw (ex-info (str "Invalid :case arguments. Expected: "
+                                   "(? :case [<sym>] <key> <matcher>...)")
+                              {:items kv-items})))]
       (mcase (vec kv-items) sym))))
 
 (defmatcher :filter "(? :filter <pred> [<sym>])"
@@ -1004,11 +1002,16 @@
   [x rewrite]
   (when (core-pattern? x)
     (let [[q t & args] x]
-      (if (= :match-case t)
-        ;; :match-case has patterns at odd indices
-        (apply list q t (map-indexed
-                         (fn [i arg] (if (odd? i) (rewrite arg) arg))
-                         args))
+      (if (= :case t)
+        ;; :case format: (? :case [sym] :k1 ptn1 :k2 ptn2 ...)
+        ;; patterns are at odd indices in kv-args
+        (let [[sym kv-args] (if (symbol? (first args))
+                              [(first args) (rest args)]
+                              [nil args])
+              rewritten-kv (map-indexed
+                            (fn [i arg] (if (odd? i) (rewrite arg) arg))
+                            kv-args)]
+          (apply list q t (if sym (cons sym rewritten-kv) rewritten-kv)))
         (apply list q t (map (partial rewrite-arg rewrite) args))))))
 
 (defn- rw-double-quoted
@@ -1162,22 +1165,25 @@
   ((rule-of core-rule (list '? :-> (mpred even?) (mpred neg?))) (vmr 4)) ;=>> failure?
 
   ;;-------------------------------------------------------------------
-  ;; match-case - case matching with key binding (inline pairs, no vector)
+  ;; case - case matching with key binding (sym first, then key-matcher pairs)
   ;;-------------------------------------------------------------------
   ;; binds matched key to symbol
-  ((rule-of core-rule (list '? :match-case :even (mpred even?) :neg-one (mval -1) 'which)) (vmr 4)) ;=>>
+  ((rule-of core-rule (list '? :case 'which :even (mpred even?) :neg-one (mval -1))) (vmr 4)) ;=>>
   {:val 4 :vars '{which :even}}
   ;; falls through to second case
-  ((rule-of core-rule (list '? :match-case :even (mpred even?) :neg-one (mval -1) 'which)) (vmr -1)) ;=>>
+  ((rule-of core-rule (list '? :case 'which :even (mpred even?) :neg-one (mval -1))) (vmr -1)) ;=>>
   {:val -1 :vars '{which :neg-one}}
   ;; fails when no case matches
-  ((rule-of core-rule (list '? :match-case :even (mpred even?) :neg-one (mval -1) 'which)) (vmr 3)) ;=>>
+  ((rule-of core-rule (list '? :case 'which :even (mpred even?) :neg-one (mval -1))) (vmr 3)) ;=>>
   failure?
-  ;; match-case with regex patterns (compiled via ptn->matcher)
-  ((ptn->matcher (list '? :match-case :long-opt #"--([a-zA-Z]+)" :short-opt #"-([a-zA-Z])" 'opt-type))
+  ;; case without symbol binding
+  ((rule-of core-rule (list '? :case :even (mpred even?) :neg-one (mval -1))) (vmr 4)) ;=>>
+  {:val 4}
+  ;; case with regex patterns (compiled via ptn->matcher)
+  ((ptn->matcher (list '? :case 'opt-type :long-opt #"--([a-zA-Z]+)" :short-opt #"-([a-zA-Z])"))
    (vmr "--verbose")) ;=>>
   {:val ["--verbose" "verbose"] :vars '{opt-type :long-opt}}
-  ((ptn->matcher (list '? :match-case :long-opt #"--([a-zA-Z]+)" :short-opt #"-([a-zA-Z])" 'opt-type))
+  ((ptn->matcher (list '? :case 'opt-type :long-opt #"--([a-zA-Z]+)" :short-opt #"-([a-zA-Z])"))
    (vmr "-v")) ;=>>
   {:val ["-v" "v"] :vars '{opt-type :short-opt}}
 
