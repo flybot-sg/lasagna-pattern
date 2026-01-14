@@ -659,6 +659,17 @@
 
 (def ^:private matcher-specs* (atom {}))
 
+(defmacro vars->
+  "Create a fn that destructures vars map.
+   (vars-> [sym child] (mvar sym child))
+   expands to:
+   (fn [vars] (let [sym (get vars 'sym) child (get vars 'child)] (mvar sym child)))"
+  [bindings & body]
+  (let [vars-sym (gensym "vars")]
+    `(fn [~vars-sym]
+       (let [~@(mapcat (fn [sym] [sym `(get ~vars-sym '~sym)]) bindings)]
+         ~@body))))
+
 (defmacro defmatcher
   "Define a matcher type specification.
    type - keyword like :pred, :val, etc.
@@ -691,27 +702,27 @@
 
 (defmatcher :pred "(? :pred <fn>)"
   (mzone (mvar 'f identity))
-  (fn [vars] (mpred (get vars 'f))))
+  (vars-> [f] (mpred f)))
 
 (defmatcher :val "(? :val <value>)"
   (mzone (mvar 'val identity))
-  (fn [vars] (mval (get vars 'val))))
+  (vars-> [val] (mval val)))
 
 (defmatcher :any "(? :any)"
   mterm  ;; no args expected
-  (fn [_vars] wildcard))
+  (vars-> [] wildcard))
 
 (defmatcher :map "(? :map <map>)"
   (mzone (mvar 'map (mpred map?)))
-  (fn [vars] (mmap (get vars 'map))))
+  (vars-> [map] (mmap map)))
 
 (defmatcher :one "(? :one <matcher>)"
   (mzone (mvar 'child (mpred matcher-type)))
-  (fn [vars] (mzone (get vars 'child))))
+  (vars-> [child] (mzone child)))
 
 (defmatcher :optional "(? :optional <matcher>)"
   (mzone (mvar 'child (mpred matcher-type)))
-  (fn [vars] (mzoption (get vars 'child)))
+  (vars-> [child] (mzoption child))
   {:subseq? true})
 
 (defmatcher :repeat "(? :repeat <matcher> :min <n> [:max <n>] [:as <sym>] [:greedy])"
@@ -719,98 +730,89 @@
   (mzsubseq [(mzone (mvar 'child (mpred matcher-type)))
              (mzcollect (constantly true) 'rest 0)]
             nil)
-  (fn [vars]
-    (let [child (get vars 'child)
-          rest-args (get vars 'rest)
-          kw-args (parse-keyword-args rest-args)
-          min-len (or (:min kw-args) 0)
-          max-len (:max kw-args)
-          sym (:as kw-args)
-          greedy? (contains? kw-args :greedy)]
-      (mzrepeat child min-len {:max-len max-len :greedy? greedy? :sym sym})))
+  (vars-> [child rest]
+          (let [kw-args (parse-keyword-args rest)
+                min-len (or (:min kw-args) 0)
+                max-len (:max kw-args)
+                sym (:as kw-args)
+                greedy? (contains? kw-args :greedy)]
+            (mzrepeat child min-len {:max-len max-len :greedy? greedy? :sym sym})))
   {:subseq? true})
 
 (defmatcher :seq "(? :seq [<matchers>...])"
   (mzone (mvar 'children (mpred #(every? matcher-type %))))
-  (fn [vars]
-    (mseq (get vars 'children))))
+  (vars-> [children] (mseq children)))
 
 (defmatcher :term "(? :term)"
   mterm
-  (fn [_vars] mterm)
+  (vars-> [] mterm)
   {:subseq? true})
 
 (defmatcher :var "(? :var <sym> <matcher>)"
   (mzsubseq [(mzone (mvar 'sym (mpred symbol?)))
              (mzone (mvar 'child (mpred matcher-type)))]
             nil)
-  (fn [vars] (mvar (get vars 'sym) (get vars 'child))))
+  (vars-> [sym child] (mvar sym child)))
 
 (defmatcher :or "(? :or <matcher>...)"
   (mzcollect matcher-type 'alternatives)
-  (fn [vars] (mor (get vars 'alternatives))))
+  (vars-> [alternatives] (mor alternatives)))
 
 (defmatcher :not "(? :not <matcher>)"
   (mzone (mvar 'child (mpred matcher-type)))
-  (fn [vars]
-    (let [child (get vars 'child)]
-      (matcher :not
-               (fn [mr]
-                 (let [result (child mr)]
-                   (if (failure? result)
-                     mr  ; child failed, so :not succeeds
-                     (fail "negation failed: child matcher succeeded" :not (:val mr)))))))))
+  (vars-> [child]
+          (matcher :not
+                   (fn [mr]
+                     (let [result (child mr)]
+                       (if (failure? result)
+                         mr  ; child failed, so :not succeeds
+                         (fail "negation failed: child matcher succeeded" :not (:val mr))))))))
 
 (defmatcher :-> "(? :-> <matcher>...)"
   (mzcollect matcher-type 'steps)
-  (fn [vars] (mchain (get vars 'steps))))
+  (vars-> [steps] (mchain steps)))
 
 (defmatcher :case "(? :case [<sym>] <key> <matcher>...)"
   ;; First optional sym, then collect key-matcher pairs
   (mzsubseq [(mzoption (mvar 'sym (mpred symbol?)))
              (mzcollect (constantly true) 'items 2)]
             nil)
-  (fn [vars]
-    (let [sym (get vars 'sym)
-          kv-items (get vars 'items)
-          ;; Validate structure: even count, matchers at odd indices
-          _ (when-not (and (even? (count kv-items))
-                           (every? matcher-type (take-nth 2 (rest kv-items))))
-              (throw (ex-info (str "Invalid :case arguments. Expected: "
-                                   "(? :case [<sym>] <key> <matcher>...)")
-                              {:items kv-items})))]
-      (mcase (vec kv-items) sym))))
+  (vars-> [sym items]
+    ;; Validate structure: even count, matchers at odd indices
+          (when-not (and (even? (count items))
+                         (every? matcher-type (take-nth 2 (rest items))))
+            (throw (ex-info (str "Invalid :case arguments. Expected: "
+                                 "(? :case [<sym>] <key> <matcher>...)")
+                            {:items items})))
+          (mcase (vec items) sym)))
 
 (defmatcher :filter "(? :filter <pred> [<sym>])"
   (mzsubseq [(mzone (mvar 'pred (mpred ifn?)))
              (mzoption (mvar 'sym (mpred symbol?)))]
             nil)
-  (fn [vars] (mzfilter (get vars 'pred) {:sym (get vars 'sym)}))
+  (vars-> [pred sym] (mzfilter pred {:sym sym}))
   {:subseq? true})
 
 (defmatcher :first "(? :first <pred> [<sym>])"
   (mzsubseq [(mzone (mvar 'pred (mpred ifn?)))
              (mzoption (mvar 'sym (mpred symbol?)))]
             nil)
-  (fn [vars] (mzfirst (get vars 'pred) {:sym (get vars 'sym)}))
+  (vars-> [pred sym] (mzfirst pred {:sym sym}))
   {:subseq? true})
 
 (defmatcher :sub "(? :sub [<matcher>] <fn>)"
   (mzsubseq [(mzoption (mvar 'child (mpred matcher-type)))
              (mzone (mvar 'f (mpred ifn?)))]
             nil)
-  (fn [vars]
-    (let [f (get vars 'f)
-          child (or (get vars 'child) wildcard)]
-      (mchain [child (msub f)]))))
+  (vars-> [child f]
+          (mchain [(or child wildcard) (msub f)])))
 
 (defmatcher :update "(? :update <fn>)"
   (mzone (mvar 'f (mpred ifn?)))
-  (fn [vars]
-    (let [f (get vars 'f)]
-      (matcher :update
-               (fn [mr]
-                 (assoc mr :val (f (:val mr))))))))
+  (vars-> [f]
+          (matcher :update
+                   (fn [mr]
+                     (assoc mr :val (f (:val mr)))))))
 
 ^:rct/test
 (comment
@@ -828,17 +830,16 @@
 
 (defmatcher :regex "(? :regex <pattern>)"
   (mzone (mvar 'pattern (mpred regex?)))
-  (fn [vars]
-    (let [pattern (get vars 'pattern)]
-      (matcher :regex
-               (fn [mr]
-                 (let [v (:val mr)]
-                   (if-not (string? v)
-                     (fail (str "expected string for regex match, got " (type v)) :regex v)
-                     (if-let [result (re-matches pattern v)]
-                       ;; re-matches returns: string (no groups), or vector [full-match & groups]
-                       (assoc mr :val (if (string? result) [result] result))
-                       (fail (str "regex " pattern " did not match: " (pr-str v)) :regex v)))))))))
+  (vars-> [pattern]
+          (matcher :regex
+                   (fn [mr]
+                     (let [v (:val mr)]
+                       (if-not (string? v)
+                         (fail (str "expected string for regex match, got " (type v)) :regex v)
+                         (if-let [result (re-matches pattern v)]
+                     ;; re-matches returns: string (no groups), or vector [full-match & groups]
+                           (assoc mr :val (if (string? result) [result] result))
+                           (fail (str "regex " pattern " did not match: " (pr-str v)) :regex v))))))))
 
 (def ^:private matcher-specs
   "Unified specifications for each matcher type, populated by defmatcher."
