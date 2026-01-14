@@ -158,19 +158,18 @@ Regex patterns automatically match strings and return capture groups:
 ;=> {parts ["user@host" "user" "host"]}
 ```
 
-### Match-case with Patterns
+### Case Matching with Patterns
 
-`:match-case` supports patterns (like regex) that are automatically compiled.
-Uses inline key-pattern pairs (no vector wrapper):
+`:case` supports patterns (like regex) that are automatically compiled.
+Symbol binding comes first, then key-pattern pairs:
 
 ```clojure
 ;; CLI option parser example - match first successful pattern
 (def opt-matcher
-  (compile '(? :match-case
+  (compile '(? :case opt-type
               :long-opt-with-value #"--([a-zA-Z]+)=(.+)"
               :long-opt #"--([a-zA-Z]+)"
-              :short-opt #"-([a-zA-Z])"
-              opt-type)))
+              :short-opt #"-([a-zA-Z])")))
 
 (query opt-matcher "--name=Alice")
 ;=> {opt-type :long-opt-with-value}  ; val is ["--name=Alice" "name" "Alice"]
@@ -238,7 +237,7 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 | `:or` | `(? :or <matcher>...)` | Match first successful alternative |
 | `:not` | `(? :not <matcher>)` | Succeed if child matcher fails |
 | `:->` | `(? :-> <matcher>...)` | Chain matchers sequentially |
-| `:match-case` | `(? :match-case <key> <pattern>... [<sym>])` | Match first case, bind key to sym (patterns auto-compiled) |
+| `:case` | `(? :case [<sym>] <key> <pattern>...)` | Match first case, bind key to sym (patterns auto-compiled) |
 | `:filter` | `(? :filter <pred> [<sym>])` | Filter sequence elements by predicate (fn/map/set) |
 | `:first` | `(? :first <pred> [<sym>])` | Find first element matching predicate (fn/map/set) |
 | `:sub` | `(? :sub [<matcher>] <ifn>)` | Apply ifn to transform matched value |

@@ -66,7 +66,7 @@
    | :or         | (? :or <matcher>...)                            |
    | :not        | (? :not <matcher>)                              |
    | :->         | (? :-> <matcher>...)                            |
-   | :match-case | (? :match-case <key> <matcher>... [<sym>])      |
+   | :case       | (? :case [<sym>] <key> <matcher>...)            |
    | :filter     | (? :filter <pred> [<sym>])                      |
    | :first      | (? :first <pred> [<sym>])                       |
    | :sub        | (? :sub [<matcher>] <ifn>)                      |

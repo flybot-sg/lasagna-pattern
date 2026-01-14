@@ -62,7 +62,7 @@ When implementing or modifying the pattern DSL:
 4. Avoid special-case handling; if a pattern needs prewalk protection, consider redesigning the syntax
 5. When choosing between implementation complexity and syntax flexibility, favor simplicity
 
-**Example:** `:match-case` uses inline pairs `(? :match-case :k1 ptn1 :k2 ptn2 sym)` instead of a vector wrapper, eliminating the need for special prewalk handling.
+**Example:** `:case` uses inline pairs `(? :case sym :k1 ptn1 :k2 ptn2)` instead of a vector wrapper, eliminating the need for special prewalk handling.
 
 ## Development Workflow
 
