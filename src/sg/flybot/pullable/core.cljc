@@ -185,7 +185,9 @@
 ;;=============================================================================
 
 ;;## Implementation of matchers
-;;A matcher is a function take a mr and returns a mr, if not match, returns nil
+;;
+;; A matcher is a function that takes a mr and returns a mr,
+;; or a MatchFailure if not matching.
 
 (defn matcher
   "Create a matcher function with metadata tracking its type"
@@ -230,13 +232,13 @@
 (defn mvar
   "bind a `child` matcher's `:val` to a `sym`"
   [sym child]
-  (with-meta
-    (fn [mr]
-      (let [mr' (child mr)]
-        (if (failure? mr')
-          mr'
-          (-bind mr' sym (:val mr')))))
-    (meta child)))
+  (matcher :var
+           (fn [mr]
+             (let [mr' (child mr)]
+               (if (failure? mr')
+                 mr'
+                 (-bind mr' sym (:val mr')))))
+           ::child-type (matcher-type child)))
 
 ^:rct/test
 (comment
@@ -277,7 +279,7 @@
   "a matcher tests sequentially `kv-matchers`, which is a key to a matcher,
   bind the successful key to `sym`"
   [kv-matchers sym]
-  (matcher :nor
+  (matcher :case
            (fn [mr]
              (loop [kvs (partition 2 kv-matchers)
                     best-fail nil]
@@ -286,14 +288,14 @@
                    (if (failure? result)
                      (recur rest (deeper-failure best-fail result))
                      (cond-> result sym (-bind sym k))))
-                 (or best-fail (fail "no matchers matched" :nor (:val mr))))))))
+                 (or best-fail (fail "no matchers matched" :case (:val mr))))))))
 
 ^:rct/test
 (comment
   ;; mor returns first successful match (short-circuits)
   (map (mor [(mpred neg?) (mpred even?)]) [(vmr -1) (vmr 2) (vmr 3)]) ;=>>
   [{} {} failure?]
-  ;; mnor tries matchers in order, binds key of first success to symbol
+  ;; mcase tries matchers in order, binds key of first success to symbol
   ((mcase [0 (mpred even?) 1 (mpred odd?)] 'b) (vmr 3)) ;=>> 
   {:vars {'b 1}})
 
@@ -370,9 +372,11 @@
                        result (child (assoc zmr :val node))]
                    (if (failure? result)
                      result
-                     (-> zmr
-                         (vapply (fn [z] (let [nv (:val result)] (-> (if (= node nv) z (zip/replace z nv)) zip-advance))))
-                         (merge-vars result)))))))))
+                     (let [nv (:val result)
+                           z' (if (= node nv) zip (zip/replace zip nv))]
+                       (-> zmr
+                           (assoc :val (zip-advance z'))
+                           (merge-vars result))))))))))
 
 ^:rct/test
 (comment
