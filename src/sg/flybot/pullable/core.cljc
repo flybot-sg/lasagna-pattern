@@ -1252,27 +1252,10 @@
   ((ptn->matcher '{:a (? :var a (? :val 5))}) (vmr {:a 5})) ;=>> 
   {:val {:a 5}})
 
-(defn- extract-pattern-vars
-  "Extract all ?-prefixed variable symbols from a pattern (at macro time).
-   Excludes quantified vars like ?x*, ?x+, ?x?"
-  [pattern]
-  (let [vars (atom #{})]
-    (walk/postwalk
-     (fn [x]
-       (when (and (symbol? x)
-                  (let [n (name x)]
-                    (and (= \? (first n))
-                         (> (count n) 1)
-                         (not (re-matches #"\?\S+[\?\+\*]\!?" n)))))
-         (swap! vars conj x))
-       x)
-     pattern)
-    @vars))
-
 (defmacro qfn
   "Query function - pattern match and evaluate body with bindings. $ binds to matched value."
   [pattern body]
-  (let [vars (extract-pattern-vars pattern)
+  (let [vars (into #{} (filter plain-var-symbol?) (tree-seq coll? seq pattern))
         data-sym (gensym "data")
         result-sym (gensym "result")]
     `(let [matcher# (ptn->matcher '~pattern)]
