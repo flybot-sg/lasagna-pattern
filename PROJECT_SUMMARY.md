@@ -264,32 +264,33 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 ;; Public API (sg.flybot.pullable)
 (require '[sg.flybot.pullable :as p])
 
-;; Compile pattern once, reuse many times
-(def m (p/compile '{:name ?name :age ?age}))
+;; match-fn - create pattern-matching functions
+;; Returns: body result on match, MatchFailure on mismatch
+((p/match-fn {:name ?name :age ?age}
+             (str ?name " is " ?age))
+ {:name "Alice" :age 30})
+;=> "Alice is 30"
 
-;; Multiple ways to use compiled matcher:
-(m {:name "Alice" :age 30})        ;=> ValMatchResult (raw, for chaining)
-(p/query m {:name "Alice" :age 30}) ;=> {?name "Alice" ?age 30} or nil
-(p/match-result m {:name "Alice"})  ;=> MatchFailure with diagnostics
-(p/match! m {:name "Alice" :age 30}) ;=> {?name "Alice" ?age 30} or throws
+;; $ binds to the matched/transformed value
+((p/match-fn {:x ?x} (assoc $ :doubled (* 2 ?x)))
+ {:x 5 :y 10})
+;=> {:x 5 :y 10 :doubled 10}
 
-;; Transform: returns both updated data and bindings
-(p/transform '{:count (? :update inc)} {:count 5 :name "test"})
-;=> {:result {:count 6 :name "test"} :vars {}}
+;; Check for match failure
+(p/failure? ((p/match-fn {:a ?a} ?a) "not a map"))
+;=> true
 
-(p/transform! '{:x (? :pred even?)} {:x 3})  ;=> throws on mismatch
-
-;; Also works with raw patterns (compiles each time, for REPL):
-(p/query '{:x ?x} {:x 42})  ;=> {?x 42}
-
-;; Term rewriting (pattern-based transformation)
-(def double->add (p/rewrite-rule '[* 2 ?x] '(+ ?x ?x)))
-(double->add '(* 2 5))      ;=> (+ 5 5)
-(double->add '(+ 1 2))      ;=> nil (no match)
+;; Access MatchFailure fields for diagnostics
+(let [result ((p/match-fn {:a ?a} ?a) "not a map")]
+  (when (p/failure? result)
+    {:reason (:reason result)
+     :path   (:path result)
+     :value  (:value result)}))
+;=> {:reason "expected map, got ..." :path [] :value "not a map"}
 
 ;; Low-level (sg.flybot.pullable.core)
 (ptn->matcher pattern) → matcher-fn
-(vmr value)            → ValMatchResult (with :vars defaulting to {})
+(vmr value)            → ValMatchResult
 ;; Note: Sequence matching preserves collection types (vectors stay vectors, lists stay lists)
 ```
 
@@ -336,6 +337,6 @@ Uses **Jujutsu (jj)**, not Git. Check status with `jj status`.
 
 | Namespace | Status | Purpose |
 |-----------|--------|---------|
-| `sg.flybot.pullable` | Implemented | Public API (`compile` function) |
+| `sg.flybot.pullable` | Implemented | Public API (`match-fn`, `failure?`) |
 | `sg.flybot.pullable.core` | Implemented | Core engine, matchers, MatchFailure |
 | `sg.flybot.pullable.util` | Implemented | Pure utility functions/macros (e.g., `vars->`) |

@@ -1252,13 +1252,100 @@
   ((ptn->matcher '{:a (? :var a (? :val 5))}) (vmr {:a 5})) ;=>> 
   {:val {:a 5}})
 
-(defmacro qfn
-  "Query function - pattern match and evaluate body with bindings. $ binds to matched value."
+(defn- extract-binding-symbol
+  "Extract the binding symbol from a pattern variable.
+   Returns the symbol that will be bound at runtime, or nil.
+   - ?x      -> ?x
+   - ?rest*  -> ?rest
+   - ?x+!    -> ?x
+   - ?_*     -> nil (wildcard)"
+  [x]
+  (when (symbol? x)
+    (or (plain-var-symbol? x)
+        (when-let [{:keys [sym]} (parse-matching-var x)]
+          sym))))
+
+(defn- varlike-symbol?
+  "Check if symbol looks like a pattern variable (?x, ?name, _, ?x*, etc.)"
+  [sym]
+  (let [n (name sym)]
+    (or (= "_" n)
+        (= \? (first n)))))
+
+(def ^:private fn-taking-forms
+  "Core pattern types where the third element is a function to be resolved.
+   (? :type <fn>) forms."
+  #{:pred :update :filter :first})
+
+(defn- quote-pattern
+  "Quote a pattern, but resolve symbols that should be functions.
+   - (? :pred/update/filter/first sym) - resolve sym
+   - (? :sub ... sym) - resolve sym (last position)
+   - Map values that are non-variable symbols - resolve them (for predicate sugar)"
+  [pattern]
+  (cond
+    ;; (? :pred/update/filter/first sym) - resolve the function symbol
+    (and (seq? pattern)
+         (= '? (first pattern))
+         (fn-taking-forms (second pattern))
+         (>= (count pattern) 3)
+         (symbol? (nth pattern 2)))
+    `(list '~'? ~(second pattern) ~(nth pattern 2)
+           ~@(map quote-pattern (drop 3 pattern)))
+
+    ;; (? :sub [matcher] fn) - resolve the function in last position
+    (and (seq? pattern)
+         (= '? (first pattern))
+         (= :sub (second pattern))
+         (>= (count pattern) 3)
+         (symbol? (last pattern)))
+    `(list '~'? :sub ~@(map quote-pattern (butlast (drop 2 pattern))) ~(last pattern))
+
+    ;; Other seq/list - recurse into children
+    (seq? pattern)
+    `(list ~@(map quote-pattern pattern))
+
+    ;; Vector - recurse into children
+    (vector? pattern)
+    (mapv quote-pattern pattern)
+
+    ;; Map - recurse into values, but don't quote non-variable symbols (predicates)
+    (map? pattern)
+    (into {}
+          (map (fn [[k v]]
+                 [k (if (and (symbol? v) (not (varlike-symbol? v)))
+                      v  ; Don't quote - resolve as predicate function
+                      (quote-pattern v))]))
+          pattern)
+
+    ;; Symbols - quote them (variables like ?x need to stay as symbols)
+    (symbol? pattern)
+    `'~pattern
+
+    ;; Other literals (keywords, numbers, strings, regex) - as is
+    :else pattern))
+
+(defmacro match-fn
+  "Create a function that pattern-matches its argument and evaluates body with bindings.
+
+   On successful match, evaluates body with pattern variables bound.
+   On failed match, returns a MatchFailure record.
+
+   The special symbol $ is bound to the matched/transformed value.
+
+   Example:
+     ((match-fn {:name ?name} (str \"Hello, \" ?name))
+      {:name \"Alice\"})
+     ;=> \"Hello, Alice\"
+
+   See `failure?` to check for match failures, and access MatchFailure fields
+   (:reason, :path, :value) for diagnostics."
   [pattern body]
-  (let [vars (into #{} (filter plain-var-symbol?) (tree-seq coll? seq pattern))
+  (let [vars (into #{} (keep extract-binding-symbol) (tree-seq coll? seq pattern))
+        quoted-pattern (quote-pattern pattern)
         data-sym (gensym "data")
         result-sym (gensym "result")]
-    `(let [matcher# (ptn->matcher '~pattern)]
+    `(let [matcher# (ptn->matcher ~quoted-pattern)]
        (fn [~data-sym]
          (let [~result-sym (matcher# (vmr ~data-sym))]
            (if (failure? ~result-sym)
@@ -1270,19 +1357,57 @@
 ^:rct/test
 (comment
   ;;-------------------------------------------------------------------
-  ;; qfn - query function with pattern matching
+  ;; match-fn - create pattern-matching functions
   ;;-------------------------------------------------------------------
   ;; basic: evaluates body with bound variable
-  ((qfn ?x (+ ?x 2)) 3) ;=> 5
+  ((match-fn ?x (+ ?x 2)) 3) ;=> 5
   ;; map pattern with arithmetic
-  ((qfn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2}) ;=> 3
+  ((match-fn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2}) ;=> 3
   ;; special $ binds to matched value
-  ((qfn ?x (inc $)) 42) ;=> 43
+  ((match-fn ?x (inc $)) 42) ;=> 43
   ;; $ with map pattern binds to full matched map
-  ((qfn {:a ?x} (assoc $ :result ?x)) {:a 1 :b 2}) ;=> {:a 1 :b 2 :result 1}
-  ;; failure case: returns MatchFailure when pattern doesn't match
-  ((qfn {:a ?x} ?x) "not a map") ;=>> failure?
+  ((match-fn {:a ?x} (assoc $ :result ?x)) {:a 1 :b 2}) ;=> {:a 1 :b 2 :result 1}
   ;; sequence pattern
-  ((qfn [?a ?b ?c] (+ ?a ?b ?c)) [1 2 3]) ;=> 6
+  ((match-fn [?a ?b ?c] (+ ?a ?b ?c)) [1 2 3]) ;=> 6
   ;; can use any expression in body
-  ((qfn {:name ?n} (str "Hello, " ?n "!")) {:name "Alice"})) ;=> "Hello, Alice!")
+  ((match-fn {:name ?n} (str "Hello, " ?n "!")) {:name "Alice"}) ;=> "Hello, Alice!"
+
+  ;;-------------------------------------------------------------------
+  ;; match-fn - quantified variable bindings
+  ;;-------------------------------------------------------------------
+  ;; ?rest* binds to ?rest in body
+  ((match-fn [?first ?rest*] {:first ?first :rest ?rest}) [1 2 3]) ;=> {:first 1 :rest (2 3)}
+  ;; ?tail+ binds to ?tail in body
+  ((match-fn [?head ?tail+] [?head ?tail]) [1 2 3]) ;=> [1 (2 3)]
+  ;; ?opt? binds to ?opt in body
+  ((match-fn [?a ?b?] [?a ?b]) [1]) ;=> [1 nil]
+  ;; greedy ?items*! binds to ?items in body
+  ((match-fn [?items*! ?last] {:items ?items :last ?last}) [1 2 3]) ;=> {:items (1 2) :last 3}
+
+  ;;-------------------------------------------------------------------
+  ;; match-fn - predicate resolution
+  ;;-------------------------------------------------------------------
+  ;; predicates in map values are resolved (sugar syntax)
+  ((match-fn {:n even?} "even") {:n 4}) ;=> "even"
+  ;; predicate failure
+  ((match-fn {:n even?} "even") {:n 3}) ;=>> failure?
+  ;; sets as predicates (membership test)
+  ((match-fn {:status #{:ok :pending}} "valid") {:status :ok}) ;=> "valid"
+  ;; explicit (? :pred ...) syntax also works
+  ((match-fn {:n (? :pred odd?)} "odd") {:n 3}) ;=> "odd"
+
+  ;;-------------------------------------------------------------------
+  ;; match-fn - failure handling
+  ;;-------------------------------------------------------------------
+  ;; returns MatchFailure when pattern doesn't match
+  ((match-fn {:a ?x} ?x) "not a map") ;=>> failure?
+  ;; MatchFailure contains :reason for human-readable message
+  (:reason ((match-fn {:a ?x} ?x) "not a map")) ;=>> string?
+  ;; MatchFailure contains :value showing what failed
+  (:value ((match-fn {:a ?x} ?x) "not a map")) ;=> "not a map"
+  ;; MatchFailure contains :path - empty at top level
+  (:path ((match-fn {:a ?x} ?x) "not a map")) ;=> []
+  ;; nested map failure includes path to failed key
+  (let [f (match-fn {:a ?a} ?a)
+        result (f {:b 1})]
+    [(:path result) (:value result)])) ;=> [[:a] nil])

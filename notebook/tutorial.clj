@@ -11,528 +11,457 @@
 ;; PART 1: Introduction
 ;;=============================================================================
 ;;
-;; flybot.pullable is a declarative pattern matching and data extraction library.
-;; Think of it as a query language for Clojure data structures.
+;; flybot.pullable is a pattern matching library for Clojure data structures.
+;; It lets you match patterns and compute with the matched values.
+;;
+;; The public API is minimal - just two exports:
+;; - `match-fn` - create a function that pattern-matches and computes
+;; - `failure?` - check if a match failed
 ;;
 ;; Key concepts:
-;; - Pattern: A template that describes the shape of data you want to match
-;; - Variables: Plain symbols (like x, name) that capture values from the data
-;; - Matcher: A compiled pattern that can be applied to data
-;;
-;; The library is inspired by Datomic Pull and GraphQL, providing a small,
-;; composable core for data transformation.
+;; - Pattern: A template describing the shape of data to match
+;; - Variables: Symbols prefixed with ? (like ?x, ?name) that capture values
+;; - MatchFailure: Returned when a pattern doesn't match, with diagnostics
 
 ;;=============================================================================
-;; PART 2: Quick Start
-;;=============================================================================
-
-;; The main entry point is `p/query` - give it a pattern and data:
-
-(comment
-  ;; Match a map and extract values
-  (p/query '{:name name :age age}
-           {:name "Alice" :age 30})
-  ;=> {name "Alice", age 30}
-
-  ;; Variables are plain symbols in the pattern
-  ;; The result is a map of variable bindings (symbol -> value)
-
-  ;; Match a vector and extract elements
-  (p/query '[first second third]
-           [1 2 3])
-  ;=> {first 1, second 2, third 3}
-
-  ;; When the pattern doesn't match, returns nil
-  (p/query '[x y] [1 2 3])  ; pattern expects 2 elements, data has 3
-  ;=> nil
-  )
-
-;;=============================================================================
-;; PART 3: Compiling Patterns
+;; PART 2: Quick Start with match-fn
 ;;=============================================================================
 ;;
-;; For performance, compile patterns once and reuse them.
-;; p/query with a raw pattern compiles on every call - fine for REPL,
-;; but inefficient in production code.
+;; `match-fn` creates a function that:
+;; 1. Pattern-matches its argument
+;; 2. Evaluates a body expression with matched variables bound
+;; 3. Returns MatchFailure if the pattern doesn't match
 
-(comment
-  ;; Compile a pattern once
-  (def person-pattern (p/compile '{:name name :age age}))
+;; Basic usage: extract and compute
+((p/match-fn {:name ?name :age ?age}
+             (str ?name " is " ?age " years old"))
+ {:name "Alice" :age 30})
+;=> "Alice is 30 years old"
 
-  ;; Use it many times - much faster than raw patterns
-  (p/query person-pattern {:name "Alice" :age 30})
-  ;=> {name "Alice", age 30}
+;; Variables are symbols starting with ?
+((p/match-fn ?x (+ ?x 10)) 5)
+;=> 15
 
-  (p/query person-pattern {:name "Bob" :age 25})
-  ;=> {name "Bob", age 25}
+;; Match vectors
+((p/match-fn [?a ?b ?c] (+ ?a ?b ?c)) [1 2 3])
+;=> 6
 
-  ;; Compiled matchers are also callable as functions
-  ;; This returns the full match result (useful for debugging)
-  (person-pattern {:name "Alice" :age 30})
-  ;=> #ValMatchResult{:val {:name "Alice", :age 30}, :vars {name "Alice", age 30}}
-  )
-
-;;=============================================================================
-;; PART 4: Result Handling
-;;=============================================================================
-;;
-;; There are multiple ways to get results from a pattern match:
-
-(comment
-  (def m (p/compile '{:x x}))
-
-  ;; 1. query - returns vars map or nil (most common)
-  (p/query m {:x 42})  ;=> {x 42}
-  (p/query m {:y 42})  ;=> {x nil}  ; missing key binds to nil
-
-  ;; 2. match-result - returns {:vars ...} or MatchFailure with diagnostics
-  (p/match-result m {:x 42})  ;=> {:vars {x 42}}
-
-  ;; For value mismatches, you get a MatchFailure:
-  (p/match-result '{:x 5} {:x 3})
-  ;=> MatchFailure with :reason, :path, :value for debugging
-
-  ;; Check if a result is a failure
-  (p/failure? (p/match-result '{:x 5} {:x 3}))  ;=> true
-
-  ;; 3. match! - returns vars or throws (useful in pipelines)
-  (p/match! m {:x 42})  ;=> {x 42}
-  ;; (p/match! '{:x 5} {:x 3})  ; throws ExceptionInfo
-  )
+;; When pattern doesn't match, returns MatchFailure
+(p/failure? ((p/match-fn {:a ?x} ?x) "not a map"))
+;=> true
 
 ;;=============================================================================
-;; PART 5: Variable Binding Syntax
+;; PART 3: The Special $ Symbol
 ;;=============================================================================
 ;;
-;; Plain symbols become variables. Several modifiers are available:
+;; Inside match-fn body, $ is bound to the matched/transformed value.
+;; This is useful when you want to use the original data structure.
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; Basic binding: x captures a single value
-  ;;-------------------------------------------------------------------
-  (p/query '[x] [42])
-  ;=> {x 42}
+;; $ gives you the full matched value
+((p/match-fn {:x ?x} (assoc $ :doubled (* 2 ?x)))
+ {:x 5 :y 10})
+;=> {:x 5 :y 10 :doubled 10}
 
-  ;;-------------------------------------------------------------------
-  ;; Wildcard: _ matches anything but doesn't bind
-  ;;-------------------------------------------------------------------
-  (p/query '[_ x _] [1 2 3])
-  ;=> {x 2}  ; only x is bound
-
-  ;;-------------------------------------------------------------------
-  ;; Optional: ?x? matches 0 or 1 element (use ?x syntax for quantifiers)
-  ;;-------------------------------------------------------------------
-  (p/query '[x ?y?] [1 2])
-  ;=> {x 1, y 2}
-
-  (p/query '[x ?y?] [1])  ; y? matches nothing (optional)
-  ;=> {x 1}
-
-  ;;-------------------------------------------------------------------
-  ;; One-or-more: ?x+ captures remaining elements (at least 1)
-  ;;-------------------------------------------------------------------
-  (p/query '[first ?rest+] [1 2 3 4])
-  ;=> {first 1, rest (2 3 4)}
-
-  (p/query '[?rest+] [])  ; fails - needs at least 1 element
-  ;=> nil
-
-  ;;-------------------------------------------------------------------
-  ;; Zero-or-more: ?x* captures remaining elements (0 or more)
-  ;;-------------------------------------------------------------------
-  (p/query '[first ?rest*] [1 2 3])
-  ;=> {first 1, rest (2 3)}
-
-  (p/query '[first ?rest*] [1])  ; rest* can be empty
-  ;=> {first 1, rest ()}
-  )
+;; Combine extraction with transformation
+((p/match-fn [?first ?rest*]
+             {:first ?first :rest ?rest :original $})
+ [1 2 3 4])
+;=> {:first 1 :rest (2 3 4) :original [1 2 3 4]}
 
 ;;=============================================================================
-;; PART 6: Lazy vs Greedy Quantifiers
+;; PART 4: Variable Syntax
+;;=============================================================================
+;;
+;; Variables must start with ? prefix. Several quantifiers are available
+;; for sequence matching:
+
+;;-------------------------------------------------------------------
+;; Basic: ?x captures a single value
+;;-------------------------------------------------------------------
+((p/match-fn [?x] ?x) [42])
+;=> 42
+
+;;-------------------------------------------------------------------
+;; Wildcard: _ matches anything but doesn't bind
+;;-------------------------------------------------------------------
+((p/match-fn [_ ?middle _] ?middle) [1 2 3])
+;=> 2
+
+;;-------------------------------------------------------------------
+;; Optional: ?x? matches 0 or 1 element
+;;-------------------------------------------------------------------
+((p/match-fn [?first ?second?] [?first ?second]) [1 2])
+;=> [1 2]
+
+((p/match-fn [?first ?second?] [?first ?second]) [1])
+;=> [1 nil]  ; ?second? matched nothing, so ?second is nil
+
+;;-------------------------------------------------------------------
+;; One-or-more: ?x+ captures 1 or more elements (lazy)
+;;-------------------------------------------------------------------
+((p/match-fn [?first ?rest+] {:first ?first :rest ?rest}) [1 2 3 4])
+;=> {:first 1 :rest (2 3 4)}
+
+;; Fails if not enough elements
+(p/failure? ((p/match-fn [?x+] ?x) []))
+;=> true
+
+;;-------------------------------------------------------------------
+;; Zero-or-more: ?x* captures 0 or more elements (lazy)
+;;-------------------------------------------------------------------
+((p/match-fn [?first ?rest*] {:first ?first :rest ?rest}) [1])
+;=> {:first 1 :rest ()}  ; rest* can be empty
+
+;;-------------------------------------------------------------------
+;; Unification: same variable must match same value
+;;-------------------------------------------------------------------
+;; When a variable appears multiple times in a sequence, all occurrences
+;; must match the same value (unification).
+
+;; Same values - succeeds
+((p/match-fn [?x ?x] :equal) [5 5])
+;=> :equal
+
+;; Different values - fails with binding conflict
+(p/failure? ((p/match-fn [?x ?x] :equal) [5 6]))
+;=> true
+
+;; Practical: check first and last are equal
+((p/match-fn [?x ?middle* ?x] {:first ?x :middle ?middle})
+ [:a :b :c :a])
+;=> {:first :a :middle (:b :c)}
+
+;; Fails when first != last
+(p/failure? ((p/match-fn [?x ?middle* ?x] :ok) [:a :b :c :d]))
+;=> true
+
+;;=============================================================================
+;; PART 5: Lazy vs Greedy Quantifiers
 ;;=============================================================================
 ;;
 ;; By default, + and * are LAZY - they match the minimum needed.
-;; Add ! for GREEDY matching - matches the maximum possible.
+;; Add ! suffix for GREEDY matching - matches the maximum possible.
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; Lazy (default): first quantifier takes minimum
-  ;;-------------------------------------------------------------------
-  (p/query '[?a* ?b*] [1 2 3])
-  ;=> {a (), b (1 2 3)}  ; a* takes 0 (minimum)
+;;-------------------------------------------------------------------
+;; Lazy (default): first quantifier takes minimum
+;;-------------------------------------------------------------------
+((p/match-fn [?a* ?b*] {:a ?a :b ?b}) [1 2 3])
+;=> {:a () :b (1 2 3)}  ; a* takes 0 (minimum)
 
-  (p/query '[?a+ ?b+] [1 2 3])
-  ;=> {a (1), b (2 3)}   ; a+ takes 1 (minimum for +)
+((p/match-fn [?a+ ?b+] {:a ?a :b ?b}) [1 2 3])
+;=> {:a (1) :b (2 3)}   ; a+ takes 1 (minimum for +)
 
-  ;;-------------------------------------------------------------------
-  ;; Greedy (!): first quantifier takes maximum
-  ;;-------------------------------------------------------------------
-  (p/query '[?a*! ?b*] [1 2 3])
-  ;=> {a (1 2 3), b ()}  ; a*! takes all (maximum)
+;;-------------------------------------------------------------------
+;; Greedy (!): first quantifier takes maximum
+;;-------------------------------------------------------------------
+((p/match-fn [?a*! ?b*] {:a ?a :b ?b}) [1 2 3])
+;=> {:a (1 2 3) :b ()}  ; a*! takes all (greedy)
 
-  (p/query '[?a+! ?b+] [1 2 3])
-  ;=> {a (1 2), b (3)}   ; a+! takes max while leaving 1 for b+
+((p/match-fn [?a+! ?b+] {:a ?a :b ?b}) [1 2 3])
+;=> {:a (1 2) :b (3)}   ; a+! takes max while leaving 1 for b+
 
-  ;;-------------------------------------------------------------------
-  ;; Use this for head/tail patterns
-  ;;-------------------------------------------------------------------
-  ;; First element + rest (lazy)
-  (p/query '[head ?tail*] [:a :b :c])
-  ;=> {head :a, tail (:b :c)}
+;;-------------------------------------------------------------------
+;; Practical: head/tail vs init/last
+;;-------------------------------------------------------------------
+;; First element + rest (lazy default)
+((p/match-fn [?head ?tail*] {:head ?head :tail ?tail}) [:a :b :c])
+;=> {:head :a :tail (:b :c)}
 
-  ;; All but last element (greedy)
-  (p/query '[?init*! last] [:a :b :c])
-  ;=> {init (:a :b), last :c}
-  )
+;; All but last element (greedy)
+((p/match-fn [?init*! ?last] {:init ?init :last ?last}) [:a :b :c])
+;=> {:init (:a :b) :last :c}
 
 ;;=============================================================================
-;; PART 7: List-form Variables
+;; PART 6: Map Patterns
 ;;=============================================================================
 ;;
-;; For more control, use the list form: (?x pred? [min max]? !?)
-;; This allows predicates and exact length control.
+;; Map patterns match keys and extract values.
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; With predicate: (?x pred) - value must satisfy predicate
-  ;;-------------------------------------------------------------------
-  (p/query '[(?x even?)] [4])
-  ;=> {x 4}
+;;-------------------------------------------------------------------
+;; Basic map matching
+;;-------------------------------------------------------------------
+((p/match-fn {:name ?name :age ?age}
+             (str ?name " is " ?age))
+ {:name "Alice" :age 30 :city "NYC"})
+;=> "Alice is 30"  ; extra keys (:city) are ignored
 
-  (p/query '[(?x even?)] [3])  ; fails - 3 is not even
-  ;=> nil
+;;-------------------------------------------------------------------
+;; Nested maps
+;;-------------------------------------------------------------------
+((p/match-fn {:user {:name ?name :profile {:bio ?bio}}}
+             {:name ?name :bio ?bio})
+ {:user {:name "Bob" :profile {:bio "Developer"}}})
+;=> {:name "Bob" :bio "Developer"}
 
-  ;;-------------------------------------------------------------------
-  ;; With length: (?x [min max]) - subsequence of min to max elements
-  ;;-------------------------------------------------------------------
-  (p/query '[(?x [2 4])] [1 2 3])  ; 2-4 elements
-  ;=> {x (1 2 3)}
-
-  (p/query '[(?x [2 4])] [1])  ; fails - only 1 element
-  ;=> nil
-
-  ;; [min 0] means unbounded (match to end of sequence)
-  (p/query '[(?x [1 0])] [1 2 3 4 5])
-  ;=> {x (1 2 3 4 5)}
-
-  ;;-------------------------------------------------------------------
-  ;; Predicate + length: each element must satisfy predicate
-  ;;-------------------------------------------------------------------
-  (p/query '[(?evens even? [2 3])] [2 4 6])
-  ;=> {evens (2 4 6)}
-
-  (p/query '[(?evens even? [2 3])] [2 4 5])  ; 5 is not even
-  ;=> nil
-
-  ;;-------------------------------------------------------------------
-  ;; Greedy with list form: add ! at end
-  ;;-------------------------------------------------------------------
-  (p/query '[(?x [0 5]) ?y*] [1 2 3])   ; lazy
-  ;=> {x (), y (1 2 3)}
-
-  (p/query '[(?x [0 5] !) ?y*] [1 2 3]) ; greedy
-  ;=> {x (1 2 3), y ()}
-  )
+;;-------------------------------------------------------------------
+;; Combining maps and vectors
+;;-------------------------------------------------------------------
+((p/match-fn {:items [?first ?rest*]}
+             {:first-item ?first :others ?rest})
+ {:items ["apple" "banana" "cherry"]})
+;=> {:first-item "apple" :others ("banana" "cherry")}
 
 ;;=============================================================================
-;; PART 8: Map Patterns
+;; PART 7: Literal Value Matching
 ;;=============================================================================
 ;;
-;; Map patterns match structural shapes.
-;; Note: Missing keys bind to nil rather than failing the match.
+;; Non-variable values in patterns must match exactly.
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; Basic map matching
-  ;;-------------------------------------------------------------------
-  (p/query '{:name name :age age}
-           {:name "Alice" :age 30 :city "NYC"})
-  ;=> {name "Alice", age 30}  ; extra keys ignored
+;; Exact values in vectors
+((p/match-fn [1 ?x 3] ?x) [1 2 3])
+;=> 2
 
-  ;; Missing key binds to nil
-  (p/query '{:name name :age age}
-           {:name "Alice"})
-  ;=> {name "Alice", age nil}
+(p/failure? ((p/match-fn [1 ?x 3] ?x) [1 2 4]))
+;=> true  ; 3 != 4
 
-  ;;-------------------------------------------------------------------
-  ;; Nested maps
-  ;;-------------------------------------------------------------------
-  (p/query '{:user {:name name :profile {:bio bio}}}
-           {:user {:name "Bob" :profile {:bio "Developer"}}})
-  ;=> {name "Bob", bio "Developer"}
+;; Keywords and strings
+((p/match-fn {:type :user :name ?name} ?name) {:type :user :name "Alice"})
+;=> "Alice"
 
-  ;;-------------------------------------------------------------------
-  ;; Combining maps and vectors
-  ;;-------------------------------------------------------------------
-  (p/query '{:items [first ?rest*]}
-           {:items ["apple" "banana" "cherry"]})
-  ;=> {first "apple", rest ("banana" "cherry")}
+(p/failure? ((p/match-fn {:type :user :name ?name} ?name)
+             {:type :admin :name "Bob"}))
+;=> true  ; :user != :admin
 
-  ;;-------------------------------------------------------------------
-  ;; Nested map/vector combinations
-  ;;-------------------------------------------------------------------
-  (p/query '{:users [{:name name1} {:name name2}]}
-           {:users [{:name "Alice"} {:name "Bob"}]})
-  ;=> {name1 "Alice", name2 "Bob"}
-  )
+;; Match literal symbols using the 'symbol form
+((p/match-fn [foo ?x bar] ?x) ['foo 42 'bar])
+;=> 42
 
 ;;=============================================================================
-;; PART 9: Variable Unification
+;; PART 8: Handling Match Failures
 ;;=============================================================================
 ;;
-;; When the same variable appears multiple times in a sequence pattern,
-;; all occurrences must match the same value.
+;; When a pattern doesn't match, match-fn returns a MatchFailure record.
+;; Use failure? to check, then access fields for diagnostics.
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; Sequence unification - same variable must match same value
-  ;;-------------------------------------------------------------------
-  (p/query '[x x] [1 1])  ; both 1 - matches
-  ;=> {x 1}
+;;-------------------------------------------------------------------
+;; Check for failure
+;;-------------------------------------------------------------------
+(let [f (p/match-fn {:a ?a} ?a)
+      result (f "not a map")]
+  (p/failure? result))
+;=> true
 
-  (p/query '[x x] [1 2])  ; 1 != 2 - fails
-  ;=> nil
+;;-------------------------------------------------------------------
+;; Access MatchFailure fields for debugging
+;;-------------------------------------------------------------------
+(let [f (p/match-fn {:a ?a} ?a)
+      result (f "not a map")]
+  {:failed?  (p/failure? result)
+   :reason   (:reason result)      ; human-readable message
+   :value    (:value result)       ; the value that failed
+   :path     (:path result)})      ; location in data structure
+;=> {:failed? true
+;    :reason "expected map, got class java.lang.String"
+;    :value "not a map"
+;    :path []}
 
-  ;; Useful for finding duplicates or equality checks
-  (p/query '[a b a] [1 2 1])  ; first and third must match
-  ;=> {a 1, b 2}
+;;-------------------------------------------------------------------
+;; Nested failures include path
+;;-------------------------------------------------------------------
+(let [f (p/match-fn {:user {:name ?name}} ?name)
+      result (f {:user "not a map"})]
+  {:path (:path result)
+   :value (:value result)})
+;=> {:path [:user] :value "not a map"}
 
-  (p/query '[a b a] [1 2 3])  ; 1 != 3 - fails
-  ;=> nil
-  )
+;;-------------------------------------------------------------------
+;; Pattern for error handling
+;;-------------------------------------------------------------------
+(defn safe-extract [data]
+  (let [f (p/match-fn {:x ?x :y ?y} (+ ?x ?y))
+        result (f data)]
+    (if (p/failure? result)
+      {:error (:reason result)}
+      {:result result})))
 
-;;=============================================================================
-;; PART 10: Value Matching with Literals
-;;=============================================================================
-;;
-;; Literal values in patterns must match exactly.
+(safe-extract {:x 1 :y 2})
+;=> {:result 3}
 
-(comment
-  ;; Exact value in sequence
-  (p/query '[1 x 3] [1 2 3])
-  ;=> {x 2}
-
-  (p/query '[1 x 3] [1 2 4])  ; 3 != 4
-  ;=> nil
-
-  ;; Exact value in map
-  (p/query '{:type "user" :name name} {:type "user" :name "Alice"})
-  ;=> {name "Alice"}
-
-  (p/query '{:type "user" :name name} {:type "admin" :name "Bob"})
-  ;=> nil  ; "user" != "admin"
-
-  ;; Keywords, numbers, strings all work
-  (p/query '[x :separator y] [1 :separator 2])
-  ;=> {x 1, y 2}
-
-  ;; Use ''sym to match literal symbols
-  (p/query '{:type ''response} {:type 'response})
-  ;=> {}
-
-  (p/query '[''begin x ''end] ['begin 42 'end])
-  ;=> {x 42}
-  )
+(safe-extract {:x 1})  ; missing :y
+;=> {:error "..."}
 
 ;;=============================================================================
-;; PART 11: Term Rewriting
+;; PART 9: Predicates and Sets
 ;;=============================================================================
 ;;
-;; Use patterns to transform data structures.
+;; Functions and sets can be used as predicates in map patterns.
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; rewrite-rule - create pattern-based transformations
-  ;;-------------------------------------------------------------------
-  ;; Transform (* 2 x) into (+ x x)
-  (def double->add (p/rewrite-rule '[* 2 ?x] '(+ ?x ?x)))
+;; Functions as predicates (resolved automatically)
+((p/match-fn {:age even?} "age is even") {:age 30})
+;=> "age is even"
 
-  (double->add '(* 2 5))
-  ;=> (+ 5 5)
+(p/failure? ((p/match-fn {:age even?} "ok") {:age 31}))
+;=> true
 
-  (double->add '(* 2 y))
-  ;=> (+ y y)
+;; Sets test membership
+((p/match-fn {:status #{:active :pending}} "valid status")
+ {:status :active})
+;=> "valid status"
 
-  (double->add '(+ 1 2))  ; doesn't match
-  ;=> nil
-
-  ;;-------------------------------------------------------------------
-  ;; More complex rewrites
-  ;;-------------------------------------------------------------------
-  ;; Combine nested multiplications
-  (def combine-mults (p/rewrite-rule '[* 2 [* 3 ?x]] '(* 6 ?x)))
-
-  (combine-mults '(* 2 (* 3 y)))
-  ;=> (* 6 y)
-
-  ;; Swap arguments
-  (def swap-args (p/rewrite-rule '[f ?a ?b] '(f ?b ?a)))
-
-  (swap-args '(f 1 2))
-  ;=> (f 2 1)
-  )
+(p/failure? ((p/match-fn {:status #{:active :pending}} "ok")
+             {:status :closed}))
+;=> true
 
 ;;=============================================================================
-;; PART 12: Error Handling and Debugging
+;; PART 10: Regex Patterns
 ;;=============================================================================
 ;;
-;; When patterns don't match, get detailed diagnostics.
+;; Regex patterns match strings and extract capture groups.
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; match-result gives failure details
-  ;;-------------------------------------------------------------------
-  (def result (p/match-result '{:a 5} {:a 3}))
+;; Basic regex match
+((p/match-fn #"hello" $) "hello")
+;=> ["hello"]
 
-  (p/failure? result)  ;=> true
+;; Capture groups
+((p/match-fn #"(\d+)-(\d+)" $) "12-34")
+;=> ["12-34" "12" "34"]
 
-  ;; MatchFailure contains:
-  ;; - :reason - what went wrong
-  ;; - :path - where in the data structure
-  ;; - :value - the actual value that failed
-
-  (:reason result)  ;=> "value mismatch: expected 5, got 3"
-  (:path result)    ;=> [:a]
-  (:value result)   ;=> 3
-
-  ;;-------------------------------------------------------------------
-  ;; Nested failures track full path
-  ;;-------------------------------------------------------------------
-  (def nested-result
-    (p/match-result '{:user {:profile {:age 30}}}
-                    {:user {:profile {:age 25}}}))
-
-  (:path nested-result)  ;=> [:user :profile :age]
-  (:reason nested-result) ;=> "value mismatch: expected 30, got 25"
-
-  ;;-------------------------------------------------------------------
-  ;; match! throws with details
-  ;;-------------------------------------------------------------------
-  ;; Use in pipelines where failure should be exceptional
-  (try
-    (p/match! '{:required 5} {:required 1})
-    (catch Exception e
-      (ex-data e)))
-  ;; Returns map with :failure, :pattern, :data, :path
-  )
+;; Regex in map patterns
+((p/match-fn {:phone #"(\d{3})-(\d{4})"} $)
+ {:phone "555-1234"})
+;=> {:phone ["555-1234" "555" "1234"]}
 
 ;;=============================================================================
-;; PART 14: Practical Examples
+;; PART 11: Core Pattern Syntax
+;;=============================================================================
+;;
+;; For advanced use, you can use the core (? :type ...) syntax directly.
+;; This gives you access to all matcher types.
+
+;; Explicit predicate
+((p/match-fn (? :pred even?) $) 4)
+;=> 4
+
+;; Explicit value match
+((p/match-fn (? :val 5) $) 5)
+;=> 5
+
+;; Variable binding with explicit syntax
+((p/match-fn (? :var ?x (? :any)) ?x) 42)
+;=> 42
+
+;; Chain matchers with :->
+((p/match-fn (? :-> (? :pred number?) (? :update inc)) $) 5)
+;=> 6
+
+;; Case matching
+((p/match-fn (? :case ?type
+                :even (? :pred even?)
+                :odd (? :pred odd?))
+             ?type)
+ 3)
+;=> :odd
+
+;;=============================================================================
+;; PART 12: Practical Examples
 ;;=============================================================================
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; Parsing command-line args
-  ;;-------------------------------------------------------------------
-  (defn parse-args [args]
-    (p/query '[cmd file ?opts*] args))
+;;-------------------------------------------------------------------
+;; Parse command-line style arguments
+;;-------------------------------------------------------------------
+(def parse-cmd
+  (p/match-fn [?cmd ?file ?opts*]
+              {:command ?cmd :file ?file :options ?opts}))
 
-  (parse-args ["copy" "file.txt" "--verbose" "--force"])
-  ;=> {cmd "copy", file "file.txt", opts ("--verbose" "--force")}
+(parse-cmd ["copy" "file.txt" "--verbose" "--force"])
+;=> {:command "copy" :file "file.txt" :options ("--verbose" "--force")}
 
-  ;;-------------------------------------------------------------------
-  ;; Destructuring API responses
-  ;;-------------------------------------------------------------------
-  (def api-pattern
-    (p/compile '{:status status
-                 :data {:users [first-user ?rest*]}}))
+;;-------------------------------------------------------------------
+;; Extract from API responses
+;;-------------------------------------------------------------------
+(def extract-users
+  (p/match-fn {:status ?status :data {:users [?first ?rest*]}}
+              {:status ?status :first-user ?first :other-count (count ?rest)}))
 
-  (p/query api-pattern
-           {:status 200
-            :data {:users [{:name "Alice"} {:name "Bob"}]}})
-  ;=> {status 200, first-user {:name "Alice"}, rest ({:name "Bob"})}
+(extract-users
+ {:status 200
+  :data {:users [{:name "Alice"} {:name "Bob"} {:name "Carol"}]}})
+;=> {:status 200 :first-user {:name "Alice"} :other-count 2}
 
-  ;;-------------------------------------------------------------------
-  ;; Extracting nested data
-  ;;-------------------------------------------------------------------
-  (def config-pattern
-    (p/compile '{:database {:host host :port port}
-                 :features [first-feature ?more*]}))
+;;-------------------------------------------------------------------
+;; Config extraction
+;;-------------------------------------------------------------------
+(def parse-config
+  (p/match-fn {:database {:host ?host :port ?port}
+               :features [?first-feature ?more*]}
+              {:db-url (str "jdbc://" ?host ":" ?port)
+               :features (cons ?first-feature ?more)}))
 
-  (p/query config-pattern
-           {:database {:host "localhost" :port 5432}
-            :features [:auth :logging :metrics]})
-  ;=> {host "localhost", port 5432, first-feature :auth, more (:logging :metrics)}
+(parse-config
+ {:database {:host "localhost" :port 5432}
+  :features [:auth :logging :metrics]})
+;=> {:db-url "jdbc://localhost:5432" :features (:auth :logging :metrics)}
 
-  ;;-------------------------------------------------------------------
-  ;; Pattern-based dispatch
-  ;;-------------------------------------------------------------------
-  (defn handle-message [msg]
+;;-------------------------------------------------------------------
+;; Simple dispatch based on structure
+;;-------------------------------------------------------------------
+(defn handle-message [msg]
+  (let [ping-handler (p/match-fn [ping] :pong)
+        echo-handler (p/match-fn [echo ?text] [:echoed ?text])
+        add-handler (p/match-fn [add ?a ?b] [:sum (+ ?a ?b)])]
     (cond
-      (p/query '[ping] msg)
-      :pong
+      (not (p/failure? (ping-handler msg))) (ping-handler msg)
+      (not (p/failure? (echo-handler msg))) (echo-handler msg)
+      (not (p/failure? (add-handler msg))) (add-handler msg)
+      :else :unknown)))
 
-      (p/query '[echo text] msg)
-      (let [{:syms [text]} (p/query '[echo text] msg)]
-        [:echoed text])
+(handle-message '[ping])        ;=> :pong
+(handle-message '[echo hello])  ;=> [:echoed hello]
+(handle-message '[add 3 5])     ;=> [:sum 8]
+(handle-message '[unknown])     ;=> :unknown
 
-      (p/query '[add a b] msg)
-      (let [{:syms [a b]} (p/query '[add a b] msg)]
-        [:sum (+ a b)])
+;;-------------------------------------------------------------------
+;; Validation with error reporting
+;;-------------------------------------------------------------------
+(defn validate-user [user]
+  (let [validator (p/match-fn {:name ?n :email ?e :age ?a}
+                              {:valid true :name ?n :email ?e :age ?a})
+        result (validator user)]
+    (if (p/failure? result)
+      {:valid false
+       :error (:reason result)
+       :path (:path result)}
+      result)))
 
-      :else
-      :unknown))
+(validate-user {:name "Alice" :email "alice@example.com" :age 30})
+;=> {:valid true :name "Alice" :email "alice@example.com" :age 30}
 
-  (handle-message '[ping])        ;=> :pong
-  (handle-message '[echo hello])  ;=> [:echoed hello]
-  (handle-message '[add 3 5])     ;=> [:sum 8]
-
-  ;;-------------------------------------------------------------------
-  ;; AST transformation with rewrite rules
-  ;;-------------------------------------------------------------------
-  ;; Simple constant folding
-  (defn fold-add [expr]
-    (when-let [vars (p/query '[+ a b] expr)]
-      (let [{:syms [a b]} vars]
-        (when (and (number? a) (number? b))
-          (+ a b)))))
-
-  (fold-add '(+ 2 3))   ;=> 5
-  (fold-add '(+ x 3))   ;=> nil (x is not a number)
-  (fold-add '(* 2 3))   ;=> nil (not an add expression)
-  )
+(validate-user {:name "Bob"})  ; missing keys
+;=> {:valid false :error "..." :path [...]}
 
 ;;=============================================================================
-;; PART 15: Tips and Best Practices
+;; PART 13: Tips and Best Practices
 ;;=============================================================================
 
-(comment
-  ;; 1. Compile patterns that are used repeatedly
-  ;; BAD:  (map #(p/query '{:x x} %) data)  ; compiles N times
-  ;; GOOD: (let [p (p/compile '{:x x})] (map #(p/query p %) data))
+;; 1. match-fn compiles the pattern once - store and reuse for performance
+(def user-extractor
+  (p/match-fn {:name ?name :age ?age} {:name ?name :age ?age}))
 
-  ;; 2. Use match-result for validation with error messages
-  (defn validate-user [user]
-    (let [result (p/match-result '{:name name :age age} user)]
-      (if (p/failure? result)
-        {:error (:reason result) :path (:path result)}
-        {:valid true :data (:vars result)})))
+;; 2. Use lazy quantifiers (default) for head/tail patterns
+((p/match-fn [?head ?tail*] {:head ?head :tail ?tail}) [1 2 3])
+;=> {:head 1 :tail (2 3)}
 
-  ;; 3. Use lazy quantifiers (default) for head/tail patterns
-  (p/query '[head ?tail*] [1 2 3])  ; head gets first, tail gets rest
+;; 3. Use greedy quantifiers (!) for init/last patterns
+((p/match-fn [?init*! ?last] {:init ?init :last ?last}) [1 2 3])
+;=> {:init (1 2) :last 3}
 
-  ;; 4. Use greedy quantifiers for init/last patterns
-  (p/query '[?init*! last] [1 2 3])  ; init gets all but last
+;; 4. Use _ to ignore values you don't care about
+((p/match-fn [_ ?middle _] ?middle) [1 2 3])
+;=> 2
 
-  ;; 5. Sequence variable unification catches inconsistencies
-  (p/query '[x y x] [1 2 1])  ;=> {x 1, y 2}
-  (p/query '[x y x] [1 2 3])  ;=> nil (1 != 3)
+;; 5. Access MatchFailure fields for debugging
+(let [result ((p/match-fn {:x ?x} ?x) "bad")]
+  (when (p/failure? result)
+    (println "Failed at" (:path result) ":" (:reason result))))
 
-  ;; 6. Use _ to ignore values you don't need
-  (p/query '[_ middle _] [1 2 3])  ;=> {middle 2}
+;; 6. Use $ when you need the original matched value
+((p/match-fn {:id ?id} (assoc $ :processed true)) {:id 123 :data "..."})
+;=> {:id 123 :data "..." :processed true}
 
-  ;; 7. Use plet/pfn for pattern-based computation
-  (p/plet [{:x x :y y} {:x 3 :y 4}]
-          (Math/sqrt (+ (* x x) (* y y))))  ;=> 5.0
-
-  ;; 8. Use ''sym for literal symbol matching
-  (p/query '{:op ''add :args args} {:op 'add :args [1 2]})
-  ;=> {args [1 2]}
-
-  ;; 9. Use rewrite-rule for simple transformations
-  (def normalize-let
-    (p/rewrite-rule '[let [?binding ?value] ?body]
-                    '(let* [?binding ?value] ?body))))
+;; 7. Predicates work inline in map patterns
+((p/match-fn {:age pos? :status #{:active :pending}} "valid")
+ {:age 25 :status :active})
+;=> "valid"
 
 ;;=============================================================================
 ;; Congratulations!
@@ -541,16 +470,27 @@
 ;; You've completed the flybot.pullable tutorial!
 ;;
 ;; Key takeaways:
-;; - Use plain symbols for variables: {x, name, age}
-;; - Use _ for wildcard (match anything, no binding)
-;; - Use ''sym for literal symbol matching
-;; - Use p/query for extracting variable bindings
-;; - Use p/compile for performance-critical code
-;; - Quantifier syntax: ?x?, ?x+, ?x*, ?x+!, ?x*!
-;; - Map and vector patterns match structurally
-;; - List-form (?x pred? [min max]? !?) for fine control
-;; - plet/pfn for pattern-based computation
-;; - rewrite-rule for pattern-based transformations
-;; - match-result for detailed error diagnostics
+;;
+;; API:
+;; - `match-fn` - create pattern-matching functions
+;; - `failure?` - check if match failed
+;;
+;; Pattern Variables:
+;; - ?x      - bind single value
+;; - _       - wildcard (match anything, no binding)
+;; - ?x?     - optional (0 or 1)
+;; - ?x+     - one or more (lazy)
+;; - ?x*     - zero or more (lazy)
+;; - ?x+!    - one or more (greedy)
+;; - ?x*!    - zero or more (greedy)
+;;
+;; Special:
+;; - $       - the matched/transformed value (in match-fn body)
+;; - Unification - same variable in sequence must match same value
+;;
+;; MatchFailure fields:
+;; - :reason - human-readable error message
+;; - :path   - location in data structure (vector of keys/indices)
+;; - :value  - the value that failed to match
 ;;
 ;; For more details, see PROJECT_SUMMARY.md and the source code!
