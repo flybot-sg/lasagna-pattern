@@ -1,6 +1,5 @@
 (ns sg.flybot.pullable
-  "Public API for the pullable pattern matching library. "
-  (:refer-clojure :exclude [compile])
+  "Public API for the pullable pattern matching library."
   (:require [sg.flybot.pullable.core :as core]))
 
 ;;=============================================================================
@@ -11,24 +10,26 @@
   "Returns true if x is a MatchFailure.
 
    MatchFailure is returned when pattern matching fails. It contains:
-   - :reason     - Human-readable failure message
+   - :reason       - Human-readable failure message
    - :matcher-type - Keyword identifying the matcher (e.g., :pred, :map)
-   - :path       - Vector of keys/indices showing location in data
-   - :value      - The value that failed to match
-   - :depth      - Integer tracking match progress
+   - :path         - Vector of keys/indices showing location in data
+   - :value        - The value that failed to match
+   - :depth        - Integer tracking match progress (for nested failures)
 
    Example:
-     (let [result ((compile '{:a ?x}) \"not a map\")]
-       (if (failure? result)
-         (println \"Match failed:\" (:reason result))
-         (:vars result)))"
+     (let [f (match-fn {:a ?x} ?x)
+           result (f \"not a map\")]
+       (when (failure? result)
+         (println \"Failed at path:\" (:path result))
+         (println \"Reason:\" (:reason result))))"
   core/failure?)
 
-(defmacro qfn
-  "Query function - creates a function that pattern matches its argument
-   and evaluates body with matched variables bound.
+(defmacro match-fn
+  "Create a function that pattern-matches its argument and evaluates body.
 
-   Returns MatchFailure if pattern doesn't match.
+   On successful match, returns the result of evaluating body with pattern
+   variables bound. On failed match, returns a MatchFailure record.
+
    The special symbol $ is bound to the matched/transformed value.
 
    ## Pattern Syntax
@@ -46,26 +47,34 @@
    ## Examples
 
      ;; Simple binding
-     ((qfn ?x (+ ?x 2)) 3)  ;=> 5
+     ((match-fn ?x (+ ?x 2)) 3)  ;=> 5
 
      ;; Map destructuring
-     ((qfn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2})  ;=> 3
+     ((match-fn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2})  ;=> 3
 
      ;; $ binds to matched value
-     ((qfn ?x (inc $)) 42)  ;=> 43
+     ((match-fn ?x (inc $)) 42)  ;=> 43
 
      ;; $ with map gets full map
-     ((qfn {:a ?x} (assoc $ :result ?x)) {:a 1 :b 2})
+     ((match-fn {:a ?x} (assoc $ :result ?x)) {:a 1 :b 2})
      ;=> {:a 1 :b 2 :result 1}
 
      ;; Sequence patterns
-     ((qfn [?a ?b ?c] (+ ?a ?b ?c)) [1 2 3])  ;=> 6
-
-     ;; Returns MatchFailure on mismatch
-     (failure? ((qfn {:a ?x} ?x) \"not a map\"))  ;=> true
+     ((match-fn [?a ?b ?c] (+ ?a ?b ?c)) [1 2 3])  ;=> 6
 
      ;; String operations
-     ((qfn {:name ?n} (str \"Hello, \" ?n \"!\")) {:name \"Alice\"})
-     ;=> \"Hello, Alice!\""
+     ((match-fn {:name ?n} (str \"Hello, \" ?n \"!\")) {:name \"Alice\"})
+     ;=> \"Hello, Alice!\"
+
+   ## Handling Failures
+
+   Use `failure?` to check for match failures, then access MatchFailure fields:
+
+     (let [f (match-fn {:x ?x} ?x)
+           result (f \"not a map\")]
+       (if (failure? result)
+         {:error (:reason result)
+          :at    (:path result)}
+         result))"
   [pattern body]
-  `(core/qfn ~pattern ~body))
+  `(core/match-fn ~pattern ~body))

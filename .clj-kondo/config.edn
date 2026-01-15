@@ -2,7 +2,7 @@
  {:analyze-call
   {sg.flybot.pullable.util/cond-let hooks.cond-let/cond-let
    sg.flybot.pullable.util/vars-> hooks.vars-arrow/vars->
-   sg.flybot.pullable.core/qfn hooks.qfn/qfn
-   sg.flybot.pullable/qfn hooks.qfn/qfn}}
+   sg.flybot.pullable.core/match-fn hooks.match-fn/match-fn
+   sg.flybot.pullable/match-fn hooks.match-fn/match-fn}}
  :lint-as
  {sg.flybot.pullable.core/defmatcher clojure.core/comment}}
