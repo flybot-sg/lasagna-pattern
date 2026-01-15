@@ -40,40 +40,39 @@
 ;;=============================================================================
 ;;
 ;; First, let's classify individual tokens using regex patterns.
-;; We use Clojure's native regex for simple token classification,
-;; reserving the pattern library for more complex sequence matching.
 
-;; Regex patterns for token classification
+(defn classify-token
+  "Classify a single CLI token using regex matching."
+  [token]
+  (condp #(re-matches %1 %2) token
+    #"--(\w+)=(.+)" :>> (fn [[_ name value]] {:type :long-opt :name name :value value})
+    #"--(\w+)"      :>> (fn [[_ name]] {:type :long-flag :name name})
+    #"-(\w+)"       :>> (fn [[_ chars]] {:type :short-opts :chars chars})
+    #"--"           {:type :end-opts}
+    {:type :positional :value token}))
 
-(defrecord ArgOption [short long coercer])
-(def opt ->ArgOption)
+;; Test token classification
+(classify-token "-v")
+;=> {:type :short-opts, :chars "v"}
 
-(def opt-schema
-  [(opt :v :verbose #(case % "true" true "false" false (throw (ex-info "wrong value" {}))))
-   (opt :m :mode keyword)
-   (opt :o :output identity)])
+(classify-token "--verbose")
+;=> {:type :long-flag, :name "verbose"}
 
-(def token
-  '(? :match-case
-        [:long-value(? :-> #"--(\w+)=(\w+)" [_ option-name value])
-         :long (? :-> #"--(\w+)" [_ option-name])
-         :short (? :-> #"-(\w+)" [_ option-name])
-         :end-of-opts "--"
-         :positional _]
-        type))
+(classify-token "--output=file.txt")
+;=> {:type :long-opt, :name "output", :value "file.txt"}
 
-(def tokens
-  (p/compile (list '? :sub #(re-seq #"\S+" %) [token])))
+(classify-token "file.txt")
+;=> {:type :positional, :value "file.txt"}
 
-(tokens "--verbose")
-
+(classify-token "--")
+;=> {:type :end-opts}
 
 ;;=============================================================================
-;; PART 4: Expanding Combined Short Options
+;; PART 3: Expanding Combined Short Options
 ;;=============================================================================
 ;;
 ;; Unix allows -abc as shorthand for -a -b -c.
-;; We'll use pattern matching to detect and expand these.
+;; We'll expand these into individual tokens.
 
 (defn expand-short-opts
   "Expand combined short options: -abc becomes [{:type :short-opt :char \\a} ...]"
@@ -82,24 +81,22 @@
     (mapv (fn [c] {:type :short-opt :char c}) (:chars token))
     [token]))
 
-(comment
-  ;; Single character stays as one token
-  (expand-short-opts {:type :short-opts :chars "v"})
-  ;=> [{:type :short-opt, :char \v}]
+;; Single character stays as one token
+(expand-short-opts {:type :short-opts :chars "v"})
+;=> [{:type :short-opt, :char \v}]
 
-  ;; Multiple characters expand into multiple tokens
-  (expand-short-opts {:type :short-opts :chars "vdf"})
-  ;=> [{:type :short-opt, :char \v}
-  ;    {:type :short-opt, :char \d}
-  ;    {:type :short-opt, :char \f}]
+;; Multiple characters expand into multiple tokens
+(expand-short-opts {:type :short-opts :chars "vdf"})
+;=> [{:type :short-opt, :char \v}
+;    {:type :short-opt, :char \d}
+;    {:type :short-opt, :char \f}]
 
-  ;; Other token types pass through unchanged
-  (expand-short-opts {:type :long-flag :name "verbose"}))
-  ;=> [{:type :long-flag, :name "verbose"}]
-  
+;; Other token types pass through unchanged
+(expand-short-opts {:type :long-flag :name "verbose"})
+;=> [{:type :long-flag, :name "verbose"}]
 
 ;;=============================================================================
-;; PART 5: Schema Definition
+;; PART 4: Schema Definition
 ;;=============================================================================
 ;;
 ;; Define which options expect values vs are boolean flags.
@@ -118,7 +115,6 @@
    :flags
    #{\v \d \h                            ;; -v, -d, -h are flags
      "verbose" "debug" "help" "dry-run"}}) ;; long forms
-   
 
 (defn flag?
   "Check if an option is a flag (no value expected)."
@@ -137,112 +133,113 @@
     :long-opt  (get-in schema [:long-opts (:name token)])
     nil))
 
-(comment
-  ;; Check if tokens are flags
-  (flag? example-schema {:type :short-opt :char \v})
-  ;=> true
+;; Check if tokens are flags
+(flag? example-schema {:type :short-opt :char \v})
+;=> true
 
-  (flag? example-schema {:type :short-opt :char \f})
-  ;=> false (it expects a value)
+(flag? example-schema {:type :short-opt :char \f})
+;=> false (it expects a value)
 
-  (flag? example-schema {:type :long-flag :name "verbose"})
-  ;=> true
+(flag? example-schema {:type :long-flag :name "verbose"})
+;=> true
 
-  ;; Get canonical option keys
-  (option-key example-schema {:type :short-opt :char \f})
-  ;=> :file
+;; Get canonical option keys
+(option-key example-schema {:type :short-opt :char \f})
+;=> :file
 
-  (option-key example-schema {:type :long-opt :name "output" :value "x"}))
-  ;=> :output
-  
+(option-key example-schema {:type :long-opt :name "output" :value "x"})
+;=> :output
 
 ;;=============================================================================
-;; PART 6: Pattern-Based Token Stream Parsing
+;; PART 5: Pattern-Based Token Stream Parsing
 ;;=============================================================================
 ;;
-;; This is where pattern matching really shines! We define patterns for
-;; different token sequences and use them to consume the token stream.
-;;
-;; Using plain symbols for variables makes patterns more readable:
-;;   [end ?rest*]  instead of  [?end ?rest*]
+;; This is where pattern matching shines! We use match-fn to create
+;; matchers for different token sequences.
 
 ;;-----------------------------------------------------------------------------
-;; Pattern factory - creates schema-aware patterns
+;; Token type predicates
 ;;-----------------------------------------------------------------------------
-;; We create patterns as a function of schema so flag/option distinction
-;; is baked into the predicates.
 
-(defn make-patterns
-  "Create token stream patterns with schema-aware predicates.
+(defn end-opts? [t] (= :end-opts (:type t)))
+(defn long-opt? [t] (= :long-opt (:type t)))
+(defn positional? [t] (= :positional (:type t)))
+(defn option-like? [t] (#{:short-opt :long-flag} (:type t)))
 
-   Returns a vector of [case-key pattern] pairs in priority order:
-   - :end-opts   - The -- marker
-   - :long-opt   - --name=value (has embedded value)
-   - :opt-value  - Non-flag option followed by value
-   - :flag       - Boolean flag (no value)
-   - :opt-missing - Option needs value but none follows
-   - :positional - Regular positional argument
+;;-----------------------------------------------------------------------------
+;; Pattern matchers using match-fn
+;;-----------------------------------------------------------------------------
 
-   NOTE: Map/set/keyword predicates in the library work as key-lookup functions,
-   not as submap matchers. For token type matching we need anonymous functions."
+(defn make-matchers
+  "Create token stream matchers with schema-aware predicates.
+
+   Returns a vector of [case-key matcher-fn] pairs in priority order."
   [schema]
   [[:end-opts
-    (p/compile [(list 'end #(= :end-opts (:type %))) '?rest*])]
+    (p/match-fn [?end ?rest*]
+                (when (end-opts? ?end)
+                  {:end ?end :rest ?rest}))]
 
    [:long-opt
-    (p/compile [(list 'opt #(= :long-opt (:type %))) '?rest*])]
+    (p/match-fn [?opt ?rest*]
+                (when (long-opt? ?opt)
+                  {:opt ?opt :rest ?rest}))]
 
    [:opt-value
-    (p/compile [(list 'opt #(and (#{:short-opt :long-flag} (:type %))
-                                 (not (flag? schema %))))
-                (list 'val #(= :positional (:type %)))
-                '?rest*])]
+    (p/match-fn [?opt ?val ?rest*]
+                (when (and (option-like? ?opt)
+                           (not (flag? schema ?opt))
+                           (positional? ?val))
+                  {:opt ?opt :val ?val :rest ?rest}))]
 
    [:flag
-    (p/compile [(list 'opt #(and (#{:short-opt :long-flag} (:type %))
-                                 (flag? schema %)))
-                '?rest*])]
+    (p/match-fn [?opt ?rest*]
+                (when (and (option-like? ?opt)
+                           (flag? schema ?opt))
+                  {:opt ?opt :rest ?rest}))]
 
    [:opt-missing
-    (p/compile [(list 'opt #(and (#{:short-opt :long-flag} (:type %))
-                                 (not (flag? schema %))))
-                '?rest*])]
+    (p/match-fn [?opt ?rest*]
+                (when (and (option-like? ?opt)
+                           (not (flag? schema ?opt)))
+                  {:opt ?opt :rest ?rest}))]
 
    [:positional
-    (p/compile [(list 'pos #(= :positional (:type %))) '?rest*])]])
+    (p/match-fn [?pos ?rest*]
+                (when (positional? ?pos)
+                  {:pos ?pos :rest ?rest}))]])
 
 (defn match-first
-  "Try patterns in order, return [case-key match] for first match, or nil."
-  [patterns tokens]
-  (some (fn [[case-key pattern]]
-          (when-let [match (p/query pattern tokens)]
-            [case-key match]))
-        patterns))
+  "Try matchers in order, return [case-key match] for first successful match."
+  [matchers tokens]
+  (some (fn [[case-key matcher]]
+          (let [result (matcher tokens)]
+            (when (and result (not (p/failure? result)))
+              [case-key result])))
+        matchers))
 
-(comment
-  ;; Test the patterns
-  (def test-patterns (make-patterns example-schema))
+;; Test the matchers
+(def test-matchers (make-matchers example-schema))
 
-  ;; Matches :end-opts case
-  (match-first test-patterns [{:type :end-opts} {:type :positional :value "x"}])
-  ;=> [:end-opts {end {:type :end-opts}, rest ({:type :positional, :value "x"})}]
+;; Matches :end-opts case
+(match-first test-matchers [{:type :end-opts} {:type :positional :value "x"}])
+;=> [:end-opts {:end {:type :end-opts}, :rest ({:type :positional, :value "x"})}]
 
-  ;; Matches :long-opt case
-  (match-first test-patterns [{:type :long-opt :name "output" :value "file.txt"}])
-  ;=> [:long-opt {opt {:type :long-opt, :name "output", :value "file.txt"}, rest ()}]
+;; Matches :long-opt case
+(match-first test-matchers [{:type :long-opt :name "output" :value "file.txt"}])
+;=> [:long-opt {:opt {:type :long-opt, :name "output", :value "file.txt"}, :rest ()}]
 
-  ;; Matches :opt-value case (-f expects value, so matches opt+val)
-  (match-first test-patterns [{:type :short-opt :char \f}
-                              {:type :positional :value "file.txt"}])
-  ;=> [:opt-value {opt {:type :short-opt, :char \f},
-  ;                val {:type :positional, :value "file.txt"}, rest ()}]
+;; Matches :opt-value case (-f expects value, so matches opt+val)
+(match-first test-matchers [{:type :short-opt :char \f}
+                            {:type :positional :value "file.txt"}])
+;=> [:opt-value {:opt {:type :short-opt, :char \f},
+;                :val {:type :positional, :value "file.txt"}, :rest ()}]
 
-  ;; Matches :flag case (-v is a flag)
-  (match-first test-patterns [{:type :short-opt :char \v}
-                              {:type :positional :value "file.txt"}]))
-  ;=> [:flag {opt {:type :short-opt, :char \v},
-  ;           rest ({:type :positional, :value "file.txt"})}]
-  
+;; Matches :flag case (-v is a flag)
+(match-first test-matchers [{:type :short-opt :char \v}
+                            {:type :positional :value "file.txt"}])
+;=> [:flag {:opt {:type :short-opt, :char \v},
+;           :rest ({:type :positional, :value "file.txt"})}]
 
 ;;-----------------------------------------------------------------------------
 ;; Pattern handlers - each returns [updated-result remaining-tokens]
@@ -261,38 +258,38 @@
 
 (defn handle-end-opts
   "Handle end-of-options: collect all remaining as positional"
-  [{:syms [rest]} result _schema]
+  [{:keys [rest]} result _schema]
   (let [values (map reconstruct-token rest)]
     [(update result :positional into values) []]))
 
 (defn handle-long-opt
   "Handle --name=value"
-  [{:syms [opt rest]} result schema]
+  [{:keys [opt rest]} result schema]
   (if-let [k (option-key schema opt)]
     [(assoc-in result [:options k] (:value opt)) rest]
     [(update result :errors conj {:error :unknown-option :token opt}) rest]))
 
 (defn handle-opt-value
   "Handle option followed by value"
-  [{:syms [opt val rest]} result schema]
+  [{:keys [opt val rest]} result schema]
   (if-let [k (option-key schema opt)]
     [(assoc-in result [:options k] (:value val)) rest]
     [(update result :errors conj {:error :unknown-option :token opt}) rest]))
 
 (defn handle-flag
   "Handle a flag (boolean option)"
-  [{:syms [opt rest]} result _schema]
+  [{:keys [opt rest]} result _schema]
   (let [flag-name (or (:name opt) (str (:char opt)))]
     [(update result :flags conj (keyword flag-name)) rest]))
 
 (defn handle-opt-missing-value
   "Handle option that needs a value but doesn't have one"
-  [{:syms [opt rest]} result _schema]
+  [{:keys [opt rest]} result _schema]
   [(update result :errors conj {:error :missing-value :option opt}) rest])
 
 (defn handle-positional
   "Handle positional argument"
-  [{:syms [pos rest]} result _schema]
+  [{:keys [pos rest]} result _schema]
   [(update result :positional conj (:value pos)) rest])
 
 ;;-----------------------------------------------------------------------------
@@ -311,9 +308,9 @@
 (defn process-tokens
   "Process token stream using pattern matching.
 
-   Uses match-first to try patterns in order and dispatch to handlers."
+   Uses match-first to try matchers in order and dispatch to handlers."
   [schema tokens]
-  (let [patterns (make-patterns schema)]
+  (let [matchers (make-matchers schema)]
     (loop [tokens (vec tokens)
            result {:flags #{} :options {} :positional [] :errors []}
            after-end-opts? false]
@@ -325,8 +322,8 @@
             (recur (vec (rest tokens))
                    (update result :positional conj (reconstruct-token tok))
                    true))
-          ;; Try patterns in order, dispatch to matching handler
-          (if-let [[case-key match] (match-first patterns tokens)]
+          ;; Try matchers in order, dispatch to matching handler
+          (if-let [[case-key match] (match-first matchers tokens)]
             (let [handler (get handlers case-key)
                   [new-result remaining] (handler match result schema)]
               (recur (vec remaining) new-result (= case-key :end-opts)))
@@ -335,24 +332,22 @@
                    (update result :errors conj {:error :unknown-token :token (first tokens)})
                    after-end-opts?)))))))
 
-(comment
-  ;; The pattern-based approach is more declarative:
-  ;; - Each pattern describes WHAT to match
-  ;; - Each handler describes HOW to process the match
-  ;; - The loop just orchestrates pattern matching
+;; The pattern-based approach is more declarative:
+;; - Each pattern describes WHAT to match
+;; - Each handler describes HOW to process the match
+;; - The loop just orchestrates pattern matching
 
-  ;; Test the new process-tokens
-  (process-tokens example-schema
-                  [{:type :short-opt :char \v}
-                   {:type :short-opt :char \f}
-                   {:type :positional :value "input.txt"}
-                   {:type :long-opt :name "output" :value "out.txt"}]))
-  ;=> {:flags #{:v}, :options {:file "input.txt", :output "out.txt"},
-  ;    :positional [], :errors []}
-  
+;; Test process-tokens
+(process-tokens example-schema
+                [{:type :short-opt :char \v}
+                 {:type :short-opt :char \f}
+                 {:type :positional :value "input.txt"}
+                 {:type :long-opt :name "output" :value "out.txt"}])
+;=> {:flags #{:v}, :options {:file "input.txt", :output "out.txt"},
+;    :positional [], :errors []}
 
 ;;=============================================================================
-;; PART 7: Full Parser - Putting It All Together
+;; PART 6: Full Parser - Putting It All Together
 ;;=============================================================================
 
 (defn parse-cli
@@ -370,206 +365,165 @@
        vec
        (process-tokens schema)))    ;; 3. Process token stream
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; Basic flag parsing
-  ;;-------------------------------------------------------------------
-  (parse-cli example-schema ["-v" "--debug"])
-  ;=> {:flags #{:v :debug}, :options {}, :positional [], :errors []}
+;;-------------------------------------------------------------------
+;; Basic flag parsing
+;;-------------------------------------------------------------------
+(parse-cli example-schema ["-v" "--debug"])
+;=> {:flags #{:v :debug}, :options {}, :positional [], :errors []}
 
-  ;;-------------------------------------------------------------------
-  ;; Options with values
-  ;;-------------------------------------------------------------------
-  (parse-cli example-schema ["-f" "input.txt" "--output=out.txt"])
-  ;=> {:flags #{},
-  ;    :options {:file "input.txt", :output "out.txt"},
-  ;    :positional [],
-  ;    :errors []}
+;;-------------------------------------------------------------------
+;; Options with values
+;;-------------------------------------------------------------------
+(parse-cli example-schema ["-f" "input.txt" "--output=out.txt"])
+;=> {:flags #{},
+;    :options {:file "input.txt", :output "out.txt"},
+;    :positional [],
+;    :errors []}
 
-  ;;-------------------------------------------------------------------
-  ;; Combined short flags
-  ;;-------------------------------------------------------------------
-  (parse-cli example-schema ["-vd" "file.txt"])
-  ;=> {:flags #{:v :d}, :options {}, :positional ["file.txt"], :errors []}
+;;-------------------------------------------------------------------
+;; Combined short flags
+;;-------------------------------------------------------------------
+(parse-cli example-schema ["-vd" "file.txt"])
+;=> {:flags #{:v :d}, :options {}, :positional ["file.txt"], :errors []}
 
-  ;;-------------------------------------------------------------------
-  ;; Long option with space-separated value
-  ;;-------------------------------------------------------------------
-  (parse-cli example-schema ["--file" "input.txt" "--output" "out.txt"])
-  ;=> {:flags #{},
-  ;    :options {:file "input.txt", :output "out.txt"},
-  ;    :positional [],
-  ;    :errors []}
+;;-------------------------------------------------------------------
+;; Long option with space-separated value
+;;-------------------------------------------------------------------
+(parse-cli example-schema ["--file" "input.txt" "--output" "out.txt"])
+;=> {:flags #{},
+;    :options {:file "input.txt", :output "out.txt"},
+;    :positional [],
+;    :errors []}
 
-  ;;-------------------------------------------------------------------
-  ;; End of options marker
-  ;;-------------------------------------------------------------------
-  (parse-cli example-schema ["--verbose" "--" "-not-a-flag" "--also-not"])
-  ;=> {:flags #{:verbose},
-  ;    :options {},
-  ;    :positional ["-not-a-flag" "--also-not"],
-  ;    :errors []}
+;;-------------------------------------------------------------------
+;; End of options marker
+;;-------------------------------------------------------------------
+(parse-cli example-schema ["--verbose" "--" "-not-a-flag" "--also-not"])
+;=> {:flags #{:verbose},
+;    :options {},
+;    :positional ["-not-a-flag" "--also-not"],
+;    :errors []}
 
-  ;;-------------------------------------------------------------------
-  ;; Mixed usage - realistic example
-  ;;-------------------------------------------------------------------
-  (parse-cli example-schema
-             ["-v" "-f" "input.txt" "--output=result.json" "--dry-run" "extra-arg"])
-  ;=> {:flags #{:v :dry-run},
-  ;    :options {:file "input.txt", :output "result.json"},
-  ;    :positional ["extra-arg"],
-  ;    :errors []}
+;;-------------------------------------------------------------------
+;; Mixed usage - realistic example
+;;-------------------------------------------------------------------
+(parse-cli example-schema
+           ["-v" "-f" "input.txt" "--output=result.json" "--dry-run" "extra-arg"])
+;=> {:flags #{:v :dry-run},
+;    :options {:file "input.txt", :output "result.json"},
+;    :positional ["extra-arg"],
+;    :errors []}
 
-  ;;-------------------------------------------------------------------
-  ;; Edge cases
-  ;;-------------------------------------------------------------------
-  ;; Empty args
-  (parse-cli example-schema [])
-  ;=> {:flags #{}, :options {}, :positional [], :errors []}
+;;-------------------------------------------------------------------
+;; Edge cases
+;;-------------------------------------------------------------------
+;; Empty args
+(parse-cli example-schema [])
+;=> {:flags #{}, :options {}, :positional [], :errors []}
 
-  ;; Only positional
-  (parse-cli example-schema ["one" "two" "three"])
-  ;=> {:flags #{}, :options {}, :positional ["one" "two" "three"], :errors []}
+;; Only positional
+(parse-cli example-schema ["one" "two" "three"])
+;=> {:flags #{}, :options {}, :positional ["one" "two" "three"], :errors []}
 
-  ;; Unknown option produces error
-  (parse-cli example-schema ["--unknown-opt"]))
-  ;=> {:flags #{}, :options {}, :positional [],
-  ;    :errors [{:error :unknown-option, :token {:type :long-flag, :name "unknown-opt"}}]}
-  
+;; Unknown option produces error
+(parse-cli example-schema ["--unknown-opt"])
+;=> {:flags #{}, :options {}, :positional [],
+;    :errors [{:error :unknown-option, :token {:type :long-flag, :name "unknown-opt"}}]}
 
 ;;=============================================================================
-;; PART 8: Sequence Pattern Matching Power
+;; PART 7: Sequence Pattern Matching Power
 ;;=============================================================================
 ;;
 ;; The real power of flybot.pullable is in sequence pattern matching.
-;; Let's explore various patterns for stream processing.
+;; Let's explore various patterns using match-fn.
 
-(comment
-  ;;-------------------------------------------------------------------
-  ;; Basic head + rest patterns (using plain symbols)
-  ;;-------------------------------------------------------------------
+;;-------------------------------------------------------------------
+;; Basic head + rest patterns
+;;-------------------------------------------------------------------
 
-  ;; Match first element and rest
-  (p/query '[head ?rest*] [:a :b :c :d])
-  ;=> {head :a, rest (:b :c :d)}
+;; Match first element and rest
+((p/match-fn [?head ?rest*] {:head ?head :rest ?rest})
+ [:a :b :c :d])
+;=> {:head :a, :rest (:b :c :d)}
 
-  ;; Match first N elements
-  (p/query '[a b c ?rest*] [:x :y :z 1 2 3])
-  ;=> {a :x, b :y, c :z, rest (1 2 3)}
+;; Match first N elements
+((p/match-fn [?a ?b ?c ?rest*] {:a ?a :b ?b :c ?c :rest ?rest})
+ [:x :y :z 1 2 3])
+;=> {:a :x, :b :y, :c :z, :rest (1 2 3)}
 
-  ;; Greedy vs lazy: get all but last
-  (p/query '[?init*! last] [:a :b :c :d])
-  ;=> {init (:a :b :c), last :d}
+;; Greedy: get all but last
+((p/match-fn [?init*! ?last] {:init ?init :last ?last})
+ [:a :b :c :d])
+;=> {:init (:a :b :c), :last :d}
 
-  ;;-------------------------------------------------------------------
-  ;; Predicates on elements
-  ;;-------------------------------------------------------------------
+;;-------------------------------------------------------------------
+;; Combining match-fn with predicates in body
+;;-------------------------------------------------------------------
 
-  ;; Match if first element satisfies predicate
-  (p/query '[(?x keyword?) ?rest*] [:flag "value" :other])
-  ;=> {x :flag, rest ("value" :other)}
+;; Use when to add conditions in the body
+((p/match-fn [?first ?rest*]
+             (when (keyword? ?first)
+               {:keyword ?first :rest ?rest}))
+ [:flag "value" :other])
+;=> {:keyword :flag, :rest ("value" :other)}
 
-  ;; No match if predicate fails
-  (p/query '[(?x keyword?) ?rest*] ["not-a-keyword" :other])
-  ;=> nil
+;; No match if predicate fails (returns nil)
+((p/match-fn [?first ?rest*]
+             (when (keyword? ?first)
+               {:keyword ?first :rest ?rest}))
+ ["not-a-keyword" :other])
+;=> nil
 
-  ;;-------------------------------------------------------------------
-  ;; Token stream matching with predicates
-  ;;-------------------------------------------------------------------
+;;-------------------------------------------------------------------
+;; Practical: Token stream matching
+;;-------------------------------------------------------------------
 
-  ;; Match short-opt followed by positional (option + value)
-  (p/query '[(opt #(= :short-opt (:type %)))
-             (val #(= :positional (:type %)))
-             ?rest*]
-           [{:type :short-opt :char \f}
-            {:type :positional :value "file.txt"}
-            {:type :long-flag :name "verbose"}])
-  ;=> {opt {:type :short-opt, :char \f}
-  ;    val {:type :positional, :value "file.txt"}
-  ;    rest ({:type :long-flag, :name "verbose"})}
+;; Match short-opt followed by positional (option + value)
+((p/match-fn [?opt ?val ?rest*]
+             (when (and (= :short-opt (:type ?opt))
+                        (= :positional (:type ?val)))
+               {:opt ?opt :val ?val :rest ?rest}))
+ [{:type :short-opt :char \f}
+  {:type :positional :value "file.txt"}
+  {:type :long-flag :name "verbose"}])
+;=> {:opt {:type :short-opt, :char \f}
+;    :val {:type :positional, :value "file.txt"}
+;    :rest ({:type :long-flag, :name "verbose"})}
 
-  ;; Match any flag (short or long)
-  (p/query '[(flag #(#{:short-opt :long-flag} (:type %))) ?rest*]
-           [{:type :long-flag :name "verbose"}
-            {:type :positional :value "file.txt"}])
-  ;=> {flag {:type :long-flag, :name "verbose"}
-  ;    rest ({:type :positional, :value "file.txt"})}
+;;-------------------------------------------------------------------
+;; Unification - same variable must match same value
+;;-------------------------------------------------------------------
 
-  ;;-------------------------------------------------------------------
-  ;; Using :filter to collect specific elements
-  ;;-------------------------------------------------------------------
-  ;; :filter collects all elements matching a predicate
-  ;; Works great with simple predicates like even?
+;; Check if first and last elements are equal
+((p/match-fn [?x ?middle* ?x] {:bookend ?x :middle ?middle})
+ [:a :b :c :a])
+;=> {:bookend :a, :middle (:b :c)}
 
-  (p/query (list '? :seq [(list '? :filter even? 'evens)])
-           [1 2 3 4 5 6])
-  ;=> {evens [2 4 6]}
-
-  (p/query (list '? :seq [(list '? :filter string? 'strings)])
-           [1 "hello" 2 "world" 3])
-  ;=> {strings ["hello" "world"]}
-
-  ;;-------------------------------------------------------------------
-  ;; Using :first to find specific element
-  ;;-------------------------------------------------------------------
-  ;; :first finds the first element matching a predicate
-
-  (p/query (list '? :seq [(list '? :first even? 'first-even)])
-           [1 3 5 6 7 8])
-  ;=> {first-even 6}
-
-  (p/query (list '? :seq [(list '? :first string? 'first-str)])
-           [1 2 "found" 3 "other"]))
-  ;=> {first-str "found"}
-  
+;; Fails when first != last
+(p/failure? ((p/match-fn [?x ?middle* ?x] :ok) [:a :b :c :d]))
+;=> true
 
 ;;=============================================================================
-;; PART 9: Pattern-Based Token Consumer
-;;=============================================================================
-;;
-;; Here's a more pattern-driven approach to consuming tokens.
-
-(comment
-  ;; Using patterns to match option + value pair
-  (p/query '[(opt #(= :short-opt (:type %)))
-             (val #(= :positional (:type %)))
-             ?rest*]
-           [{:type :short-opt :char \f}
-            {:type :positional :value "file.txt"}
-            {:type :long-flag :name "verbose"}])
-  ;=> {opt {:type :short-opt, :char \f}
-  ;    val {:type :positional, :value "file.txt"}
-  ;    rest ({:type :long-flag, :name "verbose"})}
-
-  ;; Using patterns to match a flag followed by anything
-  (p/query '[(flag #(= :long-flag (:type %))) ?rest*]
-           [{:type :long-flag :name "verbose"}
-            {:type :positional :value "file.txt"}]))
-  ;=> {flag {:type :long-flag, :name "verbose"}
-  ;    rest ({:type :positional, :value "file.txt"})}
-  
-
-;;=============================================================================
-;; PART 10: Key Takeaways & Suggested Library Enhancements
+;; PART 8: Key Takeaways
 ;;=============================================================================
 ;;
 ;; This demo showcased several powerful pattern matching features:
 ;;
-;; 1. SEQUENCE PATTERNS - The core strength
-;;    - Match head + rest: [head ?rest*]
-;;    - Lazy vs greedy: [?init*! last] gets all but last
-;;    - Match with predicates: [(x pred?) ?rest*]
+;; 1. MATCH-FN - The core API
+;;    - Creates pattern-matching functions
+;;    - Pattern variables: ?x, ?rest*, ?init*!, ?opt?
+;;    - Special $ binds to matched value
+;;    - Returns MatchFailure on mismatch (check with failure?)
 ;;
-;; 2. PREDICATE MATCHING
-;;    - Filter by type: #(= :short-opt (:type %))
-;;    - Combine predicates: #(#{:short-opt :long-flag} (:type %))
-;;    - Set predicates: (? :pred #{:a :b}) for membership test
-;;    - Map predicates: (? :pred {:k v}) for KEY lookup (not submap)
+;; 2. SEQUENCE PATTERNS - The core strength
+;;    - Match head + rest: [?head ?rest*]
+;;    - Lazy vs greedy: [?init*! ?last] gets all but last
+;;    - Unification: [?x ?middle* ?x] checks first == last
 ;;
-;; 3. STREAM PROCESSING PATTERNS
-;;    - :filter - Collect all elements matching predicate
-;;    - :first - Find first matching element
-;;    - Option+value pairs with consecutive element matching
+;; 3. COMBINING PATTERNS WITH PREDICATES
+;;    - Use when/if in match-fn body for conditional matching
+;;    - Return nil to signal "not a match" from body
+;;    - Predicates as map values: {:age even?}
 ;;
 ;; 4. DECLARATIVE OVER IMPERATIVE
 ;;    - Describe WHAT to match, not HOW
@@ -577,44 +531,6 @@
 ;;    - Easy to add new token types or parsing rules
 ;;
 ;; 5. COMPOSABLE MATCHERS
-;;    - Build complex parsers from simple patterns
-;;    - Each pattern handles one concern
-;;    - Combine with p/query for readable parsing code
-;;
-;; 6. NEW PLAIN SYMBOL SYNTAX
-;;    - Use plain symbols for variables: [head ?tail*] or {name age}
-;;    - Use _ for wildcard: [first _ third]
-;;    - Use ''sym for literal symbols: {type ''response}
-;;    - More Clojure-like and readable
-;;
-;;-----------------------------------------------------------------------------
-;; SUGGESTED LIBRARY ENHANCEMENTS
-;;-----------------------------------------------------------------------------
-;;
-;; 1. SUBMAP PREDICATE - Match maps by field values
-;;    Current: #(= :end-opts (:type %))   ; verbose anonymous function
-;;    Suggested: (? :submap {:type :end-opts})  ; match if value contains k/v pairs
-;;    Or: (? :pred= {:type :end-opts})    ; field equality check
-;;
-;;    This would make token matching much cleaner:
-;;      [(list 'tok #(= :flag (:type %))) '?rest*]  ; current
-;;      ['(tok (? :submap {:type :flag})) '?rest*]  ; proposed
-;;
-;; 2. :match-case WITH PATTERN DATA
-;;    Current: :match-case requires pre-compiled matchers (core namespace)
-;;    Suggested: Allow pattern data in :match-case, compile on the fly
-;;
-;;    Would enable single-pattern token stream parsing:
-;;      (? :match-case
-;;         [:end-opts   [(end (? :submap {:type :end-opts})) ?rest*]
-;;          :flag       [(opt (? :submap {:type :flag})) ?rest*]
-;;          :positional [(pos (? :submap {:type :positional})) ?rest*]]
-;;         'which)
-;;
-;; 3. SHORTHAND FOR FIELD PREDICATES
-;;    Current: #(#{:a :b} (:type %))
-;;    Suggested: {:type #{:a :b}} as pattern (not key lookup)
-;;    Or: (? :field :type #{:a :b})  ; check (:type val) is in set
-;;
-;; The combination of sequence matching, predicates, and filtering makes
-;; flybot.pullable ideal for stream processing and parsing tasks!
+;;    - Build complex parsers from simple match-fn functions
+;;    - Each matcher handles one concern
+;;    - Combine with match-first for priority-based dispatch
