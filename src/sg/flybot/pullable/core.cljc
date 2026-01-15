@@ -61,6 +61,11 @@
   [x]
   (instance? MatchFailure x))
 
+(extend-type MatchFailure
+  IMatchResult
+  (-fapply [this _f] this)
+  (-bind [this _sym _v] this))
+
 (defn fail
   "Create a failure with given reason, matcher type, and value"
   ([reason mt value]
@@ -88,15 +93,20 @@
   IMatchResult
   (-fapply [this f]
     (let [v (f this)]
-      (if (= v ::none)
-        (fail "fapply returned none" :fapply val)
+      (if (failure? v)
+        v
         (ValMatchResult. v vars))))
   (-bind [this sym v]
-    (let [old-v (get vars sym ::not-found)]
-      (condp = old-v
-        ::not-found (ValMatchResult. val (assoc vars sym v))
-        v this
-        (fail (str "binding conflict for '" sym "': had " old-v ", got " v) :bind val)))))
+    (cond
+      ;; new binding
+      (not (contains? vars sym))
+      (ValMatchResult. val (assoc vars sym v))
+      ;; unification succeeds - same value
+      (= (get vars sym) v)
+      this
+      ;; unification fails - conflicting values
+      :else
+      (fail (str "binding conflict for '" sym "': had " (get vars sym) ", got " v) :bind val))))
 
 (defn vapply
   "apply `f` to a `mr`'s `:val`"
@@ -119,11 +129,56 @@
 
 ^:rct/test
 (comment
-  ;; vapply transforms val by applying f
+  ;;-------------------------------------------------------------------
+  ;; vapply - applies function to val
+  ;;-------------------------------------------------------------------
+  ;; transforms val by applying f
   (vapply (vmr 3) inc) ;=>> {:val 4}
-  ;; -bind adds variable binding to vars
-  (-bind (vmr 3) 'a 4) ;=>>
-  {:vars {'a 4}})
+
+  ;;-------------------------------------------------------------------
+  ;; -fapply - applies function to full mr
+  ;;-------------------------------------------------------------------
+  ;; returns new val from function result
+  (-fapply (vmr 3) (fn [{:keys [val]}] (inc val))) ;=>> {:val 4}
+  ;; MatchFailure implements protocol, returns self unchanged
+  (-fapply (fail "test" :t 1) (fn [_] 999)) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; -bind - variable binding
+  ;;-------------------------------------------------------------------
+  ;; adds new binding to vars
+  (-bind (vmr 3) 'a 4) ;=>> {:vars {'a 4}}
+  ;; unification with same value succeeds
+  (-bind (vmr 3 {'a 4}) 'a 4) ;=>> {:vars {'a 4}}
+  ;; unification conflict returns failure
+  (-bind (vmr 3 {'a 4}) 'a 5) ;=>> failure?
+  ;; MatchFailure implements protocol, returns self unchanged
+  (-bind (fail "test" :t 1) 'x 2) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; merge-vars - merge variable bindings
+  ;;-------------------------------------------------------------------
+  ;; merges vars from other into mr
+  (merge-vars (vmr 1 {'a 1}) (vmr 2 {'b 2})) ;=>> {:val 1 :vars {'a 1 'b 2}}
+  ;; handles nil vars gracefully
+  (merge-vars (vmr 1 {'a 1}) (vmr 2)) ;=>> {:val 1 :vars {'a 1}}
+
+  ;;-------------------------------------------------------------------
+  ;; deeper-failure - select best failure
+  ;;-------------------------------------------------------------------
+  ;; returns failure with greater depth
+  (deeper-failure (fail "a" :t 1 [] 1) (fail "b" :t 2 [] 2)) ;=>> {:depth 2}
+  ;; handles nil arguments
+  (deeper-failure nil (fail "b" :t 2)) ;=>> failure?
+  (deeper-failure (fail "a" :t 1) nil) ;=>> failure?
+
+  ;;-------------------------------------------------------------------
+  ;; nest-failure - add path segment
+  ;;-------------------------------------------------------------------
+  ;; adds segment to path and increments depth
+  (nest-failure (fail "reason" :t "val") :key) ;=>> {:path [:key] :depth 1}
+  ;; prepends to existing path
+  (nest-failure (fail "reason" :t "val" [:inner] 1) :outer)) ;=>> {:path [:outer :inner] :depth 2})
 
 ;;=============================================================================
 ;; SECTION 2: Matcher Primitives
