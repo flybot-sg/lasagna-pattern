@@ -290,6 +290,15 @@
                      (cond-> result sym (-bind sym k))))
                  (or best-fail (fail "no matchers matched" :case (:val mr))))))))
 
+(defn mnot
+  "a matcher that succeeds when `child` fails, and fails when `child` succeeds"
+  [child]
+  (matcher :not
+           (fn [mr]
+             (if (failure? (child mr))
+               mr
+               (fail "negation failed: child matcher succeeded" :not (:val mr))))))
+
 ^:rct/test
 (comment
   ;; mor returns first successful match (short-circuits)
@@ -621,7 +630,7 @@
   ;; mzfilter returns empty when no matches
   ((mseq [(mzfilter neg? {:sym 'negs})]) (vmr [1 2 3])) ;=>> {:vars '{negs []}}
   ;; mzfilter combines with other sub-matchers
-  ((mseq [(mzone (mvar 'first identity)) (mzfilter even? {:sym 'rest-evens})]) (vmr [1 2 3 4 5 6])) ;=>>
+  ((mseq [(mzone (mvar 'first wildcard)) (mzfilter even? {:sym 'rest-evens})]) (vmr [1 2 3 4 5 6])) ;=>>
   {:vars '{first 1 rest-evens [2 4 6]}})
 
 (defn mzfirst
@@ -651,7 +660,7 @@
   ;; mzfirst fails when no element matches
   ((mseq [(mzfirst neg? {})]) (vmr [1 2 3])) ;=>> failure?
   ;; mzfirst combines with other sub-matchers
-  ((mseq [(mzone (mvar 'head identity)) (mzfirst even? {:sym 'first-even})]) (vmr [1 3 4 5 6])) ;=>>
+  ((mseq [(mzone (mvar 'head wildcard)) (mzfirst even? {:sym 'first-even})]) (vmr [1 3 4 5 6])) ;=>>
   {:val 4 :vars '{head 1 first-even 4}})
 
 (defn mzcollect
@@ -739,11 +748,11 @@
                   ~opts))))
 
 (defmatcher :pred "(? :pred <fn>)"
-  (mzone (mvar 'f identity))
+  (mzone (mvar 'f wildcard))
   (vars-> [f] (mpred f)))
 
 (defmatcher :val "(? :val <value>)"
-  (mzone (mvar 'val identity))
+  (mzone (mvar 'val wildcard))
   (vars-> [val] (mval val)))
 
 (defmatcher :any "(? :any)"
@@ -812,13 +821,7 @@
 
 (defmatcher :not "(? :not <matcher>)"
   (mzone (mvar 'child (mpred matcher-type)))
-  (vars-> [child]
-          (matcher :not
-                   (fn [mr]
-                     (let [result (child mr)]
-                       (if (failure? result)
-                         mr  ; child failed, so :not succeeds
-                         (fail "negation failed: child matcher succeeded" :not (:val mr))))))))
+  (vars-> [child] (mnot child)))
 
 (defmatcher :-> "(? :-> <matcher>...)"
   (mzcollect matcher-type 'steps)
@@ -893,15 +896,11 @@
                            (assoc mr :val (if (string? result) [result] result))
                            (fail (str "regex " pattern " did not match: " (pr-str v)) :regex v))))))))
 
-(def ^:private matcher-specs
-  "Unified specifications for each matcher type, populated by defmatcher."
-  @matcher-specs*)
-
 (defn- get-spec
   "Get spec for matcher type, throws if unknown"
   [t]
-  (or (get matcher-specs t)
-      (let [valid-types (keys matcher-specs)]
+  (or (get @matcher-specs* t)
+      (let [valid-types (keys @matcher-specs*)]
         (throw (ex-info (str "Unknown matcher type: " t "\nValid types: " (sort valid-types))
                         {:type t :valid-types valid-types})))))
 
@@ -1119,7 +1118,20 @@
   (rule '(? :any) '(? :val $)))
 
 (def ^:private rewrite-rules
-  "Ordered rewrite rules for ptn->core. First match wins."
+  "Ordered rewrite rules for ptn->core. First match wins.
+
+   Order rationale:
+   1. rw-core-pattern  - Existing (? :type ...) patterns must be recognized first
+   2. rw-regex         - Regex literals before they could match as other types
+   3. rw-matching-var  - Quantified vars (?x*, ?x+, ?x?) before plain symbols
+   4. rw-vector        - Structural: vectors -> (? :seq ...)
+   5. rw-map           - Structural: maps -> (? :map ...)
+   6. rw-seq           - Structural: lists (recurse into children)
+   7. rw-function      - fn? before plain symbols (functions as predicates)
+   8. rw-set           - set? before plain symbols (sets as predicates)
+   9. rw-wildcard      - _ symbol before plain symbols
+   10. rw-plain-symbol - ?x variables before literals
+   11. rw-literal      - Catch-all: any remaining value -> (? :val ...)"
   [rw-core-pattern
    rw-regex
    rw-matching-var
