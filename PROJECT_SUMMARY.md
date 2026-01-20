@@ -21,7 +21,7 @@ A pull-based data transformation engine for Clojure/ClojureScript providing a de
 pull2/
 ├── src/
 │   └── sg/flybot/
-│       ├── pullable.cljc          # Public API (compile function)
+│       ├── pullable.cljc          # Public API (failure? predicate)
 │       └── pullable/
 │           ├── core.cljc          # Core matcher/pattern engine
 │           └── util.cljc          # Pure utility functions/macros
@@ -39,20 +39,22 @@ pull2/
 
 ### Pattern System Flow
 
-Pattern compilation happens in two phases:
+Two-phase pattern compilation:
 
 ```
-Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matcher function
+Pattern → rewrite-pattern → Core Pattern → core->matcher → Matcher
+             (Phase 1)                        (Phase 2)
 ```
 
-**Phase 1 - Outer (`ptn->core`)**: Rewrites syntax sugar into normalized core `(? :type ...)` patterns
-- `'[?x]` → `'(? :seq [(? :one (? :var ?x (? :any))) (? :term)])`
-- `'?x` → `'(? :var ?x (? :any))`
-- `'foo` → `'(? :val foo)` (plain symbols match literal values)
-- `#"\d+"` → `'(? :regex #"\d+")`
-- `even?` → `'(? :pred even?)`
+**Phase 1 - Rewrite** (`rewrite-pattern`): Transforms syntax sugar to core patterns
+- Uses postwalk (bottom-up, inner forms first)
+- Rewrite rules are functions: `(pattern -> core-pattern | nil)`
+- Example: `{:a (? :any)}` → `(? :map :a (? :any))`
+- Example: `[(? :any)]` → `(? :seq (? :one (? :any)))`
 
-**Phase 2 - Inner (`core->matcher`)**: Compiles core patterns to matchers via defmatcher specs
+**Phase 2 - Compile** (`core->matcher`): Compiles core patterns to matchers
+- Uses postwalk (bottom-up)
+- Each `(? :type ...)` form is validated against its defmatcher spec and compiled to a matcher function
 
 ### Key Abstractions
 
@@ -93,134 +95,90 @@ Pattern (Clojure data) → ptn->core → Core Pattern → core->matcher → Matc
 
 | Function | Purpose |
 |----------|---------|
-| `ptn->matcher` | Main entry point: compiles pattern to matcher (chains ptn->core + core->matcher) |
-| `ptn->core` | Phase 1: rewrites syntax sugar to core `(? :type ...)` patterns |
-| `core->matcher` | Phase 2: compiles core patterns to matchers via defmatcher specs |
-| `core-rule` | Matcher that validates and builds core `(? :type ...)` patterns |
+| `rewrite-pattern` | Phase 1: Transforms syntax sugar to core patterns using rewrite rules |
+| `map-rewrite` | Rewrite rule: `{:a ptn}` → `(? :map :a ptn)` |
+| `vector-rewrite` | Rewrite rule: `[ptn]` → `(? :seq (? :one ptn))` |
+| `core->matcher` | Phase 2: Compiles core `(? :type ...)` patterns to matchers |
+| `core-rule` | Internal matcher that validates and builds core patterns |
 
 ### Pattern DSL Syntax
 
 ```clojure
-;; Top-level patterns - symbols and literals work directly
-(query '?x 3)          ;=> {?x 3}    ; ?-prefixed symbol binds value
-(query 'foo 'foo)      ;=> {}        ; plain symbol matches literal
-(query 3 3)            ;=> {}        ; literal matches exactly
-(query 3 4)            ;=> nil       ; literal mismatch
-(query "hello" "hello") ;=> {}       ; string literal
-(query :foo :foo)      ;=> {}        ; keyword literal
-
-;; Core form
+;; Core form - only (? :type ...) patterns are supported
 (? :type args...)
 
-;; Variable bindings - must use ? prefix
-?x      ; bind value to '?x
-_       ; wildcard (match anything, no binding)
-foo     ; match literal symbol 'foo (no ? prefix)
-
-;; Quantified variable bindings (in sequences)
-?x?     ; optional (0 or 1)
-?x+     ; one or more (lazy - matches minimum)
-?x*     ; zero or more (lazy - matches minimum)
-?x+!    ; one or more (greedy - matches maximum)
-?x*!    ; zero or more (greedy - matches maximum)
-?_*     ; zero or more wildcard (no binding)
-
 ;; Examples
-{:a ?x :b ?y}                 ; bind :a to ?x, :b to ?y
-[?head _ ?tail]               ; head, ignore middle, tail
-{:type response}              ; match literal symbol 'response
-(? :val 5)                    ; exact value
-(? :pred even?)               ; predicate
-[?head ?tail+]                ; head + rest (1 or more, lazy)
-[?prefix* ?last]              ; prefix (0 or more, lazy) + last
-#"\d+"                        ; regex (matches strings, returns groups)
+(? :val 5)                                    ; exact value
+(? :pred even?)                               ; predicate
+(? :var 'x (? :any))                          ; bind value to 'x
+(? :map :a (? :var 'x (? :any)))              ; map with binding
+(? :seq (? :one (? :any)) (? :term))          ; sequence [_]
+(? :seq (? :repeat (? :any) :min 0))          ; sequence [_*]
+(? :regex #"\d+")                             ; regex (matches strings, returns groups)
 ```
 
 ### Regex Matching
 
-Regex patterns automatically match strings and return capture groups:
+Regex patterns match strings and return capture groups:
 
 ```clojure
 ;; Basic regex - returns [full-match] or [full-match group1 group2 ...]
-((ptn->matcher #"hello") (vmr "hello"))
+((core->matcher '(? :regex #"hello")) (vmr "hello"))
 ;=> {:val ["hello"]}
 
-((ptn->matcher #"(\d+)-(\d+)") (vmr "12-34"))
+((core->matcher '(? :regex #"(\d+)-(\d+)")) (vmr "12-34"))
 ;=> {:val ["12-34" "12" "34"]}
 
-;; Regex in map - transforms matched value to groups
-((ptn->matcher {:phone #"(\d{3})-(\d{4})"}) (vmr {:phone "555-1234"}))
-;=> {:val {:phone ["555-1234" "555" "1234"]}}
-
-;; Regex in vector - validates string element
-(query ['?name #"\d+"] ["Alice" "42"])
-;=> {?name "Alice"}
-
 ;; Bind regex groups using :var
-(query (list '? :var '?parts (list '? :regex #"(\w+)@(\w+)")) "user@host")
-;=> {?parts ["user@host" "user" "host"]}
+((core->matcher '(? :var parts (? :regex #"(\w+)@(\w+)"))) (vmr "user@host"))
+;=> {:val "user@host" :vars {'parts ["user@host" "user" "host"]}}
 ```
 
-### Case Matching with Patterns
+### Case Matching
 
-`:case` supports patterns (like regex) that are automatically compiled.
-Symbol binding comes first, then key-pattern pairs:
+`:case` matches first successful pattern and binds the matched key:
 
 ```clojure
-;; CLI option parser example - match first successful pattern
+;; CLI option parser example
 (def opt-matcher
-  (compile '(? :case ?opt-type
-              :long-opt-with-value #"--([a-zA-Z]+)=(.+)"
-              :long-opt #"--([a-zA-Z]+)"
-              :short-opt #"-([a-zA-Z])")))
+  (core->matcher
+    '(? :case opt-type
+        :long-opt-with-value (? :regex #"--([a-zA-Z]+)=(.+)")
+        :long-opt (? :regex #"--([a-zA-Z]+)")
+        :short-opt (? :regex #"-([a-zA-Z])"))))
 
-(query opt-matcher "--name=Alice")
-;=> {?opt-type :long-opt-with-value}  ; val is ["--name=Alice" "name" "Alice"]
-
-(query opt-matcher "--verbose")
-;=> {?opt-type :long-opt}             ; val is ["--verbose" "verbose"]
-
-(query opt-matcher "-v")
-;=> {?opt-type :short-opt}            ; val is ["-v" "v"]
+(opt-matcher (vmr "--name=Alice"))
+;=> {:val ["--name=Alice" "name" "Alice"] :vars {'opt-type :long-opt-with-value}}
 ```
 
 ### Lazy vs Greedy Matching
 
-Quantifiers (`+` and `*`) are **lazy by default** - they match the minimum required.
-Add `!` suffix for **greedy** matching - matches the maximum possible.
+The `:repeat` matcher supports `:greedy` option:
 
 ```clojure
-;; Lazy (default): first quantifier takes minimum
-(query '[?a* ?b*] [1 2 3])    ;=> {?a () ?b (1 2 3)}
-(query '[?a+ ?b+] [1 2 3])    ;=> {?a (1) ?b (2 3)}
+;; Lazy (default): matches minimum
+(? :repeat <matcher> :min 0)              ; zero or more, lazy
+(? :repeat <matcher> :min 1)              ; one or more, lazy
 
-;; Greedy: first quantifier takes maximum
-(query '[?a*! ?b*] [1 2 3])   ;=> {?a (1 2 3) ?b ()}
-(query '[?a+! ?b+] [1 2 3])   ;=> {?a (1 2) ?b (3)}
+;; Greedy: matches maximum
+(? :repeat <matcher> :min 0 :greedy)      ; zero or more, greedy
+(? :repeat <matcher> :min 1 :greedy)      ; one or more, greedy
 ```
 
 ### Maps and Sets as Predicates
 
-Maps and sets can be used as predicates anywhere a predicate function is accepted:
+Maps and sets can be used as predicates:
 - **Sets** test membership: `(#{:a :b :c} val)` returns truthy if `val` is in the set
 - **Maps** test key lookup: `({:a 1 :b 2} val)` returns truthy if `val` is a key in the map
 
 ```clojure
 ;; Set as predicate in :pred matcher
-(query (list '? :pred #{:active :pending}) :active)  ;=> {}
-(query (list '? :pred #{:active :pending}) :other)   ;=> nil
-
-;; Map as predicate (key lookup)
-(query (list '? :pred {:a 1 :b 2}) :a)  ;=> {}
-(query (list '? :pred {:a 1 :b 2}) :c)  ;=> nil
-
-;; Set in map pattern - tests membership
-(query {:status #{:active :pending}} {:status :active})  ;=> {}
-(query {:status #{:active :pending}} {:status :closed})  ;=> nil
+((core->matcher '(? :pred #{:active :pending})) (vmr :active))  ;=> {:val :active}
+((core->matcher '(? :pred #{:active :pending})) (vmr :other))   ;=> MatchFailure
 
 ;; Set in :filter - collect matching elements
-(query (list '? :seq [(list '? :filter #{:a :b} '?matched)]) [:a :c :b :d])
-;=> {?matched [:a :b]}
+((core->matcher '(? :seq (? :filter #{:a :b} matched))) (vmr [:a :c :b :d]))
+;=> {:vars {'matched [:a :b]}}
 ```
 
 ### Pattern Types Reference
@@ -230,8 +188,8 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 | `:any` | `(? :any)` | Match anything (wildcard) |
 | `:pred` | `(? :pred <pred>)` | Match if (pred val) is truthy. Pred can be fn, map (key lookup), or set (membership) |
 | `:val` | `(? :val <value>)` | Match exact value |
-| `:map` | `(? :map <map>)` | Match map structure |
-| `:seq` | `(? :seq [<matchers>...])` | Match sequence of matchers |
+| `:map` | `(? :map <key> <pattern>...)` | Match map structure |
+| `:seq` | `(? :seq <matcher>...)` | Match sequence of matchers |
 | `:term` | `(? :term)` | Assert end of sequence (no more elements) |
 | `:var` | `(? :var <sym> <matcher>)` | Bind match to variable |
 | `:one` | `(? :one <matcher>)` | Match single element in seq |
@@ -249,10 +207,10 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 
 **Note:** Invalid patterns throw descriptive exceptions:
 ```clojure
-(ptn->matcher '(? :unknown 123))
+(core->matcher '(? :unknown 123))
 ;=> ExceptionInfo: "Unknown matcher type: :unknown. Valid types: (:pred :val ...)"
 
-(ptn->matcher '(? :pred "not-a-fn"))
+(core->matcher '(? :pred "not-a-fn"))
 ;=> ExceptionInfo: "Invalid arguments for (? :pred ...)
 ;;                   Expected: (? :pred <fn>)
 ;;                   Error: predicate ... failed"
@@ -261,36 +219,28 @@ Maps and sets can be used as predicates anywhere a predicate function is accepte
 ### Entry Points
 
 ```clojure
-;; Public API (sg.flybot.pullable)
-(require '[sg.flybot.pullable :as p])
+;; Low-level API (sg.flybot.pullable.core)
+(require '[sg.flybot.pullable.core :as pc])
 
-;; match-fn - create pattern-matching functions
-;; Returns: body result on match, MatchFailure on mismatch
-((p/match-fn {:name ?name :age ?age}
-             (str ?name " is " ?age))
- {:name "Alice" :age 30})
-;=> "Alice is 30"
+;; Compile core patterns to matchers
+(def matcher (pc/core->matcher '(? :map :name (? :var 'name (? :any)))))
 
-;; $ binds to the matched/transformed value
-((p/match-fn {:x ?x} (assoc $ :doubled (* 2 ?x)))
- {:x 5 :y 10})
-;=> {:x 5 :y 10 :doubled 10}
+;; Apply matcher to data
+(matcher (pc/vmr {:name "Alice" :age 30}))
+;=> {:val {:name "Alice" :age 30} :vars {'name "Alice"}}
 
 ;; Check for match failure
-(p/failure? ((p/match-fn {:a ?a} ?a) "not a map"))
+(pc/failure? (matcher (pc/vmr "not a map")))
 ;=> true
 
 ;; Access MatchFailure fields for diagnostics
-(let [result ((p/match-fn {:a ?a} ?a) "not a map")]
-  (when (p/failure? result)
+(let [result (matcher (pc/vmr "not a map"))]
+  (when (pc/failure? result)
     {:reason (:reason result)
      :path   (:path result)
      :value  (:value result)}))
 ;=> {:reason "expected map, got ..." :path [] :value "not a map"}
 
-;; Low-level (sg.flybot.pullable.core)
-(ptn->matcher pattern) → matcher-fn
-(vmr value)            → ValMatchResult
 ;; Note: Sequence matching preserves collection types (vectors stay vectors, lists stay lists)
 ```
 
@@ -337,6 +287,6 @@ Uses **Jujutsu (jj)**, not Git. Check status with `jj status`.
 
 | Namespace | Status | Purpose |
 |-----------|--------|---------|
-| `sg.flybot.pullable` | Implemented | Public API (`match-fn`, `failure?`) |
+| `sg.flybot.pullable` | Implemented | Public API (`failure?`) |
 | `sg.flybot.pullable.core` | Implemented | Core engine, matchers, MatchFailure |
 | `sg.flybot.pullable.util` | Implemented | Pure utility functions/macros (e.g., `vars->`) |
