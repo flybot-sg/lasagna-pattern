@@ -12,16 +12,21 @@
 ;;=============================================================================
 ;;
 ;; flybot.pullable is a pattern matching library for Clojure data structures.
-;; It lets you match patterns and compute with the matched values.
+;; It lets you match patterns, extract values, and transform data declaratively.
 ;;
-;; The public API is minimal - just two exports:
-;; - `match-fn` - create a function that pattern-matches and computes
-;; - `failure?` - check if a match failed
+;; The public API consists of:
+;; - `match-fn`    - Create a function that pattern-matches and computes
+;; - `failure?`    - Check if a match failed
+;; - `rule`        - Create pattern → template transformation rules
+;; - `apply-rules` - Apply rules recursively to transform data
+;; - `compile-pattern` - Compile patterns to matcher functions (advanced)
+;; - `register-var-option!` - Extend variable syntax (advanced)
 ;;
 ;; Key concepts:
 ;; - Pattern: A template describing the shape of data to match
 ;; - Variables: Symbols prefixed with ? (like ?x, ?name) that capture values
 ;; - MatchFailure: Returned when a pattern doesn't match, with diagnostics
+;; - Rule: A function that transforms data matching a pattern to a template
 
 ;;=============================================================================
 ;; PART 2: Quick Start with match-fn
@@ -353,7 +358,200 @@
 ;=> :odd
 
 ;;=============================================================================
-;; PART 12: Practical Examples
+;; PART 12: Rule-Based Transformations
+;;=============================================================================
+;;
+;; The `rule` macro creates transformation functions: pattern → template.
+;; Rules are the foundation for declarative data transformation.
+
+;;-------------------------------------------------------------------
+;; Basic rule syntax
+;;-------------------------------------------------------------------
+;; A rule returns the template with ?vars substituted when matched,
+;; or nil when the pattern doesn't match.
+
+(def double-to-add (p/rule (* 2 ?x) (+ ?x ?x)))
+
+(double-to-add '(* 2 5))
+;=> (+ 5 5)
+
+(double-to-add '(* 3 5))
+;=> nil  ; pattern didn't match
+
+;;-------------------------------------------------------------------
+;; Rules with map patterns
+;;-------------------------------------------------------------------
+(def extract-point (p/rule {:x ?x :y ?y} [?x ?y]))
+
+(extract-point {:x 10 :y 20 :z 30})
+;=> [10 20]
+
+(extract-point {:a 1 :b 2})
+;=> nil
+
+;;-------------------------------------------------------------------
+;; Rules with sequence patterns
+;;-------------------------------------------------------------------
+(def rotate-first (p/rule [?first ?rest*] [?rest* ?first]))
+
+(rotate-first [1 2 3 4])
+;=> [[2 3 4] 1]  ; note: ?rest* is collected as vector
+
+;;-------------------------------------------------------------------
+;; apply-rules: Recursive transformation
+;;-------------------------------------------------------------------
+;; `apply-rules` applies rules bottom-up throughout a data structure.
+;; Each node is transformed by the first matching rule.
+
+(def simplify-mul-2 (p/rule (* 2 ?x) (+ ?x ?x)))
+(def simplify-add-0 (p/rule (+ 0 ?x) ?x))
+
+;; Single transformation
+(p/apply-rules [simplify-mul-2] '(* 2 3))
+;=> (+ 3 3)
+
+;; Deep transformation
+(p/apply-rules [simplify-mul-2] '(foo (* 2 5) bar))
+;=> (foo (+ 5 5) bar)
+
+;; Multiple rules, first match wins
+(p/apply-rules [simplify-mul-2 simplify-add-0]
+               '(+ 0 (* 2 y)))
+;=> (+ y y)  ; both rules applied bottom-up
+
+;; Nested application
+(p/apply-rules [simplify-mul-2]
+               '(* 2 (* 2 z)))
+;=> (+ (+ z z) (+ z z))  ; applied at all levels
+
+;;-------------------------------------------------------------------
+;; Practical: Simple expression simplifier
+;;-------------------------------------------------------------------
+(def algebra-rules
+  [(p/rule (+ 0 ?x) ?x)           ; 0 + x = x
+   (p/rule (+ ?x 0) ?x)           ; x + 0 = x
+   (p/rule (* 1 ?x) ?x)           ; 1 * x = x
+   (p/rule (* ?x 1) ?x)           ; x * 1 = x
+   (p/rule (* 0 ?x) 0)            ; 0 * x = 0
+   (p/rule (* ?x 0) 0)            ; x * 0 = 0
+   (p/rule (* 2 ?x) (+ ?x ?x))])  ; 2 * x = x + x
+
+(p/apply-rules algebra-rules
+               '(+ (* 1 a) (* 0 b)))
+;=> (+ a 0)  ; Note: need multiple passes for full simplification
+
+;; For full simplification, apply until fixed point:
+(defn simplify [expr]
+  (let [simplified (p/apply-rules algebra-rules expr)]
+    (if (= simplified expr)
+      expr
+      (recur simplified))))
+
+(simplify '(+ (* 1 a) (* 0 b)))
+;=> a
+
+;;=============================================================================
+;; PART 13: Custom Variable Options
+;;=============================================================================
+;;
+;; Extended variable syntax: (?var :option value ...)
+;; Built-in options: :when, :default
+;; You can register custom options with register-var-option!
+
+;;-------------------------------------------------------------------
+;; Built-in: :when predicate
+;;-------------------------------------------------------------------
+((p/match-fn {:age (?age :when pos?)} ?age) {:age 25})
+;=> 25
+
+(p/failure? ((p/match-fn {:age (?age :when pos?)} ?age) {:age -5}))
+;=> true
+
+;;-------------------------------------------------------------------
+;; Built-in: :default value
+;;-------------------------------------------------------------------
+((p/match-fn {:name (?name :default "Anonymous")} ?name) {:name nil})
+;=> "Anonymous"
+
+((p/match-fn {:name (?name :default "Anonymous")} ?name) {:name "Alice"})
+;=> "Alice"
+
+;;-------------------------------------------------------------------
+;; Combining options
+;;-------------------------------------------------------------------
+((p/match-fn {:count (?n :default 0 :when #(>= % 0))} ?n) {:count nil})
+;=> 0
+
+;;-------------------------------------------------------------------
+;; Custom options: register-var-option!
+;;-------------------------------------------------------------------
+;; Register a :transform option that applies a function to the value
+
+(p/register-var-option! :transform
+                        (fn [f] (list '? :sub f)))
+
+;; Now you can use :transform in patterns
+((p/match-fn {:name (?n :transform clojure.string/upper-case)} ?n)
+ {:name "alice"})
+;=> "ALICE"
+
+;; Register a :coerce option for type coercion
+(p/register-var-option! :coerce
+                        (fn [type-fn]
+                          (list '? :-> '(? :any) (list '? :sub type-fn))))
+
+((p/match-fn {:port (?p :coerce #(Integer/parseInt %))} ?p)
+ {:port "8080"})
+;=> 8080
+
+;;=============================================================================
+;; PART 14: Advanced - compile-pattern
+;;=============================================================================
+;;
+;; For lower-level control, use compile-pattern directly.
+;; It returns a matcher function that takes a ValMatchResult.
+
+(require '[sg.flybot.pullable.core :as pc])
+
+;; Compile a pattern to a matcher
+(def name-matcher (p/compile-pattern '{:name ?n}))
+
+;; Apply to data wrapped in vmr (ValMatchResult)
+(name-matcher (pc/vmr {:name "Alice" :age 30}))
+;=> {:val {:name "Alice" :age 30} :vars {n "Alice"}}
+
+;; Check for failure
+(pc/failure? (name-matcher (pc/vmr "not a map")))
+;=> true
+
+;;-------------------------------------------------------------------
+;; Custom rewrite rules
+;;-------------------------------------------------------------------
+;; You can extend the pattern syntax with custom rewrite rules.
+
+;; Define a rule for (not-nil ?x) syntax
+(def not-nil-rule
+  (fn [form]
+    (when (and (seq? form) (= 'not-nil (first form)))
+      (let [var (second form)]
+        (list var :when some?)))))
+
+;; Use with :rules option
+((p/compile-pattern '(not-nil ?n) {:rules [not-nil-rule]})
+ (pc/vmr "hello"))
+;=> {:val "hello" :vars {n "hello"}}
+
+((p/compile-pattern '(not-nil ?n) {:rules [not-nil-rule]})
+ (pc/vmr nil))
+;=> MatchFailure (predicate failed)
+
+;; Use rules in map patterns
+((p/compile-pattern '{:name (not-nil ?n)} {:rules [not-nil-rule]})
+ (pc/vmr {:name "Alice"}))
+;=> {:vars {n "Alice"}}
+
+;;=============================================================================
+;; PART 15: Practical Examples
 ;;=============================================================================
 
 ;;-------------------------------------------------------------------
@@ -429,8 +627,37 @@
 (validate-user {:name "Bob"})  ; missing keys
 ;=> {:valid false :error "..." :path [...]}
 
+;;-------------------------------------------------------------------
+;; Rule-based code transformation
+;;-------------------------------------------------------------------
+;; Transform async/await-style code to callback-style
+
+(def async-rules
+  [(p/rule (await ?expr) (fn [callback] (?expr callback)))
+   (p/rule (async ?body) (fn [callback] ?body))])
+
+(p/apply-rules async-rules
+               '(async (await (fetch-data))))
+;=> (fn [callback] (fn [callback] ((fetch-data) callback)))
+
+;;-------------------------------------------------------------------
+;; JSON schema-like validation
+;;-------------------------------------------------------------------
+(defn make-validator [schema]
+  (p/match-fn schema {:valid true :data $}))
+
+(def user-schema
+  {:name string?
+   :age (?age :when #(and (int? %) (pos? %)))
+   :email #".*@.*"})
+
+(def validate (make-validator user-schema))
+
+(validate {:name "Alice" :age 30 :email "alice@example.com"})
+;=> {:valid true :data {:name "Alice" :age 30 :email ["alice@example.com"]}}
+
 ;;=============================================================================
-;; PART 13: Tips and Best Practices
+;; PART 16: Tips and Best Practices
 ;;=============================================================================
 
 ;; 1. match-fn compiles the pattern once - store and reuse for performance
@@ -463,6 +690,25 @@
  {:age 25 :status :active})
 ;=> "valid"
 
+;; 8. Use rules for declarative transformations
+(def normalize-coords
+  (p/rule {:lat ?lat :lng ?lng} {:latitude ?lat :longitude ?lng}))
+
+(normalize-coords {:lat 40.7 :lng -74.0})
+;=> {:latitude 40.7 :longitude -74.0}
+
+;; 9. Use apply-rules for recursive transformations
+(def expand-macros
+  [(p/rule (when ?test ?body) (if ?test ?body nil))
+   (p/rule (unless ?test ?body) (if ?test nil ?body))])
+
+(p/apply-rules expand-macros '(when (> x 0) (print x)))
+;=> (if (> x 0) (print x) nil)
+
+;; 10. Extend variable syntax for domain-specific patterns
+(p/register-var-option! :as-int
+                        (fn [_] (list '? :sub #(if (string? %) (Integer/parseInt %) %))))
+
 ;;=============================================================================
 ;; Congratulations!
 ;;=============================================================================
@@ -471,26 +717,37 @@
 ;;
 ;; Key takeaways:
 ;;
-;; API:
-;; - `match-fn` - create pattern-matching functions
-;; - `failure?` - check if match failed
+;; Core API:
+;; - `match-fn`    - Create pattern-matching functions
+;; - `failure?`    - Check if match failed
+;; - `rule`        - Create pattern → template transformations
+;; - `apply-rules` - Apply rules recursively (bottom-up)
 ;;
 ;; Pattern Variables:
-;; - ?x      - bind single value
-;; - _       - wildcard (match anything, no binding)
-;; - ?x?     - optional (0 or 1)
-;; - ?x+     - one or more (lazy)
-;; - ?x*     - zero or more (lazy)
-;; - ?x+!    - one or more (greedy)
-;; - ?x*!    - zero or more (greedy)
+;; - ?x      - Bind single value
+;; - _       - Wildcard (match anything, no binding)
+;; - ?x?     - Optional (0 or 1)
+;; - ?x+     - One or more (lazy)
+;; - ?x*     - Zero or more (lazy)
+;; - ?x+!    - One or more (greedy)
+;; - ?x*!    - Zero or more (greedy)
+;;
+;; Extended Variables:
+;; - (?x :when pred)     - With predicate
+;; - (?x :default val)   - With default value
+;; - (?x :option val ...) - Custom options
 ;;
 ;; Special:
-;; - $       - the matched/transformed value (in match-fn body)
-;; - Unification - same variable in sequence must match same value
+;; - $       - The matched/transformed value (in match-fn body)
+;; - Unification - Same variable in sequence must match same value
 ;;
 ;; MatchFailure fields:
-;; - :reason - human-readable error message
-;; - :path   - location in data structure (vector of keys/indices)
-;; - :value  - the value that failed to match
+;; - :reason - Human-readable error message
+;; - :path   - Location in data structure (vector of keys/indices)
+;; - :value  - The value that failed to match
+;;
+;; Advanced:
+;; - `compile-pattern` - Direct pattern compilation with custom rules
+;; - `register-var-option!` - Extend variable syntax
 ;;
 ;; For more details, see PROJECT_SUMMARY.md and the source code!
