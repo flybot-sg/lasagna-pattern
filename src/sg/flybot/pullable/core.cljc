@@ -1031,6 +1031,60 @@
                 (list '? :var (symbol var-name) '(? :any))))))))))
 
 ;;-----------------------------------------------------------------------------
+;; Extended Matching Variables: (?var :opt1 val1 :opt2 val2 ...)
+;;-----------------------------------------------------------------------------
+
+(def var-option-handlers
+  "Registry of option handlers for extended matching vars.
+   Each handler: (fn [option-value] -> pattern-step-to-chain)
+   Users can extend by adding to this atom."
+  (atom {}))
+
+(defn register-var-option!
+  "Register an option handler for extended matching vars.
+   The handler receives the option value and returns a pattern to chain."
+  [key handler]
+  (swap! var-option-handlers assoc key handler))
+
+;; Built-in option: :when - adds a predicate check
+(register-var-option! :when
+                      (fn [pred]
+                        (list '? :pred pred)))
+
+;; Built-in option: :default - provides default for nil values
+(register-var-option! :default
+                      (fn [default-val]
+                        (list '? :sub (fn [x] (if (nil? x) default-val x)))))
+
+(defn extended-var-rewrite
+  "Rewrite (?var :opt1 val1 :opt2 val2 ...) to pattern.
+   Options are chained in order: base -> opt1 -> opt2 -> ...
+   Returns nil if not applicable."
+  [form]
+  (when (and (seq? form)
+             (symbol? (first form))
+             (= \? (first (name (first form)))))
+    (let [[var-sym & opts] form
+          var-name (subs (name var-sym) 1)]
+      (when-not (re-find forbidden-var-chars var-name)
+        (let [;; Parse options as keyword-value pairs
+              opt-pairs (partition 2 opts)
+              ;; Build chain of option patterns
+              opt-patterns (for [[k v] opt-pairs
+                                 :let [handler (get @var-option-handlers k)]
+                                 :when handler]
+                             (handler v))
+              ;; Base pattern
+              base '(? :any)
+              ;; Chain: base -> opt1 -> opt2 -> ...
+              inner (if (seq opt-patterns)
+                      (apply list '? :-> base opt-patterns)
+                      base)]
+          (if (= "_" var-name)
+            inner
+            (list '? :var (symbol var-name) inner)))))))
+
+;;-----------------------------------------------------------------------------
 ;; Pattern Compilation (Phase 2)
 ;;-----------------------------------------------------------------------------
 
@@ -1118,6 +1172,29 @@
   (matching-var-rewrite 'x) ;=> nil
 
   ;;-------------------------------------------------------------------
+  ;; extended-var-rewrite - transforms (?x :opt1 val1 ...)
+  ;;-------------------------------------------------------------------
+  ;; (?a) with no options - same as ?a
+  (extended-var-rewrite '(?a)) ;=>>
+  '(? :var a (? :any))
+  ;; (?_ ) wildcard with no options
+  (extended-var-rewrite '(?_)) ;=>>
+  '(? :any)
+  ;; (?a :when pred) - with predicate (note: pred is symbol in quoted form)
+  (extended-var-rewrite '(?a :when odd?)) ;=>>
+  '(? :var a (? :-> (? :any) (? :pred odd?)))
+  ;; (?a :default val) - with default
+  (extended-var-rewrite (list '?a :default 42)) ;=>>
+  #(and (seq? %) (= '? (first %)) (= :var (second %)))
+  ;; (?a :default val :when pred) - both options chained
+  (extended-var-rewrite (list '?a :default 5 :when odd?)) ;=>>
+  #(and (seq? %) (= '? (first %)) (= :var (second %)))
+  ;; returns nil for non-matching-var lists
+  (extended-var-rewrite '(foo bar)) ;=> nil
+  ;; returns nil for invalid var names
+  (extended-var-rewrite '(?foo*bar :when odd?)) ;=> nil
+
+  ;;-------------------------------------------------------------------
   ;; core->matcher - compiles core patterns to matchers
   ;;-------------------------------------------------------------------
   ;; compiles :var pattern
@@ -1168,6 +1245,36 @@
        (rewrite-pattern [map-rewrite matching-var-rewrite])
        core->matcher)
    (vmr {:name "Alice"})) ;=>>
-  {:val {:name "Alice"} :vars {}})
+  {:val {:name "Alice"} :vars {}}
+  ;; extended var with :when option (must use list for actual fn)
+  ((-> (list '?a :when odd?)
+       (rewrite-pattern [extended-var-rewrite])
+       core->matcher)
+   (vmr 3)) ;=>>
+  {:val 3 :vars {'a 3}}
+  ;; extended var :when fails on even
+  ((-> (list '?a :when odd?)
+       (rewrite-pattern [extended-var-rewrite])
+       core->matcher)
+   (vmr 4)) ;=>>
+  failure?
+  ;; extended var with :default option
+  ((-> (list '?a :default 42)
+       (rewrite-pattern [extended-var-rewrite])
+       core->matcher)
+   (vmr nil)) ;=>>
+  {:val 42 :vars {'a 42}}
+  ;; extended var :default passes through non-nil
+  ((-> (list '?a :default 42)
+       (rewrite-pattern [extended-var-rewrite])
+       core->matcher)
+   (vmr 5)) ;=>>
+  {:val 5 :vars {'a 5}}
+  ;; extended var with both :default and :when
+  ((-> (list '?a :default 5 :when odd?)
+       (rewrite-pattern [extended-var-rewrite])
+       core->matcher)
+   (vmr nil)) ;=>>
+  {:val 5 :vars {'a 5}})
 
 
