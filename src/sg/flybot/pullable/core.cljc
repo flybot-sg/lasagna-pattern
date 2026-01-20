@@ -971,10 +971,11 @@
 (defn vector-rewrite
   "Rewrite vector [] to (? :seq ...) core pattern.
    Automatically wraps non-subseq elements in (? :one ...).
+   Appends (? :term) to ensure entire sequence is consumed.
    Returns nil if not applicable."
   [x]
   (when (and (vector? x) (not (map-entry? x)))
-    (apply list '? :seq (map wrap-seq-element x))))
+    (apply list '? :seq (concat (map wrap-seq-element x) ['(? :term)]))))
 
 (def ^:private forbidden-var-chars
   "Characters forbidden in matching variable names"
@@ -1122,19 +1123,19 @@
   (map-rewrite (vmr 1)) ;=> nil
 
   ;;-------------------------------------------------------------------
-  ;; vector-rewrite - transforms [] to (? :seq ...)
+  ;; vector-rewrite - transforms [] to (? :seq ... (? :term))
   ;;-------------------------------------------------------------------
-  ;; wraps literal values in (? :one (? :val ...))
+  ;; wraps literal values in (? :one (? :val ...)), appends (? :term)
   (vector-rewrite [3]) ;=>>
-  '(? :seq (? :one (? :val 3)))
+  '(? :seq (? :one (? :val 3)) (? :term))
   ;; wraps non-subseq patterns in (? :one ...)
   (vector-rewrite ['(? :any)]) ;=>>
-  '(? :seq (? :one (? :any)))
+  '(? :seq (? :one (? :any)) (? :term))
   ;; subseq patterns pass through unwrapped
   (vector-rewrite ['(? :one (? :any))]) ;=>>
-  '(? :seq (? :one (? :any)))
+  '(? :seq (? :one (? :any)) (? :term))
   (vector-rewrite ['(? :repeat (? :any) :min 0)]) ;=>>
-  '(? :seq (? :repeat (? :any) :min 0))
+  '(? :seq (? :repeat (? :any) :min 0) (? :term))
   ;; returns nil for map entries
   (vector-rewrite (first {:a 1})) ;=> nil
 
@@ -1277,4 +1278,110 @@
    (vmr nil)) ;=>>
   {:val 5 :vars {'a 5}})
 
+;;=============================================================================
+;; SECTION 4: Public API
+;;=============================================================================
+
+(def default-rewrite-rules
+  "Default rewrite rules for pattern compilation.
+   Order matters: more specific rules (extended-var) before general (matching-var)."
+  [extended-var-rewrite
+   matching-var-rewrite
+   map-rewrite
+   vector-rewrite])
+
+(defn compile-pattern
+  "Compile a pattern through two phases:
+   1. Rewrite: Transform syntax sugar to core (? :type ...) patterns
+   2. Compile: Build matcher functions from core patterns
+
+   Example:
+     (compile-pattern '{:name ?n :age ?_})
+     ; Returns a matcher that extracts :name into variable 'n"
+  [ptn]
+  (-> ptn
+      (rewrite-pattern default-rewrite-rules)
+      core->matcher))
+
+(defmacro match-fn
+  "Create a pattern-matching function.
+   Returns body result on match, MatchFailure on failure.
+
+   Pattern syntax:
+     ?x       - Bind to symbol x
+     ?_       - Wildcard (no binding)
+     ?x?      - Optional (0-1)
+     ?x* ?x+  - Zero/one-or-more (lazy)
+     ?x*! ?x+!- Zero/one-or-more (greedy)
+     {}       - Map pattern
+     []       - Sequence pattern
+
+   Special binding: $ is bound to the matched/transformed value.
+
+   Examples:
+     ((match-fn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2})  ;=> 3
+     ((match-fn [?first ?rest*] ?rest) [1 2 3])        ;=> (2 3)
+     ((match-fn {:a ?x} (assoc $ :sum ?x)) {:a 1 :b 2});=> {:a 1 :b 2 :sum 1}"
+  [pattern body]
+  (let [;; Collect all variable bindings from pattern
+        vars (atom #{})
+        _ (walk/postwalk
+           (fn [x]
+             (when (and (symbol? x) (= \? (first (name x))))
+               (let [nm (name x)
+                     ;; Strip prefix ? and any suffix quantifiers
+                     base (if-let [[_ b] (re-matches #"\?([^\s\?\+\*\!]+)[\?\+\*]?\!?" nm)]
+                            b
+                            (subs nm 1))]
+                 (when (and (not= "_" base)
+                            (not (re-find forbidden-var-chars base)))
+                   (swap! vars conj (symbol base)))))
+             x)
+           pattern)
+        var-syms @vars
+        ;; Create let bindings: ?x -> (get vars 'x)
+        bindings (vec (mapcat (fn [s] [(symbol (str "?" s)) `(get ~'vars '~s)]) var-syms))]
+    `(let [matcher# (compile-pattern '~pattern)]
+       (fn [data#]
+         (let [result# (matcher# (vmr data#))]
+           (if (failure? result#)
+             result#
+             (let [~'$ (:val result#)
+                   ~'vars (:vars result#)
+                   ~@bindings]
+               ~body)))))))
+
+^:rct/test
+(comment
+  ;;-------------------------------------------------------------------
+  ;; compile-pattern - two-phase compilation
+  ;;-------------------------------------------------------------------
+  ;; basic map pattern with variable binding
+  ((compile-pattern '{:name ?n}) (vmr {:name "Alice"})) ;=>>
+  {:val {:name "Alice"} :vars {'n "Alice"}}
+  ;; wildcard ?_ doesn't bind
+  ((compile-pattern '{:name ?n :age ?_}) (vmr {:name "Bob" :age 30})) ;=>>
+  {:val {:name "Bob" :age 30} :vars {'n "Bob"}}
+  ;; vector pattern with variable
+  ((compile-pattern '[?first ?rest*]) (vmr [1 2 3])) ;=>>
+  {:val [1 2 3] :vars {'first 1 'rest [2 3]}}
+  ;; nested patterns
+  ((compile-pattern '{:user {:name ?n}}) (vmr {:user {:name "Eve"}})) ;=>>
+  {:vars {'n "Eve"}}
+
+  ;;-------------------------------------------------------------------
+  ;; match-fn macro - pattern matching function
+  ;;-------------------------------------------------------------------
+  ;; basic binding extraction
+  ((match-fn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2}) ;=> 3
+  ;; sequence pattern
+  ((match-fn [?first ?rest*] {:first ?first :rest ?rest}) [1 2 3]) ;=>>
+  {:first 1 :rest [2 3]}
+  ;; access to matched value via $
+  ((match-fn {:a ?x} (assoc $ :sum ?x)) {:a 1 :b 2}) ;=>>
+  {:a 1 :b 2 :sum 1}
+  ;; failure returns MatchFailure
+  ((match-fn {:a ?a} ?a) "not a map") ;=>> failure?
+  ;; wildcard with body
+  ((match-fn {:name ?_} :ok) {:name "ignored"})) ;=> :ok)
 

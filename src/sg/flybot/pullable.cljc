@@ -7,74 +7,60 @@
 ;;=============================================================================
 
 (def failure?
-  "Returns true if x is a MatchFailure.
+  "Predicate for MatchFailure records.
 
-   MatchFailure is returned when pattern matching fails. It contains:
-   - :reason       - Human-readable failure message
-   - :matcher-type - Keyword identifying the matcher (e.g., :pred, :map)
-   - :path         - Vector of keys/indices showing location in data
-   - :value        - The value that failed to match
-   - :depth        - Integer tracking match progress (for nested failures)
+   MatchFailure fields:
+   - :reason  - Human-readable message
+   - :path    - Vector of keys/indices to failure location
+   - :value   - The value that failed
 
    Example:
-     (let [f (match-fn {:a ?x} ?x)
-           result (f \"not a map\")]
+     (let [result ((match-fn {:a ?x} ?x) \"not a map\")]
        (when (failure? result)
-         (println \"Failed at path:\" (:path result))
-         (println \"Reason:\" (:reason result))))"
+         (:reason result)))  ;=> \"expected map, got ...\""
   core/failure?)
 
+(def register-var-option!
+  "Register a custom option handler for extended matching variables.
+
+   Extended vars have syntax: (?x :opt1 val1 :opt2 val2 ...)
+   Each option handler receives the option value and returns a pattern to chain.
+
+   Built-in options:
+   - :when <pred>    - Add predicate check
+   - :default <val>  - Substitute default for nil
+
+   Example - register a :transform option:
+     (register-var-option! :transform
+       (fn [f] (list '? :sub f)))
+
+     ;; Usage: (?x :transform str/upper-case)
+     ((match-fn {:name (?n :transform clojure.string/upper-case)} ?n)
+      {:name \"alice\"})  ;=> \"ALICE\""
+  core/register-var-option!)
+
 (defmacro match-fn
-  "Create a function that pattern-matches its argument and evaluates body.
+  "Create a pattern-matching function. Returns body result on match, MatchFailure on failure.
 
-   On successful match, returns the result of evaluating body with pattern
-   variables bound. On failed match, returns a MatchFailure record.
+   Pattern syntax:
+     ?x       - Bind to symbol x
+     ?_       - Wildcard (no binding)
+     ?x?      - Optional (0-1)
+     ?x* ?x+  - Zero/one-or-more (lazy)
+     ?x*! ?x+!- Zero/one-or-more (greedy)
+     {}       - Map pattern
+     []       - Sequence pattern
 
-   The special symbol $ is bound to the matched/transformed value.
+   Special binding: $ is bound to the matched/transformed value.
 
-   ## Pattern Syntax
-
-   | Pattern  | Description                              |
-   |----------|------------------------------------------|
-   | ?x       | Bind value to symbol ?x                  |
-   | _        | Wildcard (match anything, no binding)    |
-   | ?x?      | Optional element (0 or 1)                |
-   | ?x+      | One or more elements (lazy)              |
-   | ?x*      | Zero or more elements (lazy)             |
-   | ?x+!     | One or more (greedy)                     |
-   | ?x*!     | Zero or more (greedy)                    |
-
-   ## Examples
-
-     ;; Simple binding
-     ((match-fn ?x (+ ?x 2)) 3)  ;=> 5
-
-     ;; Map destructuring
+   Examples:
      ((match-fn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2})  ;=> 3
+     ((match-fn [?first ?rest*] ?rest) [1 2 3])        ;=> (2 3)
+     ((match-fn {:a ?x} (assoc $ :sum ?x)) {:a 1 :b 2});=> {:a 1 :b 2 :sum 1}
 
-     ;; $ binds to matched value
-     ((match-fn ?x (inc $)) 42)  ;=> 43
-
-     ;; $ with map gets full map
-     ((match-fn {:a ?x} (assoc $ :result ?x)) {:a 1 :b 2})
-     ;=> {:a 1 :b 2 :result 1}
-
-     ;; Sequence patterns
-     ((match-fn [?a ?b ?c] (+ ?a ?b ?c)) [1 2 3])  ;=> 6
-
-     ;; String operations
-     ((match-fn {:name ?n} (str \"Hello, \" ?n \"!\")) {:name \"Alice\"})
-     ;=> \"Hello, Alice!\"
-
-   ## Handling Failures
-
-   Use `failure?` to check for match failures, then access MatchFailure fields:
-
-     (let [f (match-fn {:x ?x} ?x)
-           result (f \"not a map\")]
-       (if (failure? result)
-         {:error (:reason result)
-          :at    (:path result)}
-         result))"
+   Failure handling:
+     (let [result ((match-fn {:x ?x} ?x) \"bad\")]
+       (when (failure? result)
+         (:reason result)))  ; human-readable error"
   [pattern body]
   `(core/match-fn ~pattern ~body))
