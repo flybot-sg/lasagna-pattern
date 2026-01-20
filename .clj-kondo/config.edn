@@ -3,6 +3,8 @@
   {sg.flybot.pullable.util/cond-let hooks.cond-let/cond-let
    sg.flybot.pullable.util/vars-> hooks.vars-arrow/vars->
    sg.flybot.pullable.core/match-fn hooks.match-fn/match-fn
-   sg.flybot.pullable/match-fn hooks.match-fn/match-fn}}
+   sg.flybot.pullable/match-fn hooks.match-fn/match-fn
+   sg.flybot.pullable.core/rule hooks.rule/rule
+   sg.flybot.pullable/rule hooks.rule/rule}}
  :lint-as
  {sg.flybot.pullable.core/defmatcher clojure.core/comment}}

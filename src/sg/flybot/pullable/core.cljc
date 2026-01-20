@@ -932,12 +932,22 @@
      (or (some #(% x) rules) x))
    ptn))
 
+(defn- wrap-map-value
+  "Wrap a pattern value for use in (? :map ...).
+   - Core patterns pass through
+   - Other values get wrapped in (? :val ...)"
+  [v]
+  (if (core-pattern? v)
+    v
+    (list '? :val v)))
+
 (defn map-rewrite
   "Rewrite map literal {} to (? :map ...) core pattern.
+   Wraps non-pattern values in (? :val ...).
    Returns nil if not applicable."
   [x]
   (when (and (map? x) (not (record? x)))
-    (apply list '? :map (mapcat identity x))))
+    (apply list '? :map (mapcat (fn [[k v]] [k (wrap-map-value v)]) x))))
 
 (defn- subseq-type?
   "Check if a matcher type keyword has :subseq? true in its spec"
@@ -975,6 +985,27 @@
    Returns nil if not applicable."
   [x]
   (when (and (vector? x) (not (map-entry? x)))
+    (apply list '? :seq (concat (map wrap-seq-element x) ['(? :term)]))))
+
+(defn- extended-var-form?
+  "Check if x looks like an extended var form (?x :opt val ...).
+   The first element may already be rewritten to (? :var ...) by matching-var-rewrite."
+  [x]
+  (and (seq? x)
+       (let [fst (first x)]
+         (or ;; Original form: (?x :opt ...)
+          (and (symbol? fst) (= \? (first (name fst))))
+             ;; After matching-var-rewrite: ((? :var ...) :opt ...)
+          (and (seq? fst) (= '? (first fst)) (= :var (second fst)))))))
+
+(defn list-rewrite
+  "Rewrite list () to (? :seq ...) core pattern.
+   Same as vector-rewrite but for lists.
+   Returns nil if not applicable, if it's a core pattern, or if it's an extended var form."
+  [x]
+  (when (and (seq? x)
+             (not (core-pattern? x))
+             (not (extended-var-form? x)))
     (apply list '? :seq (concat (map wrap-seq-element x) ['(? :term)]))))
 
 (def ^:private forbidden-var-chars
@@ -1059,24 +1090,31 @@
 
 (defn extended-var-rewrite
   "Rewrite (?var :opt1 val1 :opt2 val2 ...) to pattern.
+   Also handles forms where ?var was already rewritten to (? :var ...).
    Options are chained in order: base -> opt1 -> opt2 -> ...
    Returns nil if not applicable."
   [form]
-  (when (and (seq? form)
-             (symbol? (first form))
-             (= \? (first (name (first form)))))
-    (let [[var-sym & opts] form
-          var-name (subs (name var-sym) 1)]
-      (when-not (re-find forbidden-var-chars var-name)
-        (let [;; Parse options as keyword-value pairs
+  (when (seq? form)
+    (let [fst (first form)
+          ;; Extract var-name and base from first element
+          [var-name base] (cond
+                            ;; Original form: (?x :opt ...)
+                            (and (symbol? fst) (= \? (first (name fst))))
+                            [(subs (name fst) 1) '(? :any)]
+                            ;; After matching-var-rewrite: ((? :var x (? :any)) :opt ...)
+                            (and (seq? fst) (= '? (first fst)) (= :var (second fst)))
+                            [(name (nth fst 2)) (nth fst 3)]
+                            ;; Not an extended var form
+                            :else nil)]
+      (when (and var-name (not (re-find forbidden-var-chars var-name)))
+        (let [opts (rest form)
+              ;; Parse options as keyword-value pairs
               opt-pairs (partition 2 opts)
               ;; Build chain of option patterns
               opt-patterns (for [[k v] opt-pairs
                                  :let [handler (get @var-option-handlers k)]
                                  :when handler]
                              (handler v))
-              ;; Base pattern
-              base '(? :any)
               ;; Chain: base -> opt1 -> opt2 -> ...
               inner (if (seq opt-patterns)
                       (apply list '? :-> base opt-patterns)
@@ -1111,9 +1149,12 @@
   ;;-------------------------------------------------------------------
   ;; map-rewrite - transforms {} to (? :map ...)
   ;;-------------------------------------------------------------------
-  ;; basic map rewrite
+  ;; basic map rewrite - core patterns pass through
   (map-rewrite {:a '(? :any)}) ;=>>
   '(? :map :a (? :any))
+  ;; literal values get wrapped in (? :val ...)
+  (map-rewrite {:a 5}) ;=>>
+  '(? :map :a (? :val 5))
   ;; nested maps
   (rewrite-pattern {:a {:b '(? :any)}} [map-rewrite]) ;=>>
   '(? :map :a (? :map :b (? :any)))
@@ -1288,20 +1329,97 @@
   [extended-var-rewrite
    matching-var-rewrite
    map-rewrite
-   vector-rewrite])
+   vector-rewrite
+   list-rewrite])
 
 (defn compile-pattern
   "Compile a pattern through two phases:
    1. Rewrite: Transform syntax sugar to core (? :type ...) patterns
    2. Compile: Build matcher functions from core patterns
 
-   Example:
+   Options (optional second argument):
+     :rules - additional rewrite rules run BEFORE defaults (separate pass)
+     :only  - use only these rules, ignoring defaults
+
+   Examples:
      (compile-pattern '{:name ?n :age ?_})
-     ; Returns a matcher that extracts :name into variable 'n"
-  [ptn]
-  (-> ptn
-      (rewrite-pattern default-rewrite-rules)
-      core->matcher))
+     ; Returns a matcher that extracts :name into variable 'n
+
+     ;; With custom rules (run first, then defaults)
+     (compile-pattern '(not-nil ?x) {:rules [not-nil-rule]})"
+  ([ptn]
+   (compile-pattern ptn nil))
+  ([ptn {:keys [rules only]}]
+   (let [rewritten (cond
+                     only (rewrite-pattern ptn only)
+                     rules (-> ptn
+                               (rewrite-pattern rules)  ; custom rules first
+                               (rewrite-pattern default-rewrite-rules))  ; then defaults
+                     :else (rewrite-pattern ptn default-rewrite-rules))]
+     (core->matcher rewritten))))
+
+;;-----------------------------------------------------------------------------
+;; Rule: Pattern → Template Transformation
+;;-----------------------------------------------------------------------------
+
+(defn substitute-template
+  "Replace ?vars in template with bound values from vars map.
+   Handles quantifier suffixes (?x*, ?x+, ?x?) by stripping them.
+   Variables not found in vars are left unchanged."
+  [template vars]
+  (walk/postwalk
+   (fn [x]
+     (if (and (symbol? x) (= \? (first (name x))))
+       (let [nm (name x)
+             ;; Strip ? prefix and any quantifier suffix
+             base (if-let [[_ b] (re-matches #"\?([^\s\?\+\*\!]+)[\?\+\*]?\!?" nm)]
+                    b
+                    (subs nm 1))
+             var-sym (symbol base)]
+         (get vars var-sym x))
+       x))
+   template))
+
+(defmacro rule
+  "Create a transformation rule: pattern → template.
+
+   Returns a function that:
+   - On match: returns template with ?vars substituted
+   - On no match: returns nil
+
+   Can be used for:
+   1. Runtime data transformation
+   2. Compile-time pattern rewriting (via :rules option in compile-pattern)
+
+   Examples:
+     ;; Algebraic simplification
+     (def double-to-add (rule (* 2 ?x) (+ ?x ?x)))
+     (double-to-add '(* 2 5))  ;=> (+ 5 5)
+     (double-to-add '(* 3 5))  ;=> nil
+
+     ;; Sequence transformation
+     (def rotate (rule [?first ?rest*] [?rest* ?first]))
+     (rotate '(a b c))  ;=> ((b c) a)  ; note: ?rest* is a list
+
+     ;; Custom pattern syntax (compile-time rewriting)
+     (def not-nil (rule (not-nil ?x) (?x :when some?)))
+     (compile-pattern '{:name (not-nil ?n)} {:rules [not-nil]})"
+  [pattern template]
+  `(let [matcher# (compile-pattern '~pattern)]
+     (fn [data#]
+       (let [result# (matcher# (vmr data#))]
+         (when-not (failure? result#)
+           (substitute-template '~template (:vars result#)))))))
+
+(defn apply-rules
+  "Apply rules recursively throughout a data structure (bottom-up).
+   Each node is transformed by the first matching rule.
+   Returns the fully transformed structure."
+  [rules data]
+  (walk/postwalk
+   (fn [x]
+     (or (some #(% x) rules) x))
+   data))
 
 (defmacro match-fn
   "Create a pattern-matching function.
@@ -1383,5 +1501,69 @@
   ;; failure returns MatchFailure
   ((match-fn {:a ?a} ?a) "not a map") ;=>> failure?
   ;; wildcard with body
-  ((match-fn {:name ?_} :ok) {:name "ignored"})) ;=> :ok)
+  ((match-fn {:name ?_} :ok) {:name "ignored"}) ;=> :ok
+
+  ;;-------------------------------------------------------------------
+  ;; substitute-template - variable substitution in templates
+  ;;-------------------------------------------------------------------
+  ;; replaces ?vars with values from vars map
+  (substitute-template '(+ ?x ?y) {'x 1 'y 2}) ;=>> '(+ 1 2)
+  ;; leaves unbound vars unchanged
+  (substitute-template '(+ ?x ?z) {'x 1}) ;=>> '(+ 1 ?z)
+  ;; works with nested structures
+  (substitute-template '{:a ?x :b [?y ?z]} {'x 1 'y 2 'z 3}) ;=>>
+  {:a 1 :b [2 3]}
+
+  ;;-------------------------------------------------------------------
+  ;; rule macro - pattern → template transformation
+  ;;-------------------------------------------------------------------
+  ;; basic rule: algebraic simplification
+  ((rule (* 2 ?x) (+ ?x ?x)) '(* 2 5)) ;=>> '(+ 5 5)
+  ;; rule returns nil on no match
+  ((rule (* 2 ?x) (+ ?x ?x)) '(* 3 5)) ;=> nil
+  ;; rule with map patterns
+  ((rule {:type :add :a ?a :b ?b} (+ ?a ?b)) {:type :add :a 1 :b 2}) ;=>>
+  '(+ 1 2)
+  ;; rule with sequence patterns
+  ((rule [?first ?rest*] [?rest* ?first]) [1 2 3]) ;=>>
+  #(and (vector? %) (= (first %) [2 3]))
+
+  ;;-------------------------------------------------------------------
+  ;; apply-rules - recursive tree transformation
+  ;;-------------------------------------------------------------------
+  ;; applies rules bottom-up throughout tree
+  (apply-rules [(rule (* 2 ?x) (+ ?x ?x))]
+               '(foo (* 2 3) bar)) ;=>>
+  '(foo (+ 3 3) bar)
+  ;; multiple rules, first match wins
+  (apply-rules [(rule (* 2 ?x) (+ ?x ?x))
+                (rule (+ 0 ?x) ?x)]
+               '(+ 0 (* 2 y))) ;=>>
+  '(+ y y)
+  ;; nested application
+  (apply-rules [(rule (* 2 ?x) (+ ?x ?x))]
+               '(* 2 (* 2 z))) ;=>>
+  '(+ (+ z z) (+ z z))
+
+  ;;-------------------------------------------------------------------
+  ;; compile-pattern with custom rules (function-based rewrite rules)
+  ;;-------------------------------------------------------------------
+  ;; custom rewrite rule as a function - use actual fn, not symbol
+  (let [not-nil-rewrite (fn [x]
+                          (when (and (seq? x) (= 'not-nil (first x)))
+                            (let [var (second x)]
+                              (list var :when some?))))]  ; some? not 'some?
+    ((compile-pattern '(not-nil ?n) {:rules [not-nil-rewrite]}) (vmr "hello"))) ;=>>
+  {:vars {'n "hello"}}
+  ;; custom rule fails when predicate fails
+  (let [not-nil-rewrite (fn [x]
+                          (when (and (seq? x) (= 'not-nil (first x)))
+                            (let [var (second x)]
+                              (list var :when some?))))]
+    ((compile-pattern '(not-nil ?n) {:rules [not-nil-rewrite]}) (vmr nil))) ;=>>
+  failure?
+  ;; :only option uses only specified rules (no defaults)
+  (let [identity-rule (fn [x] (when (= x 'foo) '(? :val 42)))]
+    ((compile-pattern 'foo {:only [identity-rule]}) (vmr 42))) ;=>>
+  {:val 42})
 

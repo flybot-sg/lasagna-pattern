@@ -1,4 +1,4 @@
-(ns hooks.match-fn
+(ns hooks.rule
   (:require [clj-kondo.hooks-api :as api]))
 
 (defn- parse-var-symbols
@@ -47,47 +47,23 @@
       (walk node))
     @vars))
 
-(defn- uses-symbol?
-  "Check if a node tree contains a reference to the given symbol"
-  [node sym]
-  (let [found (atom false)]
-    (letfn [(walk [n]
-              (when-not @found
-                (cond
-                  (api/token-node? n)
-                  (when (= sym (api/sexpr n))
-                    (reset! found true))
-
-                  (api/vector-node? n)
-                  (run! walk (:children n))
-
-                  (api/map-node? n)
-                  (run! walk (:children n))
-
-                  (api/list-node? n)
-                  (run! walk (:children n)))))]
-      (walk node))
-    @found))
-
-(defn match-fn
-  "Hook for match-fn macro. Transforms:
-   (match-fn pattern body)
+(defn rule
+  "Hook for rule macro. Transforms:
+   (rule pattern template)
    into:
-   (fn [data] (let [$ data ?x data ...] body))
-   Only binds $ if it's actually used in body."
+   (fn [data] (let [?x data ?y data ...] template))
+
+   This makes clj-kondo understand that ?x etc are bound."
   [{:keys [node]}]
-  (let [[_ pattern body] (:children node)
+  (let [[_ pattern template] (:children node)
         var-syms (extract-vars pattern)
         data-sym (api/token-node (gensym "data"))
-        uses-$ (uses-symbol? body '$)
-        ;; Build let bindings: [?a data ?b data ...] and optionally [$ data ...]
-        bindings (cond-> []
-                   uses-$ (into [(api/token-node '$) data-sym])
-                   true (into (mapcat (fn [v] [(api/token-node v) data-sym]) var-syms)))
+        ;; Build let bindings: [?a data ?b data ...]
+        bindings (into [] (mapcat (fn [v] [(api/token-node v) data-sym]) var-syms))
         let-node (api/list-node
                   [(api/token-node 'let)
                    (api/vector-node bindings)
-                   body])
+                   template])
         fn-node (api/list-node
                  [(api/token-node 'fn)
                   (api/vector-node [data-sym])

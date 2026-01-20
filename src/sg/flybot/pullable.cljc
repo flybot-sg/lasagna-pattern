@@ -64,3 +64,63 @@
          (:reason result)))  ; human-readable error"
   [pattern body]
   `(core/match-fn ~pattern ~body))
+
+;;=============================================================================
+;; Rule-based Transformation
+;;=============================================================================
+
+(defmacro rule
+  "Create a transformation rule: pattern → template.
+
+   Returns a function that:
+   - On match: returns template with ?vars substituted
+   - On no match: returns nil
+
+   Can be used for:
+   1. Runtime data transformation
+   2. Compile-time pattern rewriting (via :rules option in compile-pattern)
+
+   Examples:
+     ;; Algebraic simplification
+     (def double-to-add (rule (* 2 ?x) (+ ?x ?x)))
+     (double-to-add '(* 2 5))  ;=> (+ 5 5)
+     (double-to-add '(* 3 5))  ;=> nil
+
+     ;; Custom pattern syntax
+     (def not-nil (rule (not-nil ?x) (?x :when some?)))
+     (compile-pattern '{:name (not-nil ?n)} {:rules [not-nil]})"
+  [pattern template]
+  `(core/rule ~pattern ~template))
+
+(def compile-pattern
+  "Compile a pattern to a matcher function.
+
+   Two-phase compilation:
+   1. Rewrite: Transform syntax sugar to core patterns
+   2. Compile: Build matcher functions
+
+   Options (optional second argument):
+     :rules - additional rewrite rules prepended to defaults
+     :only  - use only these rules, ignoring defaults
+
+   Examples:
+     (compile-pattern '{:name ?n})
+     ; Returns a matcher
+
+     ;; With custom rules
+     (def not-nil (rule (not-nil ?x) (?x :when some?)))
+     (compile-pattern '{:name (not-nil ?n)} {:rules [not-nil]})"
+  core/compile-pattern)
+
+(def apply-rules
+  "Apply rules recursively throughout a data structure (bottom-up).
+   Each node is transformed by the first matching rule.
+
+   Example:
+     (def simplify-mul-2 (rule (* 2 ?x) (+ ?x ?x)))
+     (def simplify-add-0 (rule (+ 0 ?x) ?x))
+
+     (apply-rules [simplify-mul-2 simplify-add-0]
+                  '(+ 0 (* 2 y)))
+     ;=> (+ y y)"
+  core/apply-rules)
