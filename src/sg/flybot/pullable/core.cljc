@@ -976,6 +976,60 @@
   (when (and (vector? x) (not (map-entry? x)))
     (apply list '? :seq (map wrap-seq-element x))))
 
+(def ^:private forbidden-var-chars
+  "Characters forbidden in matching variable names"
+  #"[\?\+\*\!]")
+
+(defn parse-matching-var
+  "Parse a quantified variable symbol like ?x?, ?x+, ?x*, ?x+!, ?x*!.
+   Variables must start with ? prefix. Var names cannot contain ?, +, *, !.
+   Returns map with :sym, :quantifier, :greedy? or nil if not a matching-var."
+  [v]
+  (when (symbol? v)
+    ;; Regex: ? followed by var-name (no forbidden chars), quantifier, optional greedy
+    (when-let [[_ base suffix greedy] (re-matches #"\?([^\s\?\+\*\!]+)([\?\+\*])(\!?)" (name v))]
+      {:sym (when (not= "_" base) (symbol (str "?" base)))
+       :quantifier (case suffix "?" :optional "+" :one-or-more "*" :zero-or-more)
+       :greedy? (= "!" greedy)})))
+
+(defn matching-var-rewrite
+  "Rewrite matching variables:
+   - ?x -> (? :var x (? :any))
+   - ?_ -> (? :any)
+   - ?x? -> (? :optional (? :var x (? :any)))
+   - ?x+ -> (? :repeat (? :any) :min 1 :max nil :as x)
+   - ?x* -> (? :repeat (? :any) :min 0 :max nil :as x)
+   - ?x+!, ?x*! -> same with :greedy
+   Returns nil if not applicable."
+  [x]
+  (when (symbol? x)
+    (let [nm (name x)]
+      (when (= \? (first nm))
+        (if-let [{:keys [sym quantifier greedy?]} (parse-matching-var x)]
+          ;; Quantified var: ?x?, ?x+, ?x*, etc.
+          (let [var-sym (when sym (symbol (subs (name sym) 1)))
+                inner '(? :any)]
+            (case quantifier
+              :optional
+              (if var-sym
+                (list '? :optional (list '? :var var-sym inner))
+                (list '? :optional inner))
+
+              (:one-or-more :zero-or-more)
+              (let [min-len (if (= quantifier :one-or-more) 1 0)
+                    base (list '? :repeat inner :min min-len :max nil)]
+                (cond-> base
+                  var-sym (concat [:as var-sym])
+                  greedy? (concat [:greedy])
+                  true seq))))
+
+          ;; Simple var: ?x or ?_ (must not contain forbidden chars)
+          (let [var-name (subs nm 1)]
+            (when-not (re-find forbidden-var-chars var-name)
+              (if (= "_" var-name)
+                '(? :any)
+                (list '? :var (symbol var-name) '(? :any))))))))))
+
 ;;-----------------------------------------------------------------------------
 ;; Pattern Compilation (Phase 2)
 ;;-----------------------------------------------------------------------------
@@ -1031,6 +1085,39 @@
   (vector-rewrite (first {:a 1})) ;=> nil
 
   ;;-------------------------------------------------------------------
+  ;; matching-var-rewrite - transforms ?x, ?x?, ?x+, ?x* etc.
+  ;;-------------------------------------------------------------------
+  ;; simple ?x becomes variable binding
+  (matching-var-rewrite '?x) ;=>>
+  '(? :var x (? :any))
+  ;; simple ?_ becomes wildcard
+  (matching-var-rewrite '?_) ;=>>
+  '(? :any)
+  ;; ?x? optional with binding
+  (matching-var-rewrite '?x?) ;=>>
+  '(? :optional (? :var x (? :any)))
+  ;; ?_? optional wildcard
+  (matching-var-rewrite '?_?) ;=>>
+  '(? :optional (? :any))
+  ;; ?x+ one-or-more with binding
+  (matching-var-rewrite '?x+) ;=>>
+  '(? :repeat (? :any) :min 1 :max nil :as x)
+  ;; ?x* zero-or-more with binding
+  (matching-var-rewrite '?x*) ;=>>
+  '(? :repeat (? :any) :min 0 :max nil :as x)
+  ;; ?_* zero-or-more wildcard (no binding)
+  (matching-var-rewrite '?_*) ;=>>
+  '(? :repeat (? :any) :min 0 :max nil)
+  ;; ?x+! greedy one-or-more
+  (matching-var-rewrite '?x+!) ;=>>
+  '(? :repeat (? :any) :min 1 :max nil :as x :greedy)
+  ;; ?x*! greedy zero-or-more
+  (matching-var-rewrite '?x*!) ;=>>
+  '(? :repeat (? :any) :min 0 :max nil :as x :greedy)
+  ;; returns nil for non-? symbols
+  (matching-var-rewrite 'x) ;=> nil
+
+  ;;-------------------------------------------------------------------
   ;; core->matcher - compiles core patterns to matchers
   ;;-------------------------------------------------------------------
   ;; compiles :var pattern
@@ -1069,36 +1156,18 @@
        (rewrite-pattern [map-rewrite vector-rewrite])
        core->matcher)
    (vmr {:items [1]})) ;=>>
-  {:val {:items [1]}})
-
-(defn parse-matching-var
-  "Parse a quantified variable symbol like ?x?, ?x+, ?x*, ?x+!, ?x*!.
-   Variables must start with ? prefix.
-   Returns map with :sym, :quantifier, :greedy? or nil if not a matching-var."
-  [v]
-  (when (symbol? v)
-    (when-let [[_ base suffix greedy] (re-matches #"\?(\S+)([\?\+\*])(\!?)" (name v))]
-      {:sym (when (not= "_" base) (symbol (str "?" base)))
-       :quantifier (case suffix "?" :optional "+" :one-or-more "*" :zero-or-more)
-       :greedy? (= "!" greedy)})))
-
-^:rct/test
-(comment
-  ;; parse-matching-var parses optional ?x?
-  (parse-matching-var '?x?) ;=>> {:sym '?x :quantifier :optional :greedy? false}
-  ;; parse-matching-var parses one-or-more ?x+ (lazy)
-  (parse-matching-var '?x+) ;=>> {:sym '?x :quantifier :one-or-more :greedy? false}
-  ;; parse-matching-var parses zero-or-more ?x* (lazy)
-  (parse-matching-var '?x*) ;=>> {:sym '?x :quantifier :zero-or-more :greedy? false}
-  ;; parse-matching-var parses greedy one-or-more ?x+!
-  (parse-matching-var '?x+!) ;=>> {:sym '?x :quantifier :one-or-more :greedy? true}
-  ;; parse-matching-var parses greedy zero-or-more ?x*!
-  (parse-matching-var '?x*!) ;=>> {:sym '?x :quantifier :zero-or-more :greedy? true}
-  ;; parse-matching-var wildcard ?_* returns nil symbol
-  (parse-matching-var '?_*) ;=>> {:sym nil :quantifier :zero-or-more :greedy? false}
-  ;; parse-matching-var returns nil for plain symbols without ? prefix
-  (parse-matching-var 'x?) ;=> nil
-  ;; parse-matching-var returns nil for ?x without quantifier
-  (parse-matching-var '?x)) ;=> nil
+  {:val {:items [1]}}
+  ;; ?x variable binding
+  ((-> {:name '?n}
+       (rewrite-pattern [map-rewrite matching-var-rewrite])
+       core->matcher)
+   (vmr {:name "Alice"})) ;=>>
+  {:val {:name "Alice"} :vars {'n "Alice"}}
+  ;; ?_ wildcard (no binding)
+  ((-> {:name '?_}
+       (rewrite-pattern [map-rewrite matching-var-rewrite])
+       core->matcher)
+   (vmr {:name "Alice"})) ;=>>
+  {:val {:name "Alice"} :vars {}})
 
 
