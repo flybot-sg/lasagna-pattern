@@ -94,7 +94,7 @@ Schemas validate pattern structure at compile time via `:schema` option in `comp
 
 ```clojure
 ;; Type keywords (structural validation)
-:map :seq :string :number :keyword :symbol :any
+:map :seq :string :number :keyword :symbol :boolean :any
 
 ;; Literal/Enum/Union/Optional - type inferred
 [:= :active]              ; literal keyword

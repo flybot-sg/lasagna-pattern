@@ -1235,7 +1235,7 @@
 ;; Schemas validate pattern structure at compile time. Schema vocabulary:
 ;;
 ;; Type keywords (structural):
-;;   :map :seq :string :number :keyword :symbol :any
+;;   :map :seq :string :number :keyword :symbol :boolean :any
 ;;
 ;; Literal/Enum/Union/Optional:
 ;;   [:= value]     - literal, type inferred from value
@@ -1320,7 +1320,7 @@
       :map (#{:map :var :any} pattern-type)
       :seq (#{:seq :var :any} pattern-type)
       ;; primitives: only var/val/pred/any/regex allowed
-      (:number :string :keyword :symbol)
+      (:number :string :keyword :symbol :boolean)
       (#{:var :val :pred :any :regex} pattern-type)
       ;; unknown schema type - allow
       true)))
@@ -1816,6 +1816,7 @@
     (keyword? v) :keyword
     (symbol? v) :symbol
     (number? v) :number
+    (boolean? v) :boolean
     :else :any))
 
 ;; Type keyword: :string, :number, :map, :seq, etc.
