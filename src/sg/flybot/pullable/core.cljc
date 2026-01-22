@@ -955,11 +955,16 @@
   (some-> @matcher-specs* (get t) :subseq?))
 
 (defn- subseq-pattern?
-  "Check if x is a subseq core pattern like (? :one ...), (? :repeat ...), etc."
+  "Check if x is a subseq core pattern like (? :one ...), (? :repeat ...), etc.
+   Also recognizes chains (? :-> ...) where the first element is a subseq pattern."
   [x]
   (and (seq? x)
        (= '? (first x))
-       (subseq-type? (second x))))
+       (let [t (second x)]
+         (or (subseq-type? t)
+             ;; Chain starting with a subseq pattern is also a subseq pattern
+             (and (= :-> t)
+                  (subseq-pattern? (nth x 2 nil)))))))
 
 (defn- wrap-seq-element
   "Wrap a pattern element for use in (? :seq ...).
@@ -989,14 +994,18 @@
 
 (defn- extended-var-form?
   "Check if x looks like an extended var form (?x :opt val ...).
-   The first element may already be rewritten to (? :var ...) by matching-var-rewrite."
+   The first element may already be rewritten by matching-var-rewrite."
   [x]
   (and (seq? x)
        (let [fst (first x)]
          (or ;; Original form: (?x :opt ...)
           (and (symbol? fst) (= \? (first (name fst))))
              ;; After matching-var-rewrite: ((? :var ...) :opt ...)
-          (and (seq? fst) (= '? (first fst)) (= :var (second fst)))))))
+          (and (seq? fst) (= '? (first fst)) (= :var (second fst)))
+             ;; Rewritten wildcard: ((? :any) :skip ...)
+          (= fst '(? :any))
+             ;; Rewritten quantified var: ((? :repeat ...) :take ...)
+          (and (seq? fst) (= '? (first fst)) (= :repeat (second fst)))))))
 
 (defn list-rewrite
   "Rewrite list () to (? :seq ...) core pattern.
@@ -1078,50 +1087,146 @@
   [key handler]
   (swap! var-option-handlers assoc key handler))
 
-;; Built-in option: :when - adds a predicate check
+;; NOTE: When building patterns with function values (e.g., predicates),
+;; use (list '?x :when pred) NOT '(?x :when pred). The quoted form turns
+;; `pred` into a symbol instead of evaluating it to the actual function.
+;; Same applies to all pattern construction: (list '? :pred even?) not '(? :pred even?)
+
+;; Built-in chain option: :when - adds a predicate check
 (register-var-option! :when
                       (fn [pred]
                         (list '? :pred pred)))
 
-;; Built-in option: :default - provides default for nil values
+;; Built-in chain option: :default - provides default for nil values
 (register-var-option! :default
                       (fn [default-val]
                         (list '? :sub (fn [x] (if (nil? x) default-val x)))))
 
+;;-----------------------------------------------------------------------------
+;; Structural Option Registry
+;;-----------------------------------------------------------------------------
+;; Structural options modify the base pattern itself (vs chain options which
+;; post-process the result). Handler signature:
+;;   (fn [value context] -> pattern)
+;; Context map: {:inner pattern, :var-sym symbol, :min-len int, :greedy? bool}
+
+(defonce structural-option-handlers* (atom {}))
+
+(defn register-structural-option!
+  "Register a structural option that modifies the base pattern.
+   Handler receives [value context] and returns the new pattern."
+  [k handler]
+  (swap! structural-option-handlers* assoc k handler))
+
+;; :skip - consume exactly N elements (for wildcards)
+(register-structural-option! :skip
+                             (fn [n {:keys [inner]}]
+                               (list '? :repeat inner :min n :max n)))
+
+;; :take - limit collection to N elements, implies greedy
+;; Returns pattern with :wrap-var? false since :as handles binding
+(register-structural-option! :take
+                             (fn [n {:keys [inner var-sym min-len]}]
+                               {:inner (cond-> (list '? :repeat inner :min (or min-len 0) :max n)
+                                         var-sym (concat [:as var-sym])
+                                         true (concat [:greedy])
+                                         true seq)
+                                :wrap-var? false}))
+
+(defn- apply-structural-options
+  "Apply structural options that modify the base pattern.
+   Handler can return a pattern or a map with :inner and optional :wrap-var?"
+  [ctx opt-pairs]
+  (reduce (fn [ctx [k v]]
+            (if-let [handler (get @structural-option-handlers* k)]
+              (let [result (handler v ctx)]
+                (if (map? result)
+                  (merge ctx result)
+                  (assoc ctx :inner result)))
+              ctx))
+          ctx
+          opt-pairs))
+
+(defn- apply-chain-options
+  "Apply chain options (like :when) that post-process the result."
+  [base opt-pairs]
+  (let [opt-patterns (for [[k v] opt-pairs
+                           :let [handler (get @var-option-handlers k)]
+                           :when handler]
+                       (handler v))]
+    (if (seq opt-patterns)
+      (apply list '? :-> base opt-patterns)
+      base)))
+
+(defn- structural-option? [k]
+  (contains? @structural-option-handlers* k))
+
+(defn- chain-option? [k]
+  (contains? @var-option-handlers k))
+
+(defn- parse-var-context
+  "Parse a var symbol or already-rewritten pattern into context map.
+   Returns {:var-sym symbol, :inner pattern, :min-len int, :greedy? bool} or nil."
+  [fst]
+  (cond
+    ;; Quantified var: ?x*, ?x+, ?x?, ?x*!, ?x+!
+    (and (symbol? fst)
+         (= \? (first (name fst)))
+         (parse-matching-var fst))
+    (let [{:keys [sym quantifier greedy?]} (parse-matching-var fst)
+          var-sym (when sym (symbol (subs (name sym) 1)))]
+      (case quantifier
+        :zero-or-more {:var-sym var-sym :inner '(? :any) :min-len 0 :greedy? greedy?}
+        :one-or-more  {:var-sym var-sym :inner '(? :any) :min-len 1 :greedy? greedy?}
+        :optional     {:var-sym var-sym :inner '(? :any) :min-len 0 :max-len 1}
+        nil))
+
+    ;; Simple var: ?x, ?_
+    (and (symbol? fst)
+         (= \? (first (name fst)))
+         (not (re-find forbidden-var-chars (subs (name fst) 1))))
+    (let [var-name (subs (name fst) 1)]
+      {:var-sym (when (not= "_" var-name) (symbol var-name))
+       :inner '(? :any)})
+
+    ;; Already-rewritten: (? :any), (? :var ...), (? :repeat ...)
+    (and (seq? fst) (= '? (first fst)))
+    (case (second fst)
+      :any    {:inner '(? :any)}
+      :var    (let [args (drop 2 fst)]
+                {:var-sym (first args) :inner (second args)})
+      :repeat (let [args (drop 2 fst)
+                    kw-args (apply hash-map (rest args))]
+                {:var-sym (get kw-args :as)
+                 :inner (first args)
+                 :min-len (get kw-args :min 0)
+                 :max-len (get kw-args :max)
+                 :greedy? (contains? kw-args :greedy)})
+      nil)
+
+    :else nil))
+
 (defn extended-var-rewrite
-  "Rewrite (?var :opt1 val1 :opt2 val2 ...) to pattern.
-   Also handles forms where ?var was already rewritten to (? :var ...).
-   Options are chained in order: base -> opt1 -> opt2 -> ...
+  "Rewrite extended var forms (?var :opt val ...) to patterns.
+   Options are processed in two phases:
+   1. Structural options (:take, :skip) - modify the base pattern
+   2. Chain options (:when, :default) - post-process the result
    Returns nil if not applicable."
   [form]
   (when (seq? form)
-    (let [fst (first form)
-          ;; Extract var-name and base from first element
-          [var-name base] (cond
-                            ;; Original form: (?x :opt ...)
-                            (and (symbol? fst) (= \? (first (name fst))))
-                            [(subs (name fst) 1) '(? :any)]
-                            ;; After matching-var-rewrite: ((? :var x (? :any)) :opt ...)
-                            (and (seq? fst) (= '? (first fst)) (= :var (second fst)))
-                            [(name (nth fst 2)) (nth fst 3)]
-                            ;; Not an extended var form
-                            :else nil)]
-      (when (and var-name (not (re-find forbidden-var-chars var-name)))
-        (let [opts (rest form)
-              ;; Parse options as keyword-value pairs
-              opt-pairs (partition 2 opts)
-              ;; Build chain of option patterns
-              opt-patterns (for [[k v] opt-pairs
-                                 :let [handler (get @var-option-handlers k)]
-                                 :when handler]
-                             (handler v))
-              ;; Chain: base -> opt1 -> opt2 -> ...
-              inner (if (seq opt-patterns)
-                      (apply list '? :-> base opt-patterns)
-                      base)]
-          (if (= "_" var-name)
-            inner
-            (list '? :var (symbol var-name) inner)))))))
+    (when-let [ctx (parse-var-context (first form))]
+      (let [opt-pairs (partition 2 (rest form))
+            struct-opts (filter (fn [[k _]] (structural-option? k)) opt-pairs)
+            chain-opts (filter (fn [[k _]] (chain-option? k)) opt-pairs)
+            ;; Apply structural options to build the inner pattern
+            {:keys [var-sym inner wrap-var?] :or {wrap-var? true}}
+            (apply-structural-options ctx struct-opts)
+            ;; Apply chain options
+            inner (apply-chain-options inner chain-opts)]
+        ;; Only wrap with (? :var ...) for simple vars, not repeat patterns
+        (if (and var-sym wrap-var?)
+          (list '? :var var-sym inner)
+          inner)))))
 
 ;;-----------------------------------------------------------------------------
 ;; Pattern Compilation (Phase 2)
@@ -1222,9 +1327,9 @@
   ;; (?_ ) wildcard with no options
   (extended-var-rewrite '(?_)) ;=>>
   '(? :any)
-  ;; (?a :when pred) - with predicate (note: pred is symbol in quoted form)
-  (extended-var-rewrite '(?a :when odd?)) ;=>>
-  '(? :var a (? :-> (? :any) (? :pred odd?)))
+  ;; (?a :when pred) - with predicate
+  (extended-var-rewrite (list '?a :when odd?)) ;=>>
+  #(and (seq? %) (= '? (first %)) (= :var (second %)))
   ;; (?a :default val) - with default
   (extended-var-rewrite (list '?a :default 42)) ;=>>
   #(and (seq? %) (= '? (first %)) (= :var (second %)))
@@ -1235,6 +1340,31 @@
   (extended-var-rewrite '(foo bar)) ;=> nil
   ;; returns nil for invalid var names
   (extended-var-rewrite '(?foo*bar :when odd?)) ;=> nil
+
+  ;;-------------------------------------------------------------------
+  ;; extended-var-rewrite - pagination: :take and :skip
+  ;;-------------------------------------------------------------------
+  ;; (?x* :take N) - zero-or-more with limit, greedy
+  (extended-var-rewrite '(?items* :take 3)) ;=>>
+  '(? :repeat (? :any) :min 0 :max 3 :as items :greedy)
+  ;; (?x+ :take N) - one-or-more with limit, greedy
+  (extended-var-rewrite '(?items+ :take 5)) ;=>>
+  '(? :repeat (? :any) :min 1 :max 5 :as items :greedy)
+  ;; (?x*! :take N) - already greedy, still greedy with limit
+  (extended-var-rewrite '(?items*! :take 3)) ;=>>
+  '(? :repeat (? :any) :min 0 :max 3 :as items :greedy)
+  ;; (?_* :take N) - wildcard zero-or-more with limit (no binding)
+  (extended-var-rewrite '(?_* :take 3)) ;=>>
+  '(? :repeat (? :any) :min 0 :max 3 :greedy)
+  ;; (?x* :take N :when pred) - take with filter
+  (extended-var-rewrite (list '?items* :take 3 :when seq)) ;=>>
+  #(and (seq? %) (= '? (first %)) (= :-> (second %)))
+  ;; (?_ :skip N) - skip exactly N elements
+  (extended-var-rewrite '(?_ :skip 2)) ;=>>
+  '(? :repeat (? :any) :min 2 :max 2)
+  ;; (?_ :skip N) with additional option (unusual but possible)
+  (extended-var-rewrite (list '?_ :skip 2 :when identity)) ;=>>
+  #(and (seq? %) (= '? (first %)) (= :-> (second %)))
 
   ;;-------------------------------------------------------------------
   ;; core->matcher - compiles core patterns to matchers
@@ -1434,12 +1564,25 @@
      {}       - Map pattern
      []       - Sequence pattern
 
+   Pagination (sequence patterns):
+     (?x* :take N)  - Take up to N elements (greedy)
+     (?_ :skip N)   - Skip exactly N elements
+     NOTE: Add ?_* at end to consume remaining elements
+
+   Extended options:
+     (?x :when pred)    - Constrained match
+     (?x :default val)  - Default on failure
+     NOTE: :when on quantified vars (?x* :when pred) filters individual
+           elements during collection, not the final collected result.
+           To validate the collection, use body: (when (pred ?x) ?x)
+
    Special binding: $ is bound to the matched/transformed value.
 
    Examples:
      ((match-fn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2})  ;=> 3
      ((match-fn [?first ?rest*] ?rest) [1 2 3])        ;=> (2 3)
-     ((match-fn {:a ?x} (assoc $ :sum ?x)) {:a 1 :b 2});=> {:a 1 :b 2 :sum 1}"
+     ((match-fn {:a ?x} (assoc $ :sum ?x)) {:a 1 :b 2});=> {:a 1 :b 2 :sum 1}
+     ((match-fn [(?_ :skip 2) (?page* :take 3) ?_*] ?page) [1 2 3 4 5 6 7]) ;=> [3 4 5]"
   [pattern body]
   (let [;; Collect all variable bindings from pattern
         vars (atom #{})
@@ -1565,5 +1708,32 @@
   ;; :only option uses only specified rules (no defaults)
   (let [identity-rule (fn [x] (when (= x 'foo) '(? :val 42)))]
     ((compile-pattern 'foo {:only [identity-rule]}) (vmr 42))) ;=>>
-  {:val 42})
+  {:val 42}
+
+  ;;-------------------------------------------------------------------
+  ;; Pagination: :take and :skip
+  ;;-------------------------------------------------------------------
+  ;; Note: Vector patterns add (? :term) at end, so use ?_* to consume rest
+  ;; (?items* :take 3) - take first 3 elements, ignore rest
+  ((compile-pattern '[(?items* :take 3) ?_*]) (vmr [1 2 3 4 5])) ;=>>
+  {:vars {'items [1 2 3]}}
+  ;; (?items* :take 3) - works when fewer elements available
+  ((compile-pattern '[(?items* :take 3)]) (vmr [1 2])) ;=>>
+  {:vars {'items [1 2]}}
+  ;; (?items+ :take 3) - one-or-more with limit
+  ((compile-pattern '[(?items+ :take 3) ?_*]) (vmr [1 2 3 4 5])) ;=>>
+  {:vars {'items [1 2 3]}}
+  ;; (?items+ :take 3) - fails on empty (needs at least 1)
+  ((compile-pattern '[(?items+ :take 3)]) (vmr [])) ;=>> failure?
+  ;; (?_ :skip 2) - skip first 2 elements
+  ((compile-pattern '[(?_ :skip 2) ?rest*]) (vmr [1 2 3 4 5])) ;=>>
+  {:vars {'rest [3 4 5]}}
+  ;; Pagination: skip 2, take 3, ignore rest
+  ((compile-pattern '[(?_ :skip 2) (?page* :take 3) ?_*]) (vmr [1 2 3 4 5 6 7 8 9 10])) ;=>>
+  {:vars {'page [3 4 5]}}
+  ;; Pagination: skip 2, take 3, capture rest
+  ((compile-pattern '[(?_ :skip 2) (?page* :take 3) ?rest*]) (vmr [1 2 3 4 5 6 7 8 9 10])) ;=>>
+  {:vars {'page [3 4 5] 'rest [6 7 8 9 10]}})
+  ;; Note: :when on quantified vars applies to individual elements, not the collection
+  ;; To filter the collected result, use match-fn with post-processing)
 
