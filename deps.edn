@@ -4,7 +4,9 @@
  {:dev
   {:extra-paths ["notebook"]
    :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
-                io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}}}
+                io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
+                ;; Optional: SCI for sandboxed eval (also enables CLJS support)
+                org.babashka/sci {:mvn/version "0.10.49"}}}
   :test
   {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
    :exec-args {:dirs #{"src"}}}}}

@@ -708,6 +708,168 @@
 ;; SECTION 3: Pattern DSL and Compilation
 ;;=============================================================================
 
+;;-----------------------------------------------------------------------------
+;; Customizable Symbol/Form Resolution
+;;-----------------------------------------------------------------------------
+;; Supports automatic SCI detection for sandboxed evaluation.
+;; When SCI (org.babashka/sci) is on the classpath, it's used by default.
+;; Otherwise falls back to clojure.core/resolve and eval (CLJ only).
+;;
+;; Users can override via :resolve and :eval options in compile-pattern,
+;; or by binding *resolve-sym* and *eval-form* directly.
+
+;; Check at load time if SCI is available (no runtime penalty)
+;; CLJ: try to require sci.core
+;; CLJS: SCI must be configured explicitly via :resolve/:eval options
+#?(:clj
+   (def ^:private sci-available?
+     (try
+       (require 'sci.core)
+       true
+       (catch Exception _ false)))
+   :cljs
+   (def ^:private sci-available? false))
+
+;; Cached SCI context (created once at load time if SCI available)
+#?(:clj
+   (def ^:private sci-ctx
+     (when sci-available?
+       ((requiring-resolve 'sci.core/init) {})))
+   :cljs
+   (def ^:private sci-ctx nil))
+
+#?(:clj
+   (defn- sci-eval
+     "Evaluate form using SCI. Only called when sci-available? is true."
+     [form]
+     ((requiring-resolve 'sci.core/eval-form) sci-ctx form)))
+
+(def ^:dynamic *resolve-sym*
+  "Custom symbol resolver: (fn [sym] -> var-or-value).
+   When nil, uses SCI if available, else clojure.core/resolve (CLJ only).
+   Bind via :resolve option in compile-pattern."
+  nil)
+
+(def ^:dynamic *eval-form*
+  "Custom form evaluator: (fn [form] -> value).
+   When nil, uses SCI if available, else clojure.core/eval (CLJ only).
+   Bind via :eval option in compile-pattern."
+  nil)
+
+(defn- fn-form?
+  "Check if x is a (fn ...) or (fn* ...) form."
+  [x]
+  (and (seq? x) (contains? #{'fn 'fn*} (first x))))
+
+(defn- default-resolve
+  "Default symbol resolver. Uses SCI if available, else clojure.core/resolve."
+  [sym]
+  #?(:clj (if sci-available?
+            (sci-eval sym)
+            (resolve sym))
+     :cljs (throw (ex-info "No symbol resolver. Add SCI to dependencies or provide :resolve option."
+                           {:symbol sym}))))
+
+(defn- default-eval
+  "Default form evaluator. Uses SCI if available, else clojure.core/eval."
+  [form]
+  #?(:clj (if sci-available?
+            (sci-eval form)
+            (eval form))
+     :cljs (throw (ex-info "No form evaluator. Add SCI to dependencies or provide :eval option."
+                           {:form form}))))
+
+(defn resolve-fn
+  "Resolve a value to a function. Handles:
+   - Functions: returned as-is
+   - Symbols: resolved via *resolve-sym*, SCI (if available), or clojure.core/resolve
+   - (fn ...) or (fn* ...) forms: evaluated via *eval-form*, SCI, or clojure.core/eval
+
+   SCI is auto-detected: add org.babashka/sci to your deps for sandboxed eval.
+   Override via :resolve and :eval options in compile-pattern."
+  [x]
+  (cond
+    (fn? x) x
+
+    (symbol? x)
+    (let [resolve-f (or *resolve-sym* default-resolve)
+          v (resolve-f x)]
+      (if v
+        (let [f (if (var? v) @v v)]
+          (if (fn? f)
+            f
+            (throw (ex-info "Symbol does not resolve to a function"
+                            {:symbol x :resolved f}))))
+        (throw (ex-info "Cannot resolve symbol" {:symbol x}))))
+
+    (fn-form? x)
+    (let [eval-f (or *eval-form* default-eval)
+          f (eval-f x)]
+      (if (fn? f)
+        f
+        (throw (ex-info "Form did not evaluate to a function"
+                        {:form x :result f}))))
+
+    :else (throw (ex-info "Expected function, symbol, or fn form" {:value x :type (type x)}))))
+
+^:rct/test
+(comment
+  ;; resolve-fn: resolves symbols and fn forms to functions at compile time
+
+  ;; function passes through unchanged
+  (fn? (resolve-fn odd?)) ;=> true
+  ;; symbol resolves to function
+  (fn? (resolve-fn 'odd?)) ;=> true
+  ;; resolved function works correctly
+  ((resolve-fn 'odd?) 3) ;=> true
+  ((resolve-fn 'odd?) 4) ;=> false
+  ;; non-existent symbol throws
+  (try (resolve-fn 'nonexistent-fn-12345) (catch Exception e :threw)) ;=> :threw
+
+  ;; fn forms are evaluated to create functions
+  (fn? (resolve-fn '(fn [x] (odd? x)))) ;=> true
+  ((resolve-fn '(fn [x] (odd? x))) 3) ;=> true
+  ;; fn* forms (from #(...) reader macro) also work
+  (fn? (resolve-fn '(fn* [p1__1#] (odd? p1__1#)))) ;=> true
+
+  ;; Symbol resolution in patterns:
+  ;; '(? :pred odd?) now works - symbol is resolved to function
+  (let [m (compile-pattern '(? :pred odd?))]
+    (failure? (m (vmr 3)))) ;=> false
+  (let [m (compile-pattern '(? :pred odd?))]
+    (failure? (m (vmr 4)))) ;=> true
+
+  ;; Anonymous functions in patterns:
+  ;; '(? :pred #(zero? (mod % 3))) works - fn form is evaluated
+  (let [m (compile-pattern '(? :pred #(zero? (mod % 3))))]
+    (failure? (m (vmr 3)))) ;=> false
+  (let [m (compile-pattern '(? :pred #(zero? (mod % 3))))]
+    (failure? (m (vmr 4)))) ;=> true
+  (let [m (compile-pattern '(? :pred #(zero? (mod % 3))))]
+    (failure? (m (vmr 6)))) ;=> false
+
+  ;; :when option also works with symbols and fn forms
+  (let [m (compile-pattern (list '?x :when 'odd?))]
+    (:vars (m (vmr 3)))) ;=>> {'x 3}
+  (let [m (compile-pattern (list '?x :when 'odd?))]
+    (failure? (m (vmr 4)))) ;=> true
+
+  ;; Custom resolver/evaluator via dynamic vars
+  ;; Useful for sandboxing (SCI) or CLJS compatibility
+  (binding [*resolve-sym* (fn [sym] (when (= sym 'my-pred) #(> % 10)))
+            *eval-form* (fn [form] (clojure.core/eval form))]
+    (fn? (resolve-fn 'my-pred))) ;=> true
+  (binding [*resolve-sym* (fn [sym] (when (= sym 'my-pred) #(> % 10)))]
+    ((resolve-fn 'my-pred) 15)) ;=> true
+
+  ;; Custom resolver/evaluator via compile-pattern options
+  (let [my-resolve (fn [sym] (case sym pos? pos? neg? neg? nil))
+        m (compile-pattern '(? :pred pos?) {:resolve my-resolve})]
+    (failure? (m (vmr 5)))) ;=> false
+  (let [my-resolve (fn [sym] (case sym pos? pos? neg? neg? nil))
+        m (compile-pattern '(? :pred neg?) {:resolve my-resolve})]
+    (failure? (m (vmr 5))))) ;=> true)
+
 (def ^:private matcher-specs* (atom {}))
 
 (defmacro defmatcher
@@ -728,7 +890,7 @@
 
 (defmatcher :pred "(? :pred <fn>)"
   (mzone (mvar 'f wildcard))
-  (vars-> [f] (mpred f)))
+  (vars-> [f] (mpred (resolve-fn f))))
 
 (defmatcher :val "(? :val <value>)"
   (mzone (mvar 'val wildcard))
@@ -925,12 +1087,15 @@
 (defn rewrite-pattern
   "Rewrite syntax sugar to core patterns.
    Uses postwalk to apply rules bottom-up (inner forms first).
+   Skips descending into fn forms (they're kept as-is for resolve-fn).
    Each rule is a fn: pattern -> core-pattern or nil"
   [ptn rules]
-  (walk/postwalk
-   (fn [x]
-     (or (some #(% x) rules) x))
-   ptn))
+  (let [apply-rules (fn [x] (or (some #(% x) rules) x))]
+    ((fn walk [x]
+       (if (fn-form? x)
+         x  ;; Don't descend into fn forms
+         (apply-rules (walk/walk walk identity x))))
+     ptn)))
 
 (defn- wrap-map-value
   "Wrap a pattern value for use in (? :map ...).
@@ -1010,7 +1175,8 @@
 (defn list-rewrite
   "Rewrite list () to (? :seq ...) core pattern.
    Same as vector-rewrite but for lists.
-   Returns nil if not applicable, if it's a core pattern, or if it's an extended var form."
+   Returns nil if not applicable, if it's a core pattern, or extended var form.
+   Note: fn forms are already skipped by rewrite-pattern, so no check needed here."
   [x]
   (when (and (seq? x)
              (not (core-pattern? x))
@@ -1041,11 +1207,13 @@
    - ?x+ -> (? :repeat (? :any) :min 1 :max nil :as x)
    - ?x* -> (? :repeat (? :any) :min 0 :max nil :as x)
    - ?x+!, ?x*! -> same with :greedy
+   Bare ? is not a matching var - it's the core pattern marker.
    Returns nil if not applicable."
   [x]
   (when (symbol? x)
     (let [nm (name x)]
-      (when (= \? (first nm))
+      (when (and (= \? (first nm))
+                 (> (count nm) 1))  ;; bare ? is not a matching var
         (if-let [{:keys [sym quantifier greedy?]} (parse-matching-var x)]
           ;; Quantified var: ?x?, ?x+, ?x*, etc.
           (let [var-sym (when sym (symbol (subs (name sym) 1)))
@@ -1087,10 +1255,10 @@
   [key handler]
   (swap! var-option-handlers assoc key handler))
 
-;; NOTE: When building patterns with function values (e.g., predicates),
-;; use (list '?x :when pred) NOT '(?x :when pred). The quoted form turns
-;; `pred` into a symbol instead of evaluating it to the actual function.
-;; Same applies to all pattern construction: (list '? :pred even?) not '(? :pred even?)
+;; NOTE: Quoted patterns like '(?x :when odd?) contain symbols, not functions.
+;; In CLJ, symbols and fn forms are resolved automatically via resolve-fn.
+;; For CLJS or sandboxed evaluation, provide :resolve and :eval options to
+;; compile-pattern (e.g., using SCI). See *resolve-sym* and *eval-form* docs.
 
 ;; Built-in chain option: :when - adds a predicate check
 (register-var-option! :when
@@ -1181,9 +1349,10 @@
         :optional     {:var-sym var-sym :inner '(? :any) :min-len 0 :max-len 1}
         nil))
 
-    ;; Simple var: ?x, ?_
+    ;; Simple var: ?x, ?_ (bare ? is not a var - it's the core pattern marker)
     (and (symbol? fst)
          (= \? (first (name fst)))
+         (> (count (name fst)) 1)
          (not (re-find forbidden-var-chars (subs (name fst) 1))))
     (let [var-name (subs (name fst) 1)]
       {:var-sym (when (not= "_" var-name) (symbol var-name))
@@ -1625,9 +1794,16 @@
    2. Compile: Build matcher functions from core patterns
 
    Options (optional second argument):
-     :rules  - additional rewrite rules run BEFORE defaults (separate pass)
-     :only   - use only these rules, ignoring defaults
-     :schema - schema to validate pattern against at compile time
+     :rules   - additional rewrite rules run BEFORE defaults (separate pass)
+     :only    - use only these rules, ignoring defaults
+     :schema  - schema to validate pattern against at compile time
+     :resolve - custom symbol resolver (fn [sym] -> var-or-value)
+     :eval    - custom form evaluator (fn [form] -> value)
+
+   The :resolve and :eval options enable:
+   - Sandboxed evaluation for security (e.g., using SCI)
+   - CLJS compatibility (provide SCI's resolve/eval)
+   - Custom symbol lookup from a registry
 
    Schema format:
      Type keywords (structural validation):
@@ -1656,10 +1832,14 @@
      (compile-pattern '{:name ?n :status ?s}
                       {:schema {:name :string :status [:= :active]}})
      (compile-pattern '[?x ?y] {:schema [:tuple :number :string]})
-     (compile-pattern '{:x ?x :y ?y} {:schema [:map-of :keyword :number]})"
+     (compile-pattern '{:x ?x :y ?y} {:schema [:map-of :keyword :number]})
+
+     ;; With custom resolver/evaluator (e.g., SCI for security/CLJS)
+     (compile-pattern '(? :pred odd?)
+                      {:resolve sci/resolve :eval sci/eval})"
   ([ptn]
    (compile-pattern ptn nil))
-  ([ptn {:keys [rules only schema]}]
+  ([ptn {:keys [rules only schema resolve eval]}]
    (let [rewritten (cond
                      only (rewrite-pattern ptn only)
                      rules (-> ptn
@@ -1669,7 +1849,10 @@
      ;; Validate against schema before compilation (if provided)
      (when schema
        (validate-pattern-schema! rewritten schema))
-     (core->matcher rewritten))))
+     ;; Compile with custom resolver/evaluator if provided
+     (binding [*resolve-sym* (or resolve *resolve-sym*)
+               *eval-form* (or eval *eval-form*)]
+       (core->matcher rewritten)))))
 
 ;;-----------------------------------------------------------------------------
 ;; Rule: Pattern → Template Transformation

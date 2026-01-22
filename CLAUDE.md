@@ -163,14 +163,26 @@ This turns schemas into more than validation - they become **access control poli
 
 ## Gotchas
 
-**Pattern construction with functions**: Use `(list '?x :when pred)` NOT `'(?x :when pred)`. The quoted form turns `pred` into a symbol instead of evaluating it to the actual function. Same applies to all pattern construction:
-```clojure
-;; WRONG - pred becomes symbol 'even?, not the function
-'(? :pred even?)
+**Pattern construction with functions**: Quoted patterns like `'(? :pred odd?)` contain symbols, not functions. These are automatically resolved at compile time.
 
-;; CORRECT - even? is evaluated to the function
-(list '? :pred even?)
+**SCI auto-detection**: If `org.babashka/sci` is on the classpath, it's used automatically for sandboxed evaluation. Otherwise falls back to `clojure.core/resolve` and `eval` (CLJ only).
+
+```clojure
+;; CLJ: Works automatically - symbols and fn forms are resolved
+'(? :pred even?)                    ; symbol resolved to fn
+'(? :pred #(zero? (mod % 3)))       ; anonymous fn evaluated
+
+;; To enable SCI (sandboxed, works in CLJS too):
+;; Just add to your deps.edn:
+;;   org.babashka/sci {:mvn/version "0.10.49"}
+
+;; Or provide custom resolver explicitly:
+(def allowed {'pos? pos? 'neg? neg?})
+(compile-pattern '(? :pred pos?)
+                 {:resolve #(get allowed %)})
 ```
+
+**Security note**: For untrusted patterns, either use SCI (sandboxed by default) or provide a restricted `:resolve` function.
 
 ## clj-kondo Configuration
 
