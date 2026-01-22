@@ -21,6 +21,7 @@
 ;; - `apply-rules` - Apply rules recursively to transform data
 ;; - `compile-pattern` - Compile patterns to matcher functions (advanced)
 ;; - `register-var-option!` - Extend variable syntax (advanced)
+;; - `register-schema-rule!` - Extend schema vocabulary (advanced)
 ;;
 ;; Key concepts:
 ;; - Pattern: A template describing the shape of data to match
@@ -551,7 +552,125 @@
 ;=> {:vars {n "Alice"}}
 
 ;;=============================================================================
-;; PART 15: Practical Examples
+;; PART 15: Schema Validation
+;;=============================================================================
+;;
+;; Schemas validate pattern structure at compile time.
+;; When provided, patterns that don't match the schema are rejected
+;; BEFORE runtime - catching errors early.
+
+;;-------------------------------------------------------------------
+;; Basic schema types
+;;-------------------------------------------------------------------
+;; Type keywords: :map :seq :string :number :keyword :symbol :any
+
+;; This pattern is valid for a map schema
+(p/compile-pattern '{:name ?n} {:schema :map})
+;=> <matcher-fn>
+
+;; This would FAIL at compile time (seq pattern on map schema):
+;; (p/compile-pattern '[?x] {:schema :map})
+;; => ExceptionInfo: Schema violation: pattern uses :seq but schema expects :map
+
+;;-------------------------------------------------------------------
+;; Record schemas: specific fields with types
+;;-------------------------------------------------------------------
+(def user-schema
+  {:name :string
+   :age :number
+   :email :string})
+
+;; Valid: pattern only uses declared fields
+(p/compile-pattern '{:name ?n :age ?a} {:schema user-schema})
+;=> <matcher-fn>
+
+;; Invalid: pattern uses undeclared field
+;; (p/compile-pattern '{:name ?n :secret ?s} {:schema user-schema})
+;; => ExceptionInfo: Schema violation: pattern has key :secret not defined in record schema
+
+;;-------------------------------------------------------------------
+;; Schema as Visibility Control
+;;-------------------------------------------------------------------
+;;
+;; This is a powerful property: schemas act as "public interfaces" for data.
+;; Only fields declared in the schema can be accessed by patterns.
+;; Undeclared fields become effectively "private".
+
+;; Example: Data has implementation details
+(def user-data
+  {:name "Alice"
+   :age 30
+   :_internal-id "uuid-abc123"      ; implementation detail
+   :_cache {:computed-at 12345}})   ; internal state
+
+;; Schema declares the "public API"
+(def public-user-schema
+  {:name :string
+   :age :number})
+
+;; Patterns can only extract public fields
+(def get-user (p/compile-pattern '{:name ?n :age ?a} {:schema public-user-schema}))
+(get-user (pc/vmr user-data))
+;=> {:val {...} :vars {n "Alice" a 30}}
+
+;; Attempting to access internal fields is REJECTED at compile time:
+;; (p/compile-pattern '{:name ?n :_internal-id ?id} {:schema public-user-schema})
+;; => ExceptionInfo: pattern has key :_internal-id not defined in record schema
+
+;; This provides:
+;; - Encapsulation: hide implementation details from consumers
+;; - Versioning: schema is the contract, internals can change
+;; - Security: prevent extraction of sensitive fields
+
+;;-------------------------------------------------------------------
+;; Dictionary schemas: homogeneous key/value types
+;;-------------------------------------------------------------------
+;; For maps where all keys share a type (not specific fields)
+
+(p/compile-pattern '{:x ?x :y ?y} {:schema [:map-of :keyword :number]})
+;=> <matcher-fn>  ; any keyword keys with number values
+
+;;-------------------------------------------------------------------
+;; Sequence schemas
+;;-------------------------------------------------------------------
+;; Homogeneous sequences
+(p/compile-pattern '[?first ?rest*] {:schema [:number]})
+;=> <matcher-fn>  ; seq of numbers
+
+;; Tuples (fixed positions with types)
+(p/compile-pattern '[?x ?y] {:schema [:tuple :number :string]})
+;=> <matcher-fn>  ; [number, string] pair
+
+;;-------------------------------------------------------------------
+;; Advanced schema types
+;;-------------------------------------------------------------------
+;; Literal values
+(p/compile-pattern '{:status ?s} {:schema {:status [:= :active]}})
+
+;; Enums (sets)
+(p/compile-pattern '{:status ?s} {:schema {:status #{:active :pending :closed}}})
+
+;; Union types
+(p/compile-pattern '{:id ?id} {:schema {:id [:or :string :number]}})
+
+;; Optional fields
+(p/compile-pattern '{:name ?n} {:schema {:name :string :bio [:optional :string]}})
+
+;;-------------------------------------------------------------------
+;; Extending schema vocabulary
+;;-------------------------------------------------------------------
+;; Use register-schema-rule! to add custom schema types
+;; Each rule returns {:type keyword, :child-schema fn, :valid-keys set}
+
+(p/register-schema-rule!
+ (p/match-fn [:non-empty ?elem-type]
+             {:type :seq
+              :child-schema (constantly ?elem-type)}))
+
+;; Now [:non-empty :number] is a valid schema for non-empty number sequences
+
+;;=============================================================================
+;; PART 16: Practical Examples
 ;;=============================================================================
 
 ;;-------------------------------------------------------------------
@@ -657,7 +776,7 @@
 ;=> {:valid true :data {:name "Alice" :age 30 :email ["alice@example.com"]}}
 
 ;;=============================================================================
-;; PART 16: Tips and Best Practices
+;; PART 17: Tips and Best Practices
 ;;=============================================================================
 
 ;; 1. match-fn compiles the pattern once - store and reuse for performance

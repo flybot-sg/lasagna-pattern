@@ -39,6 +39,28 @@
       {:name \"alice\"})  ;=> \"ALICE\""
   core/register-var-option!)
 
+(def register-schema-rule!
+  "Register a rule for schema type inference and validation.
+
+   Rule is a function: (schema) -> {:type t, :child-schema fn, :valid-keys set} | MatchFailure
+
+   Return map fields:
+   - :type        - Schema type keyword (:map, :seq, :string, :number, etc.)
+   - :child-schema - (optional) fn: (key-or-index) -> sub-schema for children
+   - :valid-keys   - (optional) set of allowed keys (for record schemas)
+
+   Use match-fn to define rules that pattern-match the schema structure.
+   Rules are tried in reverse order (last registered wins).
+
+   Example - register a :non-empty seq schema:
+     (register-schema-rule!
+       (match-fn [:non-empty ?elem-type]
+                 {:type :seq
+                  :child-schema (constantly ?elem-type)}))
+
+     ;; Usage: [:non-empty :number] validates sequences of numbers"
+  core/register-schema-rule!)
+
 (defmacro match-fn
   "Create a pattern-matching function. Returns body result on match, MatchFailure on failure.
 
@@ -100,12 +122,28 @@
    2. Compile: Build matcher functions
 
    Options (optional second argument):
-     :rules - additional rewrite rules prepended to defaults
-     :only  - use only these rules, ignoring defaults
+     :rules  - additional rewrite rules prepended to defaults
+     :only   - use only these rules, ignoring defaults
+     :schema - schema to validate pattern against at compile time
+
+   Schema format:
+     Type keywords: :map :seq :string :number :keyword :symbol :any
+     Literal: [:= value]
+     Enum: #{:a :b :c}
+     Union: [:or schema1 schema2]
+     Optional: [:optional schema]
+     Record: {:field1 :type1 :field2 :type2}
+     Dictionary: [:map-of key-type value-type]
+     Tuple: [:tuple type1 type2]
+     Homogeneous seq: [:element-type]
 
    Examples:
      (compile-pattern '{:name ?n})
      ; Returns a matcher
+
+     ;; With schema validation
+     (compile-pattern '{:name ?n :age ?a}
+                      {:schema {:name :string :age :number}})
 
      ;; With custom rules
      (def not-nil (rule (not-nil ?x) (?x :when some?)))

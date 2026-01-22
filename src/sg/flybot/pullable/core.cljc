@@ -1229,6 +1229,163 @@
           inner)))))
 
 ;;-----------------------------------------------------------------------------
+;; Schema Support
+;;-----------------------------------------------------------------------------
+;;
+;; Schemas validate pattern structure at compile time. Schema vocabulary:
+;;
+;; Type keywords (structural):
+;;   :map :seq :string :number :keyword :symbol :any
+;;
+;; Literal/Enum/Union/Optional:
+;;   [:= value]     - literal, type inferred from value
+;;   #{:a :b :c}    - enum (set), type inferred from elements
+;;   [:or s1 s2]    - union, common type or :any if mixed
+;;   [:optional s]  - nullable, type inferred from inner schema
+;;
+;; Map schemas:
+;;   {:key schema}              - record (specific fields)
+;;   [:map-of key-type val-type] - dictionary (homogeneous key/value types)
+;;
+;; Seq schemas:
+;;   [:element-type]         - homogeneous seq
+;;   [:tuple type1 type2]    - positional tuple
+;;
+;; Extensible via register-schema-rule! using match-fn patterns.
+
+;;-----------------------------------------------------------------------------
+;; Schema Rules Registry
+;;-----------------------------------------------------------------------------
+;;
+;; Unified registry for all schema types. Each rule is a function:
+;;   (schema) -> {:type keyword, :child-schema fn, :valid-keys set} | MatchFailure
+;;
+;; Where:
+;;   :type        - schema type (:map, :seq, :string, etc.)
+;;   :child-schema - (optional) fn: (key-or-index) -> sub-schema
+;;   :valid-keys   - (optional) set of allowed keys (for record validation)
+;;
+;; Rules are tried in reverse order (last registered = highest priority).
+;; Use match-fn to define rules that pattern-match the schema structure.
+
+(defonce ^:private schema-rules (atom []))
+
+(defn register-schema-rule!
+  "Register a rule for schema type inference and child extraction.
+   Rule is a function: (schema) -> {:type t, :child-schema fn, :valid-keys set} | MatchFailure
+   Use match-fn to define rules that pattern-match the schema structure.
+   Rules are tried in reverse order (last registered wins)."
+  [rule]
+  (swap! schema-rules conj rule))
+
+(defn get-schema-info
+  "Get type and child accessor from a schema using registered rules.
+   Returns {:type keyword, :child-schema fn-or-nil, :valid-keys set-or-nil}."
+  [schema]
+  (or (some (fn [rule]
+              (let [result (rule schema)]
+                (when-not (failure? result)
+                  result)))
+            (reverse @schema-rules))
+      {:type :any}))
+
+;; For backwards compatibility - delegates to get-schema-info
+(defn infer-schema-type
+  "Infer the type keyword from a schema value."
+  [schema]
+  (:type (get-schema-info schema)))
+
+;; Subseq matchers are internal implementation details for sequence matching.
+;; They should not be validated against element schemas.
+(def ^:private subseq-pattern-types
+  "Pattern types that are internal to sequence matching"
+  #{:one :repeat :optional :term :subseq})
+
+(defn valid-pattern-for-schema?
+  "Check if a core pattern type is valid for a schema type.
+   Returns true if compatible, false otherwise.
+
+   Validation rules:
+   - :any schema allows all patterns
+   - :map schema allows :map, :var, :any patterns
+   - :seq schema allows :seq, :var, :any patterns
+   - primitive schemas (:number :string :keyword :symbol) allow :var, :val, :pred, :any, :regex
+   - subseq pattern types (:one, :repeat, :optional, :term) are internal and always allowed"
+  [pattern-type schema-type]
+  ;; Subseq matchers are internal to sequence matching - always valid
+  (if (subseq-pattern-types pattern-type)
+    true
+    (case schema-type
+      :any true
+      :map (#{:map :var :any} pattern-type)
+      :seq (#{:seq :var :any} pattern-type)
+      ;; primitives: only var/val/pred/any/regex allowed
+      (:number :string :keyword :symbol)
+      (#{:var :val :pred :any :regex} pattern-type)
+      ;; unknown schema type - allow
+      true)))
+
+;;-----------------------------------------------------------------------------
+;; Schema Validation (Pre-compilation pass)
+;;-----------------------------------------------------------------------------
+
+(defn- get-pattern-type
+  "Extract the type from a core pattern (? :type ...)"
+  [ptn]
+  (when (core-pattern? ptn)
+    (second ptn)))
+
+(defn- validate-pattern-schema!
+  "Validate a rewritten pattern against a schema (pre-compilation).
+   Walks the pattern tree and validates structural compatibility.
+   Throws on schema violation."
+  [ptn schema]
+  (when schema
+    (cond
+      ;; Core pattern - validate and recurse into children
+      (core-pattern? ptn)
+      (let [ptn-type (get-pattern-type ptn)
+            {:keys [type child-schema valid-keys]} (get-schema-info schema)]
+        ;; Validate this pattern type against schema type
+        (when-not (valid-pattern-for-schema? ptn-type type)
+          (throw (ex-info (str "Schema violation: pattern uses :" ptn-type
+                               " but schema expects :" type)
+                          {:pattern-type ptn-type
+                           :schema-type type
+                           :schema schema})))
+
+        ;; Recurse into children with sub-schemas
+        (case ptn-type
+          :map
+          ;; (? :map :key1 child1 :key2 child2 ...)
+          (doseq [[k child] (partition 2 (drop 2 ptn))]
+            ;; Check key validity if schema restricts keys
+            (when (and valid-keys (not (contains? valid-keys k)))
+              (throw (ex-info (str "Schema violation: pattern has key " k
+                                   " not defined in record schema")
+                              {:key k
+                               :schema-keys valid-keys
+                               :schema schema})))
+            ;; Recurse with child schema
+            (when child-schema
+              (validate-pattern-schema! child (child-schema k))))
+
+          :seq
+          ;; (? :seq child1 child2 ...)
+          (when child-schema
+            (dorun (map-indexed
+                    (fn [i child] (validate-pattern-schema! child (child-schema i)))
+                    (drop 2 ptn))))
+
+          ;; Other patterns - recurse into any nested core patterns
+          (doseq [child (drop 2 ptn)]
+            (when (core-pattern? child)
+              (validate-pattern-schema! child schema)))))
+
+      ;; Non-core pattern (e.g., literal) - no validation needed
+      :else nil)))
+
+;;-----------------------------------------------------------------------------
 ;; Pattern Compilation (Phase 2)
 ;;-----------------------------------------------------------------------------
 
@@ -1468,24 +1625,50 @@
    2. Compile: Build matcher functions from core patterns
 
    Options (optional second argument):
-     :rules - additional rewrite rules run BEFORE defaults (separate pass)
-     :only  - use only these rules, ignoring defaults
+     :rules  - additional rewrite rules run BEFORE defaults (separate pass)
+     :only   - use only these rules, ignoring defaults
+     :schema - schema to validate pattern against at compile time
+
+   Schema format:
+     Type keywords (structural validation):
+       :map :seq :string :number :keyword :symbol :any
+
+     Literal/Enum/Union/Optional:
+       [:= value]    - literal value, e.g. [:= :active], [:= 42]
+       #{:a :b :c}   - enum (set of allowed values)
+       [:or s1 s2]   - union (one of several schemas)
+       [:optional s] - nullable (nil allowed), type from inner schema
+
+     Composite schemas:
+       {:key schema ...}          - record map (specific fields)
+       [:map-of key-type val-type] - dictionary map (homogeneous k/v types)
+       [:element-schema]          - homogeneous seq (all elements same type)
+       [:tuple schema1 ...]       - positional tuple (each position typed)
+
+     Extensible: use register-schema-rule! to add custom schema types
 
    Examples:
      (compile-pattern '{:name ?n :age ?_})
      ; Returns a matcher that extracts :name into variable 'n
 
-     ;; With custom rules (run first, then defaults)
-     (compile-pattern '(not-nil ?x) {:rules [not-nil-rule]})"
+     ;; With schema validation
+     (compile-pattern '{:name ?n} {:schema :map})
+     (compile-pattern '{:name ?n :status ?s}
+                      {:schema {:name :string :status [:= :active]}})
+     (compile-pattern '[?x ?y] {:schema [:tuple :number :string]})
+     (compile-pattern '{:x ?x :y ?y} {:schema [:map-of :keyword :number]})"
   ([ptn]
    (compile-pattern ptn nil))
-  ([ptn {:keys [rules only]}]
+  ([ptn {:keys [rules only schema]}]
    (let [rewritten (cond
                      only (rewrite-pattern ptn only)
                      rules (-> ptn
                                (rewrite-pattern rules)  ; custom rules first
                                (rewrite-pattern default-rewrite-rules))  ; then defaults
                      :else (rewrite-pattern ptn default-rewrite-rules))]
+     ;; Validate against schema before compilation (if provided)
+     (when schema
+       (validate-pattern-schema! rewritten schema))
      (core->matcher rewritten))))
 
 ;;-----------------------------------------------------------------------------
@@ -1612,6 +1795,88 @@
                    ~@bindings]
                ~body)))))))
 
+;;-----------------------------------------------------------------------------
+;; Built-in Schema Rules
+;;-----------------------------------------------------------------------------
+;; These rules extract schema info from different schema formats.
+;; Each rule returns {:type keyword, :child-schema fn, :valid-keys set}.
+;; Users can add custom rules with register-schema-rule!
+;;
+;; Simple type checks use plain functions (more reliable than match-fn with predicates).
+;; Structural patterns (like [:tuple ...]) use match-fn for destructuring.
+
+;; Helper for value type inference (used by literal and enum schemas)
+(defn- infer-value-type
+  "Infer schema type from a runtime value"
+  [v]
+  (cond
+    (map? v) :map
+    (sequential? v) :seq
+    (string? v) :string
+    (keyword? v) :keyword
+    (symbol? v) :symbol
+    (number? v) :number
+    :else :any))
+
+;; Type keyword: :string, :number, :map, :seq, etc.
+(register-schema-rule!
+ (fn [schema]
+   (when (keyword? schema)
+     {:type schema})))
+
+;; Record map: {:field1 type1 :field2 type2 ...}
+(register-schema-rule!
+ (fn [schema]
+   (when (map? schema)
+     {:type :map
+      :child-schema (fn [k] (get schema k :any))
+      :valid-keys (set (keys schema))})))
+
+;; Enum (set): #{:a :b :c}
+(register-schema-rule!
+ (fn [schema]
+   (when (set? schema)
+     (let [types (set (map infer-value-type schema))]
+       {:type (if (= 1 (count types)) (first types) :any)}))))
+
+;; Literal: [:= value]
+(register-schema-rule!
+ (match-fn [:= ?v] {:type (infer-value-type ?v)}))
+
+;; Dictionary map: [:map-of key-type value-type]
+(register-schema-rule!
+ (match-fn [:map-of ?_k ?v]
+           {:type :map
+            :child-schema (constantly ?v)}))
+
+;; Union: [:or schema1 schema2 ...]
+(register-schema-rule!
+ (match-fn [:or ?schemas*]
+           (let [types (set (map infer-schema-type ?schemas))]
+             {:type (if (= 1 (count types)) (first types) :any)})))
+
+;; Optional: [:optional inner-schema]
+(register-schema-rule!
+ (match-fn [:optional ?s]
+           (let [info (get-schema-info ?s)]
+             {:type (:type info)
+              :child-schema (:child-schema info)
+              :valid-keys (:valid-keys info)})))
+
+;; Tuple: [:tuple type1 type2 ...] -> positional types
+(register-schema-rule!
+ (match-fn [:tuple ?types*]
+           {:type :seq
+            :child-schema (fn [i] (nth ?types i :any))}))
+
+;; Homogeneous seq: [element-type] -> all elements same type
+;; Must check vector? to avoid matching maps (which are seqable as kv pairs)
+(register-schema-rule!
+ (fn [schema]
+   (when (and (vector? schema) (= 1 (count schema)))
+     {:type :seq
+      :child-schema (constantly (first schema))})))
+
 ^:rct/test
 (comment
   ;;-------------------------------------------------------------------
@@ -1733,7 +1998,192 @@
   {:vars {'page [3 4 5]}}
   ;; Pagination: skip 2, take 3, capture rest
   ((compile-pattern '[(?_ :skip 2) (?page* :take 3) ?rest*]) (vmr [1 2 3 4 5 6 7 8 9 10])) ;=>>
-  {:vars {'page [3 4 5] 'rest [6 7 8 9 10]}})
+  {:vars {'page [3 4 5] 'rest [6 7 8 9 10]}}
   ;; Note: :when on quantified vars applies to individual elements, not the collection
-  ;; To filter the collected result, use match-fn with post-processing)
+  ;; To filter the collected result, use match-fn with post-processing
+
+  ;;-------------------------------------------------------------------
+  ;; Schema validation: compile-time type checking
+  ;;-------------------------------------------------------------------
+  ;; Valid: map pattern on :map schema
+  (compile-pattern '{:a ?x} {:schema :map}) ;=>> fn?
+
+  ;; Valid: seq pattern on :seq schema
+  (compile-pattern '[?x ?y] {:schema :seq}) ;=>> fn?
+
+  ;; Valid: variable pattern on any schema (vars match any type)
+  (compile-pattern '?x {:schema :map}) ;=>> fn?
+  (compile-pattern '?x {:schema :string}) ;=>> fn?
+
+  ;; Invalid: seq pattern on :map schema - throws
+  (try
+    (compile-pattern '[?x] {:schema :map})
+    (catch clojure.lang.ExceptionInfo e
+      (:pattern-type (ex-data e))))
+  ;=> :seq
+
+  ;; Invalid: map pattern on :seq schema - throws
+  (try
+    (compile-pattern '{:a ?x} {:schema :seq})
+    (catch clojure.lang.ExceptionInfo e
+      (:pattern-type (ex-data e))))
+  ;=> :map
+
+  ;; Nested schema: map with field types
+  (compile-pattern '{:items [?x ?y]} {:schema {:items [:any]}}) ;=>> fn?
+
+  ;; Nested schema: field is seq, pattern correctly uses seq
+  (compile-pattern '{:name ?n :tags [?first ?rest*]}
+                   {:schema {:name :string :tags [:string]}}) ;=>> fn?
+
+  ;; Invalid nested: map pattern where seq expected
+  (try
+    (compile-pattern '{:items {:x ?x}} {:schema {:items [:any]}})
+    (catch clojure.lang.ExceptionInfo e
+      (:schema-type (ex-data e))))
+  ;=> :seq
+
+  ;; Invalid nested: seq pattern where map expected
+  (try
+    (compile-pattern '{:user [?a ?b]} {:schema {:user {:name :string}}})
+    (catch clojure.lang.ExceptionInfo e
+      (:schema-type (ex-data e))))
+  ;=> :map
+
+  ;; Schema without option still compiles normally
+  ((compile-pattern '{:a ?x}) (vmr {:a 42})) ;=>> {:vars {'x 42}}
+
+  ;; Schema :any allows everything
+  (compile-pattern '{:a ?x} {:schema :any}) ;=>> fn?
+  (compile-pattern '[?x] {:schema :any}) ;=>> fn?
+
+  ;;-------------------------------------------------------------------
+  ;; Tuple schema: [:tuple type1 type2 ...]
+  ;;-------------------------------------------------------------------
+  ;; Valid: pattern matches tuple positionally
+  (compile-pattern '[?x ?y] {:schema [:tuple :number :string]}) ;=>> fn?
+
+  ;; Tuple in nested schema
+  ((compile-pattern '{:point [?x ?y]} {:schema {:point [:tuple :number :number]}})
+   (vmr {:point [10 20]})) ;=>> {:vars {'x 10 'y 20}}
+
+  ;; Invalid: map pattern where tuple expects :number
+  (try
+    (compile-pattern '[{:a ?a} ?y] {:schema [:tuple :number :string]})
+    (catch clojure.lang.ExceptionInfo e
+      (:schema-type (ex-data e))))
+  ;=> :number
+
+  ;;-------------------------------------------------------------------
+  ;; Literal schema: [:= value]
+  ;;-------------------------------------------------------------------
+  ;; Literal keyword - infers as :keyword
+  (infer-schema-type [:= :active]) ;=> :keyword
+
+  ;; Literal string - infers as :string
+  (infer-schema-type [:= "hello"]) ;=> :string
+
+  ;; Literal number - infers as :number
+  (infer-schema-type [:= 42]) ;=> :number
+
+  ;; Literal map - infers as :map
+  (infer-schema-type [:= {:type :user}]) ;=> :map
+
+  ;; Valid: var pattern for literal keyword
+  (compile-pattern '{:status ?s} {:schema {:status [:= :active]}}) ;=>> fn?
+
+  ;; Invalid: map pattern where literal keyword expected
+  (try
+    (compile-pattern '{:status {:x ?x}} {:schema {:status [:= :active]}})
+    (catch clojure.lang.ExceptionInfo e
+      (:schema-type (ex-data e))))
+  ;=> :keyword
+
+  ;; Mixed: types and literals together
+  ((compile-pattern '{:name ?n :status ?s}
+                    {:schema {:name :string :status [:= :active]}})
+   (vmr {:name "Alice" :status :active})) ;=>> {:vars {'n "Alice" 's :active}}
+
+  ;;-------------------------------------------------------------------
+  ;; Dictionary schema: [:map-of key-type value-type]
+  ;;-------------------------------------------------------------------
+  ;; Dictionary schema infers as :map
+  (infer-schema-type [:map-of :keyword :number]) ;=> :map
+
+  ;; Valid: map pattern with dictionary schema
+  ((compile-pattern '{:x ?x :y ?y} {:schema [:map-of :keyword :number]})
+   (vmr {:x 10 :y 20})) ;=>> {:vars {'x 10 'y 20}}
+
+  ;; Invalid: nested map where number expected
+  (try
+    (compile-pattern '{:x {:a ?a}} {:schema [:map-of :keyword :number]})
+    (catch clojure.lang.ExceptionInfo e
+      (:schema-type (ex-data e))))
+  ;=> :number
+
+  ;; Nested dictionary in record
+  (compile-pattern '{:data {:a ?a}} {:schema {:data [:map-of :keyword :any]}}) ;=>> fn?
+
+  ;;-------------------------------------------------------------------
+  ;; Enum schema: #{value1 value2 ...}
+  ;;-------------------------------------------------------------------
+  ;; Keyword enum infers as :keyword
+  (infer-schema-type #{:active :inactive}) ;=> :keyword
+
+  ;; String enum infers as :string
+  (infer-schema-type #{"foo" "bar"}) ;=> :string
+
+  ;; Number enum infers as :number
+  (infer-schema-type #{1 2 3}) ;=> :number
+
+  ;; Mixed enum infers as :any
+  (infer-schema-type #{:a 1 "x"}) ;=> :any
+
+  ;; Enum in record field
+  ((compile-pattern '{:status ?s} {:schema {:status #{:active :inactive}}})
+   (vmr {:status :active})) ;=>> {:vars {'s :active}}
+
+  ;; Invalid: map pattern for keyword enum
+  (try
+    (compile-pattern '{:status {:x ?x}} {:schema {:status #{:active :inactive}}})
+    (catch clojure.lang.ExceptionInfo e
+      (:schema-type (ex-data e))))
+  ;=> :keyword
+
+  ;;-------------------------------------------------------------------
+  ;; Union schema: [:or schema1 schema2 ...]
+  ;;-------------------------------------------------------------------
+  ;; Same types -> that type
+  (infer-schema-type [:or :string :string]) ;=> :string
+
+  ;; Different primitive types -> :any
+  (infer-schema-type [:or :string :number]) ;=> :any
+
+  ;; Both maps -> :map
+  (infer-schema-type [:or {:a :string} {:b :number}]) ;=> :map
+
+  ;; Union of maps allows map pattern
+  (compile-pattern '{:x ?x} {:schema [:or {:x :string} {:x :number}]}) ;=>> fn?
+
+  ;; Union in record field
+  (compile-pattern '{:value ?v} {:schema {:value [:or :string :number]}}) ;=>> fn?
+
+  ;;-------------------------------------------------------------------
+  ;; Optional schema: [:optional inner-schema]
+  ;;-------------------------------------------------------------------
+  ;; Optional unwraps to inner type
+  (infer-schema-type [:optional :string]) ;=> :string
+  (infer-schema-type [:optional {:a :number}]) ;=> :map
+  (infer-schema-type [:optional #{:a :b}]) ;=> :keyword
+
+  ;; Optional in record field
+  (compile-pattern '{:name ?n :nick ?nick}
+                   {:schema {:name :string :nick [:optional :string]}}) ;=>> fn?
+
+  ;; Invalid: map pattern for optional string
+  (try
+    (compile-pattern '{:nick {:x ?x}} {:schema {:nick [:optional :string]}})
+    (catch clojure.lang.ExceptionInfo e
+      (:schema-type (ex-data e)))))
+  ;=> :string)
 
