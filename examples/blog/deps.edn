@@ -1,0 +1,14 @@
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+        local/pattern {:local/root "../../pattern"}
+        local/remote {:local/root "../../remote"}
+        io.github.robertluo/fun-map {:mvn/version "0.5.124"}
+        http-kit/http-kit {:mvn/version "2.8.0"}}
+ :aliases
+ {:dev {:extra-paths ["dev" "test"]
+        :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
+                     io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
+                     ring/ring-mock {:mvn/version "0.4.0"}}}
+  :test {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
+         :exec-args {:dirs #{"src"}}}
+  :run {:main-opts ["-m" "sg.flybot.blog.server"]}}}
