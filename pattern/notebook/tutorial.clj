@@ -88,9 +88,9 @@
 ;=> 42
 
 ;;-------------------------------------------------------------------
-;; Wildcard: _ matches anything but doesn't bind
+;; Wildcard: ?_ matches anything but doesn't bind
 ;;-------------------------------------------------------------------
-((p/match-fn [_ ?middle _] ?middle) [1 2 3])
+((p/match-fn [?_ ?middle ?_] ?middle) [1 2 3])
 ;=> 2
 
 ;;-------------------------------------------------------------------
@@ -510,19 +510,23 @@
 ;;=============================================================================
 ;;
 ;; For lower-level control, use compile-pattern directly.
-;; It returns a matcher function that takes a ValMatchResult.
+;; It returns a matcher function that operates on internal MatchResult types.
+;;
+;; NOTE: This section uses internal APIs from sg.flybot.pullable.core.
+;; These are useful for building custom tooling but may change between versions.
 
 (require '[sg.flybot.pullable.core :as pc])
 
 ;; Compile a pattern to a matcher
 (def name-matcher (p/compile-pattern '{:name ?n}))
 
-;; Apply to data wrapped in vmr (ValMatchResult)
+;; The matcher takes a ValMatchResult (created via vmr) and returns either
+;; a ValMatchResult with :val and :vars, or a MatchFailure
 (name-matcher (pc/vmr {:name "Alice" :age 30}))
 ;=> {:val {:name "Alice" :age 30} :vars {n "Alice"}}
 
-;; Check for failure
-(pc/failure? (name-matcher (pc/vmr "not a map")))
+;; Check for failure (can use either p/failure? or pc/failure? - same fn)
+(p/failure? (name-matcher (pc/vmr "not a map")))
 ;=> true
 
 ;;-------------------------------------------------------------------
@@ -712,15 +716,20 @@
 ;;-------------------------------------------------------------------
 ;; Simple dispatch based on structure
 ;;-------------------------------------------------------------------
+;; Define handlers once (they compile the pattern)
+(def ping-handler (p/match-fn [ping] :pong))
+(def echo-handler (p/match-fn [echo ?text] [:echoed ?text]))
+(def add-handler (p/match-fn [add ?a ?b] [:sum (+ ?a ?b)]))
+
 (defn handle-message [msg]
-  (let [ping-handler (p/match-fn [ping] :pong)
-        echo-handler (p/match-fn [echo ?text] [:echoed ?text])
-        add-handler (p/match-fn [add ?a ?b] [:sum (+ ?a ?b)])]
-    (cond
-      (not (p/failure? (ping-handler msg))) (ping-handler msg)
-      (not (p/failure? (echo-handler msg))) (echo-handler msg)
-      (not (p/failure? (add-handler msg))) (add-handler msg)
-      :else :unknown)))
+  ;; Try each handler, return first non-failure result
+  (or (reduce (fn [_ handler]
+                (let [result (handler msg)]
+                  (when-not (p/failure? result)
+                    (reduced result))))
+              nil
+              [ping-handler echo-handler add-handler])
+      :unknown))
 
 (handle-message '[ping])        ;=> :pong
 (handle-message '[echo hello])  ;=> [:echoed hello]
@@ -791,8 +800,8 @@
 ((p/match-fn [?init*! ?last] {:init ?init :last ?last}) [1 2 3])
 ;=> {:init (1 2) :last 3}
 
-;; 4. Use _ to ignore values you don't care about
-((p/match-fn [_ ?middle _] ?middle) [1 2 3])
+;; 4. Use ?_ to ignore values you don't care about
+((p/match-fn [?_ ?middle ?_] ?middle) [1 2 3])
 ;=> 2
 
 ;; 5. Access MatchFailure fields for debugging
@@ -828,6 +837,10 @@
 (p/register-var-option! :as-int
                         (fn [_] (list '? :sub #(if (string? %) (Integer/parseInt %) %))))
 
+;; Now use :as-int to coerce string values
+((p/match-fn {:port (?p :as-int _)} (+ ?p 1)) {:port "8080"})
+;=> 8081
+
 ;;=============================================================================
 ;; Congratulations!
 ;;=============================================================================
@@ -844,7 +857,7 @@
 ;;
 ;; Pattern Variables:
 ;; - ?x      - Bind single value
-;; - _       - Wildcard (match anything, no binding)
+;; - ?_      - Wildcard (match anything, no binding)
 ;; - ?x?     - Optional (0 or 1)
 ;; - ?x+     - One or more (lazy)
 ;; - ?x*     - Zero or more (lazy)

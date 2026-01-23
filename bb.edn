@@ -1,7 +1,53 @@
-{:tasks
- {clean {:doc "Clean"
-         :task (shell "rm -rf target")}
-  dev {:doc "Start a development repl"
-       :task (clojure "-M:dev")}
-  test {:doc "Run tests"
-        :task (clojure "-X:dev:test")}}}
+{:min-bb-version "1.0.0"
+ :tasks
+ {:requires [[babashka.fs :as fs]
+             [clojure.string :as str]]
+
+  ;; Discover components: directories with deps.edn (excluding hidden dirs)
+  -components
+  {:task (vec (for [dir (fs/list-dir ".")
+                    :let [dir-name (str (fs/file-name dir))]
+                    :when (and (fs/directory? dir)
+                               (not (str/starts-with? dir-name "."))
+                               (fs/exists? (fs/file dir "deps.edn")))]
+                dir-name))}
+
+  list
+  {:doc "List all components"
+   :depends [-components]
+   :task (doseq [c -components]
+           (println c))}
+
+  test
+  {:doc "Run tests: bb test [component] (default: all)"
+   :depends [-components]
+   :task (let [target (first *command-line-args*)
+               components (if target [target] -components)]
+           (doseq [c components]
+             (println (str "\n=== Testing " c " ==="))
+             (clojure {:dir c} "-X:dev:test")))}
+
+  dev
+  {:doc "Start REPL: bb dev <component>"
+   :task (let [component (first *command-line-args*)]
+           (if component
+             (clojure {:dir component} "-M:dev")
+             (println "Usage: bb dev <component>")))}
+
+  clean
+  {:doc "Clean: bb clean [component] (default: all)"
+   :depends [-components]
+   :task (let [target (first *command-line-args*)
+               components (if target [target] -components)]
+           (doseq [c components]
+             (println (str "Cleaning " c "..."))
+             (shell {:dir c} "rm" "-rf" "target" ".cpcache")))}
+
+  nrepl
+  {:doc "Start nREPL: bb nrepl <component>"
+   :task (let [component (first *command-line-args*)]
+           (if component
+             (clojure {:dir component}
+                      "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}"
+                      "-M" "-m" "nrepl.cmdline")
+             (println "Usage: bb nrepl <component>")))}}}
