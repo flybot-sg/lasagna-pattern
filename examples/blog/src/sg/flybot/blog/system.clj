@@ -19,6 +19,7 @@
    [sg.flybot.blog.api :as api]
    [sg.flybot.blog.auth :as auth]
    [sg.flybot.blog.db :as db]
+   [sg.flybot.blog.log :as log]
    [sg.flybot.pullable.remote :as remote]
    [org.httpkit.server :as http-kit]
    [ring.middleware.params :refer [wrap-params]]
@@ -43,20 +44,28 @@
    Call (halt! sys) to stop."
   ([] (make-system {}))
   ([{:keys [port seed? owner-emails db-cfg] :or {port 8080 seed? true}}]
+   (log/info "Creating blog system...")
    (let [cfg (or db-cfg db/default-cfg)
          conn (db/create-conn! cfg)]
-     (when seed? (db/seed! conn))
+     (log/log-db-connected cfg)
+     (when seed?
+       (db/seed! conn)
+       (log/log-db-seeded 3))
+     (when owner-emails
+       (log/info "Role-based auth enabled for:" owner-emails))
      (life-cycle-map
       {:port port
 
        :api-fn
        (fnk []
+            (log/debug "Initializing API function")
             (if owner-emails
               (auth/make-api {:owner-emails owner-emails :conn conn})
               (fn [_] {:data (api/make-api conn) :schema api/schema})))
 
        :app
        (fnk [api-fn]
+            (log/debug "Building Ring app")
             (cond-> (fn [_] {:status 404 :body "Not Found"})
               true (remote/wrap-api api-fn {:path "/api"})
               owner-emails wrap-session
@@ -65,14 +74,17 @@
 
        :server
        (fnk [app port]
+            (log/log-startup port)
             (let [stop-fn (http-kit/run-server app {:port port})]
               (println "Blog server started on port" port)
               (println "  POST http://localhost:" port "/api")
               (println "  GET  http://localhost:" port "/api/_schema")
               (closeable {:port port}
                          (fn []
+                           (log/log-shutdown)
                            (stop-fn)
                            (db/release-conn! conn cfg)
+                           (log/info "Server stopped")
                            (println "Server stopped")))))}))))
 
 ^:rct/test

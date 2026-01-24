@@ -113,12 +113,25 @@
          (post-card post actions)])])])
 
 (defn post-detail-view [state actions]
-  (let [post (state/selected-post state)]
+  (let [post (state/selected-post state)
+        history-count (count (:history state))]
     (if post
       [:div.post-detail
        [:div.detail-header
         [:a.back-link {:href "#" :on {:click #((:on-back actions) % :list)}} "← Back to posts"]
-        [:button.secondary {:on {:click #((:on-history actions) (:post/id post))}} "View History"]]
+        [:button.secondary
+         (cond-> {:on {:click #((:on-history actions) (:post/id post))}}
+           (zero? history-count) (assoc :disabled true
+                                        :style {:opacity 0.5 :cursor "not-allowed"}))
+         "View History"
+         (when (pos? history-count)
+           [:span.badge {:style {:margin-left "0.5em"
+                                 :background "#666"
+                                 :color "#fff"
+                                 :padding "0.1em 0.5em"
+                                 :border-radius "10px"
+                                 :font-size "0.85em"}}
+            history-count])]]
        [:h1 (:post/title post)]
        [:div.post-meta "By " (:post/author post) " • " (format-date (:post/created-at post))]
        (tag-list (:post/tags post))

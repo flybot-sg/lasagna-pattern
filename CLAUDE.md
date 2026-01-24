@@ -25,6 +25,7 @@ Components are auto-discovered (any directory with `deps.edn`).
 | `pattern/` | Core pattern DSL for matching/transforming Clojure data | Active |
 | `collection/` | CRUD collection abstraction with DataSource protocol | Active |
 | `remote/` | Remote protocol (GraphQL-like) using pattern language | Active |
+| `examples/blog/` | Full-stack blog app demonstrating pattern + remote + collection | Example |
 
 ### Adding a New Component
 
@@ -71,7 +72,110 @@ Core pattern DSL enabling declarative matching and transformation of Clojure dat
 (?x :default val)  ; Default on failure
 ```
 
+**Map matching:**
+- Supports maps and any `ILookup` implementation (lazy data sources)
+- Maps preserve unmatched keys (passthrough semantics)
+- ILookup returns only matched keys (can't enumerate all keys)
+- Non-keyword keys for indexed lookup: `{{:id 1} ?result}`
+
 **Deep dive:** See `pattern/doc/ARCHITECTURE.md` for internal design, matcher constructors, and extension points.
+
+## Example: blog
+
+Full-stack blog demonstrating noun-only API design with pattern-based CRUD.
+
+**Stack:** Clojure + ClojureScript, Datahike, http-kit, Replicant SPA
+
+**Source:** `examples/blog/src/sg/flybot/blog/`
+
+**Run:**
+```bash
+cd examples/blog
+clj -M:dev:cljs  # Compile ClojureScript
+clj -M:run       # Start server at localhost:8080
+```
+
+**API design (noun-only):**
+```clojure
+;; Schema defines nouns, not verbs
+{:posts [:union [post-schema] {post-query post-schema}]}
+
+;; CRUD via pattern syntax:
+{:posts ?all}                    ; LIST
+{:posts {{:post/id 3} ?post}}    ; READ (indexed lookup)
+{:posts {nil {:post/title ...}}} ; CREATE
+{:posts {{:post/id 3} {...}}}    ; UPDATE
+{:posts {{:post/id 3} nil}}      ; DELETE
+```
+
+**Key patterns demonstrated:**
+- ILookup-based collections for lazy data access
+- Schema-driven output filtering
+- Frontmatter extraction from markdown content
+
+### Blog Logging
+
+The blog example has a unified logging system for both frontend and backend.
+
+**Backend:** `examples/blog/src/sg/flybot/blog/log.clj`
+- Uses Timbre (included via Datahike)
+- Levels: `:trace` `:debug` `:info` `:warn` `:error` `:fatal`
+
+```clojure
+(require '[sg.flybot.blog.log :as log])
+
+;; Basic logging
+(log/debug "value:" x)
+(log/info "Server started")
+(log/error "Failed:" err)
+
+;; Set level (e.g., for production)
+(log/set-level! :info)
+
+;; Domain-specific (prefer these for consistency)
+(log/log-api-request pattern)
+(log/log-api-response response)
+(log/log-api-error err pattern)
+(log/log-db-op :fetch :post id)
+(log/log-db-create :post entity)
+(log/log-db-update :post id)
+(log/log-db-delete :post id)
+(log/log-startup port)
+(log/log-shutdown)
+
+;; Ring middleware for request timing
+(-> handler (log/wrap-request-logging))
+```
+
+**Frontend:** `examples/blog/src/sg/flybot/blog/ui/log.cljc`
+- Cross-platform (.cljc) for JVM testability
+- Browser: uses `console.debug/info/warn/error`
+- JVM: uses `println`
+- Levels: `:debug` `:info` `:warn` `:error` `:off`
+
+```clojure
+(require '[sg.flybot.blog.ui.log :as log])
+
+;; Basic logging
+(log/debug "value:" x)
+(log/info "User action")
+(log/warn "Deprecation")
+(log/error "Failed:" err)
+
+;; Configure
+(log/set-level! :warn)  ; Only warn and error
+(log/set-prefix! "[myapp]")
+
+;; Domain-specific
+(log/log-api-request pattern)
+(log/log-api-response response)
+(log/log-api-error err pattern)
+(log/log-state-change "action" old-state new-state)
+```
+
+**Integration points:**
+- Backend: `server.clj`, `db.clj`, `system.clj`
+- Frontend: `api.cljs`, `core.cljs`
 
 ## Testing
 

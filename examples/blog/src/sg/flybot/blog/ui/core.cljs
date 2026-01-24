@@ -3,7 +3,8 @@
   (:require [replicant.dom :as r]
             [sg.flybot.blog.ui.state :as state]
             [sg.flybot.blog.ui.views :as views]
-            [sg.flybot.blog.ui.api :as api]))
+            [sg.flybot.blog.ui.api :as api]
+            [sg.flybot.blog.ui.log :as log]))
 
 ;;=============================================================================
 ;; App State (mutable)
@@ -12,7 +13,11 @@
 (defonce app-state (atom state/initial-state))
 
 (defn swap-state! [f & args]
-  (apply swap! app-state f args))
+  (let [old @app-state
+        new (apply swap! app-state f args)]
+    (when (not= (:view old) (:view new))
+      (log/log-state-change (str f) old new))
+    new))
 
 ;;=============================================================================
 ;; API Actions
@@ -96,9 +101,19 @@
 (defn- get-input-value [e]
   (.. e -target -value))
 
+(defn- load-history-for-post! [post-id]
+  "Load history for a post (for badge display). Doesn't show loading spinner."
+  (api/pull!
+   {:posts/history {{:post/id post-id} '?versions}}
+   (fn [response]
+     (swap-state! state/set-history (get response 'versions)))
+   (fn [_] nil)))  ; Silently ignore errors
+
 (def actions
   "Action handlers passed to views."
-  {:on-select (fn [id] (swap-state! state/set-view :detail id))
+  {:on-select (fn [id]
+                (swap-state! state/set-view :detail id)
+                (load-history-for-post! id))
    :on-back (fn [e target]
               (.preventDefault e)
               (swap-state! state/set-view target (:selected-id @app-state)))
@@ -137,9 +152,11 @@
 (add-watch app-state :render (fn [_ _ _ _] (render!)))
 
 (defn ^:export init! []
+  (log/info "Blog app initializing...")
   (reset! root-el (js/document.getElementById "app"))
   (load-posts!)
-  (render!))
+  (render!)
+  (log/info "Blog app initialized"))
 
 ;; Initialize on load
 (init!)

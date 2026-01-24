@@ -33,7 +33,8 @@
   (:require
    [datahike.api :as d]
    [sg.flybot.pullable.collection :as coll]
-   [sg.flybot.blog.markdown :as md]))
+   [sg.flybot.blog.markdown :as md]
+   [sg.flybot.blog.log :as log]))
 
 ;;=============================================================================
 ;; Schema
@@ -150,9 +151,11 @@
 (defrecord PostsDataSource [conn]
   coll/DataSource
   (fetch [_ query]
+    (log/log-db-op :fetch :post (:post/id query))
     (normalize-entity (find-by conn query)))
 
   (list-all [_]
+    (log/log-db-op :list-all :post nil)
     (->> (d/q '[:find [(pull ?e [*]) ...] :where [?e :post/id _]] @conn)
          (map normalize-entity)
          (sort-by :post/created-at #(compare %2 %1))))
@@ -164,6 +167,7 @@
                          :post/created-at ts
                          :post/updated-at ts})]
       (d/transact conn [entity])
+      (log/log-db-create :post entity)
       (normalize-entity entity)))
 
   (update! [this query data]
@@ -172,6 +176,7 @@
                            {:post/id (:post/id post)
                             :post/updated-at (now)})]
         (d/transact conn [updates])
+        (log/log-db-update :post (:post/id post))
         (coll/fetch this {:post/id (:post/id post)}))))
 
   (delete! [this query]
@@ -179,6 +184,7 @@
       (let [eid (d/q '[:find ?e . :in $ ?id :where [?e :post/id ?id]]
                      @conn (:post/id post))]
         (d/transact conn [[:db/retractEntity eid]])
+        (log/log-db-delete :post (:post/id post))
         true)
       false)))
 
@@ -200,6 +206,7 @@
    Returns list of {:version/tx, :version/timestamp, :post/*} maps sorted newest first.
    Takes a db value (not conn) to ensure consistent view."
   [db post-id]
+  (log/debug "post-history called for post:" post-id)
   (let [history-db (d/history db)
         ;; Find all transactions that touched this post's content or title
         txs (d/q '[:find ?tx ?inst
@@ -210,6 +217,7 @@
                        [?e :post/title _ ?tx true])
                    [?tx :db/txInstant ?inst]]
                  history-db post-id)]
+    (log/debug "Found" (count txs) "transaction(s) for post" post-id)
     (->> txs
          (sort-by second)
          reverse
@@ -230,7 +238,10 @@
   (reify clojure.lang.ILookup
     (valAt [_ query]
       (when-let [post-id (:post/id query)]
-        (post-history @conn post-id)))
+        (log/debug "History lookup for post:" post-id)
+        (let [result (post-history @conn post-id)]
+          (log/debug "History result count:" (count result))
+          result)))
     (valAt [this query not-found]
       (or (.valAt this query) not-found))))
 

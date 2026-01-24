@@ -9,6 +9,7 @@
   (:require
    [sg.flybot.blog.api :as api]
    [sg.flybot.blog.db :as db]
+   [sg.flybot.blog.log :as log]
    [sg.flybot.pullable.remote :as remote]
    [org.httpkit.server :as http-kit]
    [ring.middleware.params :refer [wrap-params]]
@@ -65,12 +66,16 @@
     (let [ext (-> (:filename file) (str/split #"\.") last)
           filename (str (UUID/randomUUID) "." ext)
           dest-file (io/file uploads-dir filename)]
+      (log/debug "Uploading image:" (:filename file) "size:" (.length (:tempfile file)))
       (io/copy (:tempfile file) dest-file)
+      (log/info "Image uploaded:" filename)
       (-> (resp/response (str "{\"url\":\"/uploads/" filename "\"}"))
           (resp/content-type "application/json")))
-    (-> (resp/response "{\"error\":\"No image provided\"}")
-        (resp/status 400)
-        (resp/content-type "application/json"))))
+    (do
+      (log/warn "Image upload failed: no image provided")
+      (-> (resp/response "{\"error\":\"No image provided\"}")
+          (resp/status 400)
+          (resp/content-type "application/json")))))
 
 ;;=============================================================================
 ;; Ring App
@@ -124,11 +129,15 @@
   ([{:keys [port seed?] :or {port 8080 seed? true}}]
    (when @server
      (stop!))
+   (log/info "Starting blog server...")
    (reset! conn (db/create-conn!))
+   (log/log-db-connected db/default-cfg)
    (when seed?
-     (db/seed! @conn))
+     (db/seed! @conn)
+     (log/log-db-seeded 3))
    (let [app (make-app (make-api-fn @conn))]
      (reset! server (http-kit/run-server app {:port port})))
+   (log/log-startup port)
    (println "Blog server started on port" port)
    (println "  POST http://localhost:" port "/api - Pull endpoint")
    (println "  GET  http://localhost:" port "/api/_schema - Schema")
@@ -137,12 +146,14 @@
 (defn stop!
   "Stop the blog server."
   []
+  (log/log-shutdown)
   (when-let [s @server]
     (s)  ; http-kit stop fn
     (reset! server nil))
   (when-let [c @conn]
     (db/release-conn! c)
     (reset! conn nil))
+  (log/info "Server stopped")
   (println "Server stopped"))
 
 (defn restart!
@@ -150,6 +161,13 @@
   []
   (stop!)
   (start!))
+
+(defn -main
+  "Entry point for running server from command line."
+  [& _args]
+  (start!)
+  ;; Keep the main thread alive
+  @(promise))
 
 ^:rct/test
 (comment

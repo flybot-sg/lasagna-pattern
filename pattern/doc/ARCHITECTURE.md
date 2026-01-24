@@ -30,7 +30,7 @@ clojure -M:dev       # Start REPL
 ## Architecture
 
 ### Source Structure
-- `src/sg/flybot/pullable/core.cljc` - Core engine (~1,500 lines): matchers, rewriters, and compilation
+- `src/sg/flybot/pullable/impl.cljc` - Core engine (~2,500 lines): matchers, rewriters, and compilation
 - `src/sg/flybot/pullable/util.cljc` - Pure utilities (cond-let, vars->)
 - `notebook/tutorial.clj` - Interactive tutorial for learning the public API
 - `notebook/cli_parser.clj` - Real-world example: CLI argument parser
@@ -89,12 +89,31 @@ Run `bb test` to execute all tests in src/.
 ?x+      - One or more (lazy)
 ?x*!     - Zero or more (greedy)
 ?x+!     - One or more (greedy)
-{}       - Map pattern
+{}       - Map pattern (works with maps and ILookup)
 []       - Sequence pattern
 (?x :when pred)    - Constrained match
 (?x :default val)  - Default on failure
-$        - Special: full matched value in match-fn body
+$        - Special: original input data in match-fn body
 ```
+
+### Map Matching
+
+Map patterns support both standard Clojure maps and any `ILookup` implementation:
+
+```clojure
+;; Standard map matching (preserves unmatched keys)
+(match-fn {:a ?x} ?x) ;=> extracts :a, keeps other keys in result
+
+;; ILookup support for lazy data sources
+;; Only returns matched keys (can't enumerate all keys)
+(match-fn {:a ?x} ?x) ;=> works with any ILookup
+
+;; Indexed lookup with non-keyword keys
+{{:id 1} ?result}    ;=> lookup by map key
+{[0 1] ?cell}        ;=> lookup by vector key
+```
+
+Map keys in patterns are literal lookup keys (not sub-patterns). This enables indexed access patterns for collections.
 
 ## Schema Syntax Reference
 
@@ -112,12 +131,17 @@ Schemas validate pattern structure at compile time via `:schema` option in `comp
 [:optional :string]       ; nullable (nil allowed)
 
 ;; Map schemas
-{:name :string :age :number}     ; record (specific fields)
+{:name :string :age :number}     ; record (all keyword keys = restricted)
 [:map-of :keyword :number]       ; dictionary (homogeneous k/v types)
+{:post/id :number}               ; indexed lookup key schema (non-restricting)
 
 ;; Seq schemas
 [:string]                        ; homogeneous seq (all elements same type)
 [:tuple :number :string]         ; positional tuple
+
+;; Union (collection with multiple access patterns)
+[:union [post-schema] {query-schema post-schema}]
+;; Supports: (seq coll) -> [post...], (get coll query) -> post
 
 ;; Example usage
 (compile-pattern '{:name ?n :status ?s}

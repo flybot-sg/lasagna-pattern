@@ -29,7 +29,10 @@
   (assoc state :posts posts :loading? false))
 
 (defn set-view [state view & [post-id]]
-  (assoc state :view view :selected-id post-id))
+  (cond-> (assoc state :view view :selected-id post-id)
+    ;; Reset history when changing post
+    (not= post-id (:selected-id state))
+    (assoc :history [])))
 
 (defn update-form [state field value]
   (assoc-in state [:form field] value))
@@ -43,7 +46,7 @@
           :content (:post/content post "")}))
 
 (defn set-history [state history]
-  (assoc state :history history :loading? false))
+  (assoc state :history (or history []) :loading? false))
 
 (defn set-history-version [state version]
   (assoc state :history-version version))

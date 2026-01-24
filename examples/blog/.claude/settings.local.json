@@ -12,7 +12,12 @@
       "Bash(bb test:*)",
       "Bash(jj status:*)",
       "Bash(jj diff:*)",
-      "Bash(jj commit:*)"
+      "Bash(jj commit:*)",
+      "Bash(jj log:*)",
+      "Bash(jj describe:*)",
+      "Bash(/usr/bin/env clojure -X:dev:test)",
+      "Bash(jj git push:*)",
+      "Bash(jj bookmark:*)"
     ]
   }
 }
