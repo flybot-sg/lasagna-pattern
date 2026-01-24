@@ -15,6 +15,31 @@
    (def handler (remote/make-handler my-api))
    ```
 
+   ## CRUD Collections
+
+   For data sources supporting CRUD operations:
+
+   ```clojure
+   ;; 1. Implement DataSource for your backend
+   (defrecord MyDB [db-atom]
+     remote/DataSource
+     (fetch [_ query] (get @db-atom (:id query)))
+     (list-all [_] (vals @db-atom))
+     (create! [_ data] ...)
+     (update! [_ query data] ...)
+     (delete! [_ query] ...))
+
+   ;; 2. Create collection
+   (def items (remote/collection (->MyDB db)))
+
+   ;; 3. Use via ILookup/Seqable/Mutable
+   (get items {:id 3})           ; fetch
+   (seq items)                   ; list
+   (remote/mutate! items nil data)    ; create
+   (remote/mutate! items {:id 3} data) ; update
+   (remote/mutate! items {:id 3} nil)  ; delete
+   ```
+
    ## Client Quick Start (JVM only)
 
    ```clojure
@@ -45,7 +70,8 @@
    Success:  `{:data {:user {:name \"Alice\"}} :vars {'n \"Alice\"}}`
    Failure:  `{:errors [{:code :schema-violation :reason \"...\"}]}`"
   (:require
-   [sg.flybot.pullable.remote.http :as http]))
+   [sg.flybot.pullable.remote.http :as http]
+   [sg.flybot.pullable.remote.collection :as coll]))
 
 ;;=============================================================================
 ;; Public API
@@ -100,19 +126,85 @@
   "Decode bytes to Clojure data."
   http/decode)
 
-;; For custom collection types
-(def Wireable
-  "Protocol for types needing custom wire serialization.
+;;=============================================================================
+;; CRUD Collections
+;;=============================================================================
 
-   Implement this for custom collection types (like database-backed collections)
-   that should be converted to standard Clojure data for Transit serialization.
+(def DataSource
+  "Protocol for CRUD data source backends.
+
+   Methods:
+   - (fetch [this query]) - Fetch item matching query, returns item or nil
+   - (list-all [this]) - List all items, returns sequence
+   - (create! [this data]) - Create item, returns created item
+   - (update! [this query data]) - Update item, returns updated item or nil
+   - (delete! [this query]) - Delete item, returns true/false"
+  coll/DataSource)
+
+(def fetch
+  "Fetch item from DataSource matching query."
+  coll/fetch)
+
+(def list-all
+  "List all items from DataSource."
+  coll/list-all)
+
+(def create!
+  "Create item in DataSource. Returns created item."
+  coll/create!)
+
+(def update!
+  "Update item in DataSource matching query. Returns updated item or nil."
+  coll/update!)
+
+(def delete!
+  "Delete item from DataSource matching query. Returns true/false."
+  coll/delete!)
+
+(def Mutable
+  "Protocol for collections supporting mutations.
+
+   Use mutate! for CRUD:
+   - (mutate! coll nil data) -> CREATE
+   - (mutate! coll query data) -> UPDATE
+   - (mutate! coll query nil) -> DELETE"
+  coll/Mutable)
+
+(def mutate!
+  "Perform mutation on a Mutable collection.
+
+   - (mutate! coll nil data) -> CREATE: returns created item
+   - (mutate! coll query data) -> UPDATE: returns updated item
+   - (mutate! coll query nil) -> DELETE: returns true/false"
+  coll/mutate!)
+
+(def collection
+  "Create a Collection wrapping a DataSource.
+
+   Options:
+   - :indexes - Set of indexed field sets (default #{#{:id}})
+
+   Returns collection implementing ILookup, Seqable, Counted, Mutable, Wireable.
 
    Example:
    ```clojure
-   (extend-type MyCollection
-     remote/Wireable
-     (->wire [this] (vec this)))
+   (def items (collection my-datasource {:indexes #{#{:id} #{:email}}}))
+   (get items {:id 3})      ; fetch by id
+   (get items {:email \"x\"}) ; fetch by email (indexed)
+   (seq items)              ; list all
+   (mutate! items nil data) ; create
    ```"
+  coll/collection)
+
+;; For custom wire serialization (advanced use)
+(def Wireable
+  "Protocol for types needing custom wire serialization.
+
+   Implement this for custom types that should be converted to
+   standard Clojure data for Transit serialization.
+
+   Note: Collection already implements Wireable, so you typically
+   don't need this unless creating custom types."
   http/Wireable)
 
 (def ->wire
@@ -124,4 +216,6 @@
   make-handler ;=>> fn?
   wrap-api ;=>> fn?
   encode ;=>> fn?
-  decode) ;=>> fn?)
+  decode ;=>> fn?
+  collection ;=>> fn?
+  mutate!) ;=>> fn?)
