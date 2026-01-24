@@ -1,11 +1,26 @@
 # Pull Blog Example
 
 A personal blog demonstrating the pull-based remote API with noun-only CRUD.
+Includes a ClojureScript SPA frontend.
 
 ## Quick Start
 
+### Option 1: Full-Stack (Server + SPA)
+
 ```bash
-# From this directory
+# Build the frontend
+npm install
+npm run release
+
+# Start the server
+clj -M:dev -e "(require '[sg.flybot.blog.server :as s]) (s/start!)"
+```
+
+Open http://localhost:8080 in your browser.
+
+### Option 2: REPL-Driven Development
+
+```bash
 clj -M:dev
 ```
 
@@ -32,6 +47,18 @@ Then in the REPL:
 ;; Stop
 (halt! sys)
 ```
+
+### Option 3: Frontend Development (Hot Reload)
+
+```bash
+# Terminal 1: Start backend
+clj -M:dev -e "(require '[sg.flybot.blog.server :as s]) (s/start!)"
+
+# Terminal 2: Start shadow-cljs watcher
+npm run dev
+```
+
+Frontend hot reloads at http://localhost:3000, proxies API to backend.
 
 ## Noun-Only CRUD
 
@@ -65,16 +92,31 @@ The session must contain `:user-email` - integrate with your auth middleware
 
 ## Files
 
+### Backend (Clojure)
+
 | File | Description |
 |------|-------------|
-| `src/.../db.cljc` | In-memory database with DataSource |
+| `src/.../db.clj` | Datahike database with DataSource |
 | `src/.../api.cljc` | Schema and API builder |
 | `src/.../auth.cljc` | Role-based schema selection |
 | `src/.../system.clj` | System integration (life-cycle-map) |
-| `src/.../server.clj` | Standalone server |
+| `src/.../server.clj` | HTTP server with static file serving |
+
+### Frontend (ClojureScript)
+
+| File | Description |
+|------|-------------|
+| `src/.../ui/core.cljs` | App entry point, API actions, rendering |
+| `src/.../ui/api.cljs` | Transit-based API client |
+| `src/.../ui/state.cljc` | State management (testable on JVM) |
+| `src/.../ui/views.cljc` | Hiccup views (testable on JVM) |
 
 ## Testing
 
 ```bash
+# Run all tests (backend + frontend state/views)
 clj -X:dev:test
+
+# Build frontend release
+npm run release
 ```

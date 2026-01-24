@@ -152,6 +152,25 @@
   ;=> '{:user {:id $id}}
   (resolve-params '{:user {:id $id}} nil)
   ;=> '{:user {:id $id}}
+
+  ;; parse-mutation: detects CREATE pattern
+  (parse-mutation '{:posts {nil {:title "New"}}})
+  ;=> {:coll-key :posts, :query nil, :value {:title "New"}}
+
+  ;; parse-mutation: detects UPDATE pattern
+  (parse-mutation '{:posts {{:id 3} {:title "Updated"}}})
+  ;=> {:coll-key :posts, :query {:id 3}, :value {:title "Updated"}}
+
+  ;; parse-mutation: detects DELETE pattern
+  (parse-mutation '{:posts {{:id 3} nil}})
+  ;=> {:coll-key :posts, :query {:id 3}, :value nil}
+
+  ;; parse-mutation: returns nil for read patterns
+  (parse-mutation '{:posts ?all})
+  ;=> nil
+
+  (parse-mutation '{:posts {{:id 3} ?post}})
+  ;=> nil
   )
 
 ;;=============================================================================
@@ -170,8 +189,10 @@
        v))
    x))
 
-(defn- success [data vars]
-  {:data (normalize-value data) :vars (normalize-value vars)})
+(defn- success
+  "Build success response. Returns vars directly (normalized for wire)."
+  [vars]
+  (normalize-value vars))
 
 (defn- error [code reason & [path]]
   (cond-> {:code code :reason reason}
@@ -181,8 +202,7 @@
   {:errors (if (sequential? err) err [err])})
 
 (defn- success? [response]
-  (and (contains? response :data)
-       (not (contains? response :errors))))
+  (not (contains? response :errors)))
 
 (defn- match-failure->error
   "Convert pattern MatchFailure to response error."
@@ -217,6 +237,41 @@
   {:body (encode response format)
    :content-type (get content-types format)})
 
+(defn- parse-mutation
+  "Detect if pattern is a mutation. Returns {:coll-key :query :value} or nil.
+
+   Mutation patterns:
+   - {:posts {nil data}}         -> CREATE (query=nil, value=data)
+   - {:posts {{:id 3} data}}     -> UPDATE (query={:id 3}, value=data)
+   - {:posts {{:id 3} nil}}      -> DELETE (query={:id 3}, value=nil)
+
+   Read patterns return nil (value is ?-prefixed symbol):
+   - {:posts ?all}               -> list all
+   - {:posts {{:id 3} ?post}}    -> get by query"
+  [pattern]
+  (when (and (map? pattern) (= 1 (count pattern)))
+    (let [[coll-key inner] (first pattern)]
+      (when (and (keyword? coll-key) (map? inner) (= 1 (count inner)))
+        (let [[query value] (first inner)
+              variable? (and (symbol? value) (= \? (first (name value))))]
+          (when-not variable?
+            {:coll-key coll-key :query query :value value}))))))
+
+(defn- execute-mutation
+  "Execute a mutation against the API collection."
+  [api-fn ring-request {:keys [coll-key query value]}]
+  (try
+    (let [{:keys [data]} (api-fn ring-request)
+          coll (get data coll-key)]
+      (if (and coll (satisfies? coll/Mutable coll))
+        (let [result (coll/mutate! coll query value)]
+          (success {(symbol (name coll-key)) result}))
+        (failure (error :invalid-collection
+                        (str "Collection " coll-key " not found or not mutable")))))
+    (catch #?(:clj Exception :cljs js/Error) e
+      (failure (error :execution-error
+                      #?(:clj (.getMessage e) :cljs (.-message e)))))))
+
 (defn- execute-pull
   "Execute pull pattern against API data.
    Params in pull-request are used for:
@@ -228,15 +283,19 @@
           ;; Resolve $params in pattern using rule-based substitution
           resolved-pattern (resolve-params (:pattern pull-request) params)
           ;; Also merge params into ring request for API use
-          ring-request (update ring-request :params merge params)
-          {:keys [data schema]} (api-fn ring-request)
-          compiled (pattern/compile-pattern
-                    resolved-pattern
-                    (cond-> {} schema (assoc :schema schema)))
-          result (compiled (pattern/vmr data))]
-      (if (pattern/failure? result)
-        (failure (match-failure->error result))
-        (success (:val result) (:vars result))))
+          ring-request (update ring-request :params merge params)]
+      ;; Check if it's a mutation pattern first
+      (if-let [mutation (parse-mutation resolved-pattern)]
+        (execute-mutation api-fn ring-request mutation)
+        ;; Otherwise execute as read pattern
+        (let [{:keys [data schema]} (api-fn ring-request)
+              compiled (pattern/compile-pattern
+                        resolved-pattern
+                        (cond-> {} schema (assoc :schema schema)))
+              result (compiled (pattern/vmr data))]
+          (if (pattern/failure? result)
+            (failure (match-failure->error result))
+            (success (:vars result))))))
     (catch #?(:clj Exception :cljs js/Error) e
       (failure (error :execution-error
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
@@ -267,7 +326,7 @@
   (let [res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
         schema (:schema (api-fn ring-request))
         response (if schema
-                   (success schema {})
+                   (success {'schema schema})
                    (failure (error :not-found "No schema available")))
         {:keys [body content-type]} (encode-response response res-fmt)]
     (ring-response (if (success? response) 200 404) body content-type)))

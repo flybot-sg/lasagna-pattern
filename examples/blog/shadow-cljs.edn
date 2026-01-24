@@ -1,0 +1,9 @@
+{:deps true
+ :deps-aliases [:cljs]
+ :dev-http {3000 "resources/public"}
+ :builds
+ {:app {:target :browser
+        :output-dir "resources/public/js"
+        :asset-path "/js"
+        :modules {:main {:entries [sg.flybot.blog.ui.core]}}
+        :devtools {:after-load sg.flybot.blog.ui.core/render!}}}}

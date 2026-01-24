@@ -12,7 +12,10 @@
    [sg.flybot.pullable.remote :as remote]
    [org.httpkit.server :as http-kit]
    [ring.middleware.params :refer [wrap-params]]
-   [ring.middleware.keyword-params :refer [wrap-keyword-params]]))
+   [ring.middleware.keyword-params :refer [wrap-keyword-params]]
+   [ring.middleware.resource :refer [wrap-resource]]
+   [ring.middleware.content-type :refer [wrap-content-type]]
+   [ring.util.response :as resp]))
 
 ;;=============================================================================
 ;; State
@@ -43,19 +46,21 @@
 ;; Ring App
 ;;=============================================================================
 
-(defn not-found-handler [_request]
-  {:status 404
-   :headers {"Content-Type" "text/plain"}
-   :body "Not Found"})
+(defn- index-handler [_request]
+  (-> (resp/resource-response "index.html" {:root "public"})
+      (resp/content-type "text/html")))
 
 (defn make-app
   "Create Ring handler with given API function.
 
    Routes:
    - POST /api - Pull API endpoint
-   - GET /api/_schema - Schema introspection"
+   - GET /api/_schema - Schema introspection
+   - GET /* - Static files from resources/public"
   [api-fn]
-  (-> not-found-handler
+  (-> index-handler
+      (wrap-resource "public")
+      wrap-content-type
       (remote/wrap-api api-fn {:path "/api"})
       wrap-keyword-params
       wrap-params))
@@ -107,24 +112,31 @@
 ^:rct/test
 (comment
   (require '[ring.mock.request :as mock]
-           '[sg.flybot.pullable.remote.http :as http])
+           '[sg.flybot.pullable.remote.http :as http]
+           '[clojure.java.io :as io])
 
   ;; Setup
   (def test-conn (db/create-conn!))
   (db/seed! test-conn)
   (def app (make-app (make-api-fn test-conn)))
 
-  ;; Test API schema endpoint
+  (defn pull [pattern]
+    (let [req (-> (mock/request :post "/api")
+                  (mock/header "Content-Type" "application/transit+json")
+                  (mock/header "Accept" "application/transit+json")
+                  (mock/body (http/encode {:pattern pattern} :transit-json)))
+          resp (app req)]
+      (http/decode (.readAllBytes (io/input-stream (:body resp))) :transit-json)))
+
+  ;; Schema endpoint
   (:status (app (-> (mock/request :get "/api/_schema")
                     (mock/header "Accept" "application/transit+json")))) ;=> 200
 
-  ;; Test pull request
-  (let [req (-> (mock/request :post "/api")
-                (mock/header "Content-Type" "application/transit+json")
-                (mock/header "Accept" "application/transit+json")
-                (mock/body (http/encode {:pattern '{:posts ?posts}} :transit-json)))
-        resp (app req)]
-    (:status resp)) ;=> 200
+  ;; LIST - response is {posts [...]}
+  (count (get (pull '{:posts ?posts}) 'posts)) ;=> 3
+
+  ;; CREATE - returns created post
+  (:title (get (pull '{:posts {nil {:title "New" :content "C" :author "A"}}}) 'posts)) ;=> "New"
 
   ;; Cleanup
   (db/release-conn! test-conn))
