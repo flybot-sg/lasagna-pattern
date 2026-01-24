@@ -18,7 +18,9 @@
       "Bash(/usr/bin/env clojure -X:dev:test)",
       "Bash(jj git push:*)",
       "Bash(jj bookmark:*)",
-      "Bash(npm run release:*)"
+      "Bash(npm run release:*)",
+      "Bash(/usr/bin/env java:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

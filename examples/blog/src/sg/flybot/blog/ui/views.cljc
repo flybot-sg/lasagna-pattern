@@ -15,11 +15,19 @@
   #?(:clj (when d (str d))
      :cljs (when d (.toLocaleDateString (js/Date. d)))))
 
-(defn tag-list [tags]
-  (when (seq tags)
-    [:div.tags
-     (for [tag tags]
-       [:span.tag {:replicant/key tag} tag])]))
+(defn tag-list
+  "Render tags. If dispatch! provided, tags are clickable to filter."
+  ([tags] (tag-list tags nil))
+  ([tags dispatch!]
+   (when (seq tags)
+     [:div.tags
+      (for [tag tags]
+        [:span.tag (cond-> {:replicant/key tag}
+                     dispatch! (assoc :on {:click (fn [e]
+                                                    (.stopPropagation e)
+                                                    (dispatch! [:filter-by-tag tag]))}
+                                      :style {:cursor "pointer"}))
+         tag])])))
 
 (defn- strip-frontmatter [content]
   (if (and (string? content) (re-find #"^(?:---|\*\*\*)\s*\n" content))
@@ -84,20 +92,26 @@
    [:h2 title]
    [:div.post-meta "By " author " • " (format-date created-at)]
    [:div.post-content (render-markdown content)]
-   (tag-list tags)])
+   (tag-list tags dispatch!)])
 
-(defn post-list-view [{:keys [posts loading? error]} dispatch!]
-  [:div
-   [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
-    [:h1 "Blog Posts"]
-    [:button {:on {:click #(dispatch! :view-new)}} "New Post"]]
-   (when error [:div.error error])
-   (if loading?
-     [:div.loading "Loading..."]
-     [:div.posts
-      (for [post posts]
-        [:div {:replicant/key (:post/id post)}
-         (post-card post dispatch!)])])])
+(defn post-list-view [{:keys [loading? error tag-filter] :as state} dispatch!]
+  (let [posts (state/filtered-posts state)]
+    [:div
+     [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
+      [:h1 "Blog Posts"]
+      [:button {:on {:click #(dispatch! :view-new)}} "New Post"]]
+     (when tag-filter
+       [:div.tag-filter {:style {:margin-bottom "1rem"}}
+        [:span.tag {:style {:cursor "pointer"}
+                    :on {:click #(dispatch! [:filter-by-tag nil])}}
+         tag-filter " ×"]])
+     (when error [:div.error error])
+     (if loading?
+       [:div.loading "Loading..."]
+       [:div.posts
+        (for [post posts]
+          [:div {:replicant/key (:post/id post)}
+           (post-card post dispatch!)])])]))
 
 (defn post-detail-view [state dispatch!]
   (let [post (state/selected-post state)
@@ -125,7 +139,7 @@
             history-count])]]
        [:h1 (:post/title post)]
        [:div.post-meta "By " (:post/author post) " • " (format-date (:post/created-at post))]
-       (tag-list (:post/tags post))
+       (tag-list (:post/tags post) dispatch!)
        [:div.post-body (render-markdown (:post/content post))]
        [:div.button-group
         [:button {:on {:click #(dispatch! [:view-edit post])}} "Edit"]
@@ -225,5 +239,7 @@
   (strip-frontmatter nil) ;=> ""
   (first (post-card {:post/id 1 :post/title "Test" :post/author "Me" :post/content "Hello"} identity)) ;=> :div.post-card
   (tag-list []) ;=> nil
+  (tag-list [] identity) ;=> nil
   (first (tag-list ["a" "b"])) ;=> :div.tags
+  (first (tag-list ["a" "b"] identity)) ;=> :div.tags
   (first (app-view {:view :list :posts [] :loading? false} identity))) ;=> :div)

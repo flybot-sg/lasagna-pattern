@@ -39,6 +39,7 @@
    :restore-version state/restore-version
    :restore-confirmed state/restore-confirmed
    :navigate        state/navigate
+   :filter-by-tag   state/filter-by-tag
    :error           state/set-error})
 
 (defn- apply-handler [state event]

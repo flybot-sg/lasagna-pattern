@@ -17,7 +17,8 @@
    :error nil
    :form {:title "" :content ""}
    :history []
-   :history-version nil})
+   :history-version nil
+   :tag-filter nil})  ; nil = show all, string = filter by tag
 
 ;;=============================================================================
 ;; Selectors
@@ -25,6 +26,11 @@
 
 (defn selected-post [{:keys [posts selected-id]}]
   (first (filter #(= (:post/id %) selected-id) posts)))
+
+(defn filtered-posts [{:keys [posts tag-filter]}]
+  (if tag-filter
+    (filter #(some #{tag-filter} (:post/tags %)) posts)
+    posts))
 
 (defn form->post-data [{:keys [form]}]
   {:post/title (:title form)
@@ -127,6 +133,11 @@
 (defn update-form [state field value]
   {:state (assoc-in state [:form field] value)})
 
+;; --- Tag Filter ---
+
+(defn filter-by-tag [state tag]
+  {:state (assoc state :view :list :tag-filter tag)})
+
 ;; --- History ---
 
 (defn view-history [state]
@@ -156,7 +167,7 @@
 
 (defn navigate [state {:keys [view id]}]
   (case view
-    :list    {:state (assoc state :view :list)}
+    :list    {:state (assoc state :view :list :tag-filter nil)}
     :detail  {:state (assoc state :view :detail :selected-id id)
               :fx (api-fx {:posts/history {{:post/id id} '?versions}}
                           :history-fetched)}
@@ -200,5 +211,25 @@
 
   ;; set-error clears loading
   (let [{:keys [state]} (set-error (assoc initial-state :loading? true) "Oops")]
-    [(:loading? state) (:error state)]))
-  ;=> [false "Oops"])
+    [(:loading? state) (:error state)])
+  ;=> [false "Oops"]
+
+  ;; filtered-posts returns all when no filter
+  (filtered-posts {:posts [{:post/id 1}] :tag-filter nil})
+  ;=> [{:post/id 1}]
+
+  ;; filtered-posts filters by tag
+  (filtered-posts {:posts [{:post/id 1 :post/tags ["clojure"]}
+                           {:post/id 2 :post/tags ["java"]}]
+                   :tag-filter "clojure"})
+  ;=> [{:post/id 1 :post/tags ["clojure"]}]
+
+  ;; filter-by-tag sets filter and switches to list view
+  (let [{:keys [state]} (filter-by-tag {:view :detail} "clojure")]
+    [(:view state) (:tag-filter state)])
+  ;=> [:list "clojure"]
+
+  ;; filter-by-tag with nil clears filter
+  (let [{:keys [state]} (filter-by-tag {:tag-filter "clojure"} nil)]
+    (:tag-filter state)))
+  ;=> nil)
