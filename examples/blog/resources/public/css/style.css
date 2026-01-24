@@ -51,6 +51,8 @@ h1 {
 
 .post-content {
   color: #555;
+  max-height: 200px;
+  overflow: hidden;
 }
 
 .tags {
