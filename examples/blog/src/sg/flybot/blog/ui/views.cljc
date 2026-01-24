@@ -32,10 +32,18 @@
       content)
     (or content "")))
 
-(defn render-markdown
-  "Render markdown content as HTML (strips frontmatter)."
+(defn- unescape-markdown
+  "Remove backslash escapes that Toast UI adds to URLs (e.g. \\. becomes .)"
   [content]
-  (let [body (strip-frontmatter content)]
+  #?(:clj content
+     :cljs (if (string? content)
+             (.replace content (js/RegExp. "\\\\([.()\\[\\]])" "g") "$1")
+             content)))
+
+(defn render-markdown
+  "Render markdown content as HTML (strips frontmatter, unescapes Toast UI escapes)."
+  [content]
+  (let [body (-> content strip-frontmatter unescape-markdown)]
     #?(:clj [:pre body]
        :cljs (when (seq body)
                [:div {:innerHTML (marked body)}]))))

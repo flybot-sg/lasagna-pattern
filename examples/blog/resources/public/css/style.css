@@ -176,3 +176,41 @@ button.danger:hover {
   border-radius: 4px;
   margin-bottom: 1rem;
 }
+
+/* Image alignment and text wrapping
+   Usage in markdown:
+   ![float-right](image.jpg)  - floats image right with text wrap
+   ![float-left](image.jpg)   - floats image left with text wrap
+   ![center](image.jpg)       - centers image as block
+*/
+.post-body img[alt*="float-right"],
+.post-content img[alt*="float-right"] {
+  float: right;
+  margin: 0.5rem 0 1rem 1.5rem;
+  max-width: 50%;
+  border-radius: 4px;
+}
+
+.post-body img[alt*="float-left"],
+.post-content img[alt*="float-left"] {
+  float: left;
+  margin: 0.5rem 1.5rem 1rem 0;
+  max-width: 50%;
+  border-radius: 4px;
+}
+
+.post-body img[alt*="center"],
+.post-content img[alt*="center"] {
+  display: block;
+  margin: 1rem auto;
+  max-width: 100%;
+  border-radius: 4px;
+}
+
+/* Clear floats after content sections */
+.post-body::after,
+.post-content::after {
+  content: "";
+  display: table;
+  clear: both;
+}
