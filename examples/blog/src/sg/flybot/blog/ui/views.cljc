@@ -4,8 +4,9 @@
    All functions take state and return hiccup data.
    Event handlers are passed as a map of action functions."
   (:require [sg.flybot.blog.ui.state :as state]
-            [sg.flybot.blog.markdown :as md]
-            #?(:cljs ["marked" :refer [marked]])))
+            #?(:cljs [sg.flybot.blog.ui.api :as api])
+            #?(:cljs ["marked" :refer [marked]])
+            #?(:cljs ["@toast-ui/editor" :as toastui])))
 
 ;;=============================================================================
 ;; Helpers
@@ -21,13 +22,55 @@
      (for [tag tags]
        [:span.tag {:replicant/key tag} tag])]))
 
-(defn render-markdown
-  "Render markdown content as hiccup (strips frontmatter)."
+(defn- strip-frontmatter
+  "Remove YAML frontmatter from markdown content.
+   Handles both --- and *** delimiters (Toast UI converts --- to ***)."
   [content]
-  (let [body (:content (md/parse content))]
+  (if (and (string? content) (re-find #"^(?:---|\*\*\*)\s*\n" content))
+    (if-let [match (re-find #"(?s)^(?:---|\*\*\*)\s*\n.*?\n(?:---|\*\*\*)\s*\n?" content)]
+      (subs content (count match))
+      content)
+    (or content "")))
+
+(defn render-markdown
+  "Render markdown content as HTML (strips frontmatter)."
+  [content]
+  (let [body (strip-frontmatter content)]
     #?(:clj [:pre body]
        :cljs (when (seq body)
                [:div {:innerHTML (marked body)}]))))
+
+;;=============================================================================
+;; Markdown Editor (Toast UI)
+;;=============================================================================
+
+#?(:cljs
+   (defn- init-editor!
+     "Initialize Toast UI Editor on a DOM node."
+     [node content on-change]
+     (let [Editor (or (.-default toastui) (.-Editor toastui) toastui)
+           editor (Editor. #js {:el node
+                                :height "400px"
+                                :initialEditType "wysiwyg"
+                                :previewStyle "vertical"
+                                :initialValue (or content "")
+                                :hooks #js {:addImageBlobHook
+                                            (fn [blob callback]
+                                              (-> (api/upload-image! blob)
+                                                  (.then #(callback % (.-name blob))))
+                                              false)}})]
+       (.on editor "change" #(on-change (.getMarkdown editor)))
+       editor)))
+
+(defn markdown-editor
+  "WYSIWYG markdown editor component using Toast UI Editor."
+  [content on-change]
+  #?(:clj [:textarea {:value content}]
+     :cljs [:div.editor-container
+            {:replicant/on-mount
+             (fn [{:keys [replicant/node replicant/remember]}]
+               (remember {:editor (init-editor! node content on-change)
+                          :content content}))}]))
 
 ;;=============================================================================
 ;; Components
@@ -81,17 +124,8 @@
       [:input {:type "text" :value (:title form)
                :on {:input #((:on-field actions) :title %)}}]]
      [:div.form-group
-      [:label "Author"]
-      [:input {:type "text" :value (:author form)
-               :on {:input #((:on-field actions) :author %)}}]]
-     [:div.form-group
-      [:label "Tags (comma-separated)"]
-      [:input {:type "text" :value (:tags form)
-               :on {:input #((:on-field actions) :tags %)}}]]
-     [:div.form-group
       [:label "Content"]
-      [:textarea {:value (:content form)
-                  :on {:input #((:on-field actions) :content %)}}]]
+      (markdown-editor (:content form) (:on-content actions))]
      [:button {:on {:click (:on-submit actions)}}
       (if editing? "Save Changes" "Create Post")]]))
 
@@ -109,6 +143,26 @@
 
 ^:rct/test
 (comment
+  ;; strip-frontmatter removes YAML frontmatter
+  (strip-frontmatter "---\nauthor: Bob\n---\n\nHello")
+  ;=> "Hello"
+
+  ;; strip-frontmatter handles tags
+  (strip-frontmatter "---\nauthor: Alice\ntags:\n  - a\n  - b\n---\n\nContent")
+  ;=> "Content"
+
+  ;; strip-frontmatter handles *** delimiters (Toast UI format)
+  (strip-frontmatter "***\nauthor: Bob\n***\n\nHello")
+  ;=> "Hello"
+
+  ;; strip-frontmatter passes through content without frontmatter
+  (strip-frontmatter "Just content")
+  ;=> "Just content"
+
+  ;; strip-frontmatter handles nil
+  (strip-frontmatter nil)
+  ;=> ""
+
   ;; post-card returns hiccup
   (first (post-card {:post/id 1 :post/title "Test" :post/author "Me" :post/content "Hello"} {}))
   ;=> :div.post-card

@@ -1,7 +1,5 @@
 (ns sg.flybot.blog.ui.state
-  "Application state - pure data manipulation."
-  (:require [clojure.string :as str]
-            [sg.flybot.blog.markdown :as md]))
+  "Application state - pure data manipulation.")
 
 ;;=============================================================================
 ;; State Shape
@@ -13,7 +11,7 @@
    :selected-id nil
    :loading? false
    :error nil
-   :form {:title "" :content "" :author "" :tags ""}})
+   :form {:title "" :content ""}})
 
 ;;=============================================================================
 ;; State Transitions (pure functions)
@@ -35,15 +33,12 @@
   (assoc-in state [:form field] value))
 
 (defn reset-form [state]
-  (assoc state :form {:title "" :content "" :author "" :tags ""}))
+  (assoc state :form {:title "" :content ""}))
 
 (defn set-form-from-post [state post]
-  (let [parsed (md/parse (:post/content post))]
-    (assoc state :form
-           {:title (:post/title post "")
-            :content (:content parsed "")
-            :author (:author parsed (:post/author post ""))
-            :tags (str/join ", " (:tags parsed (:post/tags post [])))})))
+  (assoc state :form
+         {:title (:post/title post "")
+          :content (:post/content post "")}))
 
 ;;=============================================================================
 ;; Selectors (pure functions)
@@ -53,30 +48,10 @@
   (let [{:keys [posts selected-id]} state]
     (first (filter #(= (:post/id %) selected-id) posts))))
 
-(defn parse-tags [tags-str]
-  (->> (str/split tags-str #",")
-       (map str/trim)
-       (remove empty?)
-       vec))
-
-(defn build-content
-  "Build markdown content with YAML frontmatter from form fields."
-  [{:keys [content author tags]}]
-  (let [tag-list (parse-tags tags)
-        has-frontmatter? (and (seq author) (or (seq author) (seq tag-list)))]
-    (if has-frontmatter?
-      (str "---\n"
-           (when (seq author) (str "author: " author "\n"))
-           (when (seq tag-list)
-             (str "tags:\n" (str/join "" (map #(str "  - " % "\n") tag-list))))
-           "---\n\n"
-           content)
-      content)))
-
 (defn form->post-data [state]
-  (let [{:keys [title] :as form} (:form state)]
+  (let [{:keys [title content]} (:form state)]
     {:post/title title
-     :post/content (build-content form)}))
+     :post/content content}))
 
 ;;=============================================================================
 ;; Tests
@@ -85,7 +60,7 @@
 ^:rct/test
 (comment
   (set-loading initial-state true)
-  ;=> {:view :list, :posts [], :selected-id nil, :loading? true, :error nil, :form {:title "", :content "", :author "", :tags ""}}
+  ;=> {:view :list, :posts [], :selected-id nil, :loading? true, :error nil, :form {:title "", :content ""}}
 
   (-> initial-state
       (set-posts [{:id 1 :title "Test"}])
@@ -93,19 +68,8 @@
       count)
   ;=> 1
 
-  (parse-tags "clojure, web, api")
-  ;=> ["clojure" "web" "api"]
-
-  (parse-tags "")
-  ;=> []
-
-  ;; build-content creates frontmatter
-  (build-content {:content "Hello" :author "Me" :tags "a, b"})
-  ;=> "---\nauthor: Me\ntags:\n  - a\n  - b\n---\n\nHello"
-
-  ;; form->post-data builds content with frontmatter
+  ;; form->post-data extracts title and content
   (-> initial-state
-      (assoc :form {:title "T" :content "C" :author "A" :tags "x, y"})
-      form->post-data
-      :title))
-  ;=> "T")
+      (assoc :form {:title "T" :content "C"})
+      form->post-data))
+  ;=> {:post/title "T", :post/content "C"})

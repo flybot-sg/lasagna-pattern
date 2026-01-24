@@ -86,6 +86,8 @@
    :on-delete delete-post!
    :on-field (fn [field e]
                (swap-state! state/update-form field (get-input-value e)))
+   :on-content (fn [markdown]
+                 (swap-state! state/update-form :content markdown))
    :on-submit (fn [_]
                 (if (= :edit (:view @app-state))
                   (update-post!)

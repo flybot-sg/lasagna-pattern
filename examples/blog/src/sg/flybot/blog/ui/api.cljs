@@ -35,3 +35,12 @@
       (.then (fn [text]
                (on-success (decode text))))
       (.catch on-error)))
+
+(defn upload-image!
+  "Upload image blob to server. Returns promise resolving to image URL."
+  [blob]
+  (let [form-data (js/FormData.)]
+    (.append form-data "image" blob (.-name blob))
+    (-> (js/fetch "/api/upload" #js {:method "POST" :body form-data})
+        (.then #(.json %))
+        (.then #(.-url %)))))

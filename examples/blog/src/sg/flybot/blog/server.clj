@@ -13,9 +13,13 @@
    [org.httpkit.server :as http-kit]
    [ring.middleware.params :refer [wrap-params]]
    [ring.middleware.keyword-params :refer [wrap-keyword-params]]
+   [ring.middleware.multipart-params :refer [wrap-multipart-params]]
    [ring.middleware.resource :refer [wrap-resource]]
    [ring.middleware.content-type :refer [wrap-content-type]]
-   [ring.util.response :as resp]))
+   [ring.util.response :as resp]
+   [clojure.java.io :as io]
+   [clojure.string :as str])
+  (:import [java.util UUID]))
 
 ;;=============================================================================
 ;; State
@@ -43,6 +47,32 @@
      :schema api/schema}))
 
 ;;=============================================================================
+;; Image Upload
+;;=============================================================================
+
+(def ^:private uploads-dir "resources/public/uploads")
+
+(defn- ensure-uploads-dir! []
+  (let [dir (io/file uploads-dir)]
+    (when-not (.exists dir)
+      (.mkdirs dir))))
+
+(defn- upload-image-handler
+  "Handle image upload. Returns JSON with the image URL."
+  [request]
+  (ensure-uploads-dir!)
+  (if-let [file (get-in request [:params "image"])]
+    (let [ext (-> (:filename file) (str/split #"\.") last)
+          filename (str (UUID/randomUUID) "." ext)
+          dest-file (io/file uploads-dir filename)]
+      (io/copy (:tempfile file) dest-file)
+      (-> (resp/response (str "{\"url\":\"/uploads/" filename "\"}"))
+          (resp/content-type "application/json")))
+    (-> (resp/response "{\"error\":\"No image provided\"}")
+        (resp/status 400)
+        (resp/content-type "application/json"))))
+
+;;=============================================================================
 ;; Ring App
 ;;=============================================================================
 
@@ -50,11 +80,21 @@
   (-> (resp/resource-response "index.html" {:root "public"})
       (resp/content-type "text/html")))
 
+(defn- wrap-upload-route
+  "Add image upload route."
+  [handler]
+  (fn [request]
+    (if (and (= :post (:request-method request))
+             (= "/api/upload" (:uri request)))
+      (upload-image-handler request)
+      (handler request))))
+
 (defn make-app
   "Create Ring handler with given API function.
 
    Routes:
    - POST /api - Pull API endpoint
+   - POST /api/upload - Image upload endpoint
    - GET /api/_schema - Schema introspection
    - GET /* - Static files from resources/public"
   [api-fn]
@@ -62,6 +102,8 @@
       (wrap-resource "public")
       wrap-content-type
       (remote/wrap-api api-fn {:path "/api"})
+      wrap-upload-route
+      wrap-multipart-params
       wrap-keyword-params
       wrap-params))
 
