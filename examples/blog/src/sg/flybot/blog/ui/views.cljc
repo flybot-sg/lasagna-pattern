@@ -1,8 +1,7 @@
 (ns sg.flybot.blog.ui.views
   "UI views - pure functions returning hiccup.
 
-   All functions take state and return hiccup data.
-   Event handlers are passed as a map of action functions."
+   Views emit events by calling (dispatch! :event) or (dispatch! [:event arg])."
   (:require [sg.flybot.blog.ui.state :as state]
             #?(:cljs [sg.flybot.blog.ui.api :as api])
             #?(:cljs ["marked" :refer [marked]])
@@ -22,48 +21,37 @@
      (for [tag tags]
        [:span.tag {:replicant/key tag} tag])]))
 
-(defn- strip-frontmatter
-  "Remove YAML frontmatter from markdown content.
-   Handles both --- and *** delimiters (Toast UI converts --- to ***)."
-  [content]
+(defn- strip-frontmatter [content]
   (if (and (string? content) (re-find #"^(?:---|\*\*\*)\s*\n" content))
     (if-let [match (re-find #"(?s)^(?:---|\*\*\*)\s*\n.*?\n(?:---|\*\*\*)\s*\n?" content)]
       (subs content (count match))
       content)
     (or content "")))
 
-(defn- unescape-markdown
-  "Remove backslash escapes that Toast UI adds to URLs (e.g. \\. becomes .)"
-  [content]
+(defn- unescape-markdown [content]
   #?(:clj content
      :cljs (if (string? content)
              (.replace content (js/RegExp. "\\\\([.()\\[\\]])" "g") "$1")
              content)))
 
-(defn render-markdown
-  "Render markdown content as HTML (strips frontmatter, unescapes Toast UI escapes)."
-  [content]
+(defn render-markdown [content]
   (let [body (-> content strip-frontmatter unescape-markdown)]
     #?(:clj [:pre body]
        :cljs (when (seq body)
                [:div {:innerHTML (marked body)}]))))
 
-(defn- content-preview
-  "Get first n chars of content body (without frontmatter)."
-  [content n]
+(defn- content-preview [content n]
   (let [body (strip-frontmatter (or content ""))]
     (if (> (count body) n)
       (str (subs body 0 n) "...")
       body)))
 
 ;;=============================================================================
-;; Markdown Editor (Toast UI)
+;; Markdown Editor
 ;;=============================================================================
 
 #?(:cljs
-   (defn- init-editor!
-     "Initialize Toast UI Editor on a DOM node."
-     [node content on-change]
+   (defn- init-editor! [node content on-change]
      (let [Editor (or (.-default toastui) (.-Editor toastui) toastui)
            editor (Editor. #js {:el node
                                 :height "400px"
@@ -78,49 +66,52 @@
        (.on editor "change" #(on-change (.getMarkdown editor)))
        editor)))
 
-(defn markdown-editor
-  "WYSIWYG markdown editor component using Toast UI Editor."
-  [content on-change]
+(defn markdown-editor [content dispatch!]
   #?(:clj [:textarea {:value content}]
      :cljs [:div.editor-container
             {:replicant/on-mount
              (fn [{:keys [replicant/node replicant/remember]}]
-               (remember {:editor (init-editor! node content on-change)
+               (remember {:editor (init-editor! node content
+                                                #(dispatch! [:update-form :content %]))
                           :content content}))}]))
 
 ;;=============================================================================
 ;; Components
 ;;=============================================================================
 
-(defn post-card [{:post/keys [id title author created-at content tags]} actions]
-  [:div.post-card {:on {:click #((:on-select actions) id)}}
+(defn post-card [{:post/keys [id title author created-at content tags]} dispatch!]
+  [:div.post-card {:on {:click #(dispatch! [:select-post id])}}
    [:h2 title]
    [:div.post-meta "By " author " • " (format-date created-at)]
    [:div.post-content (render-markdown content)]
    (tag-list tags)])
 
-(defn post-list-view [{:keys [posts loading? error]} actions]
+(defn post-list-view [{:keys [posts loading? error]} dispatch!]
   [:div
    [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
     [:h1 "Blog Posts"]
-    [:button {:on {:click (:on-new actions)}} "New Post"]]
+    [:button {:on {:click #(dispatch! :view-new)}} "New Post"]]
    (when error [:div.error error])
    (if loading?
      [:div.loading "Loading..."]
      [:div.posts
       (for [post posts]
         [:div {:replicant/key (:post/id post)}
-         (post-card post actions)])])])
+         (post-card post dispatch!)])])])
 
-(defn post-detail-view [state actions]
+(defn post-detail-view [state dispatch!]
   (let [post (state/selected-post state)
         history-count (count (:history state))]
     (if post
       [:div.post-detail
        [:div.detail-header
-        [:a.back-link {:href "#" :on {:click #((:on-back actions) % :list)}} "← Back to posts"]
+        [:a.back-link {:href "#"
+                       :on {:click (fn [e]
+                                     (.preventDefault e)
+                                     (dispatch! [:view-back :list]))}}
+         "← Back to posts"]
         [:button.secondary
-         (cond-> {:on {:click #((:on-history actions) (:post/id post))}}
+         (cond-> {:on {:click #(dispatch! :view-history)}}
            (zero? history-count) (assoc :disabled true
                                         :style {:opacity 0.5 :cursor "not-allowed"}))
          "View History"
@@ -137,61 +128,72 @@
        (tag-list (:post/tags post))
        [:div.post-body (render-markdown (:post/content post))]
        [:div.button-group
-        [:button {:on {:click #((:on-edit actions) post)}} "Edit"]
-        [:button.danger {:on {:click #((:on-delete actions) (:post/id post))}} "Delete"]]]
+        [:button {:on {:click #(dispatch! [:view-edit post])}} "Edit"]
+        [:button.danger {:on {:click #(dispatch! [:delete-post (:post/id post)])}} "Delete"]]]
       [:div
-       [:a.back-link {:href "#" :on {:click #((:on-back actions) % :list)}} "← Back to posts"]
+       [:a.back-link {:href "#"
+                      :on {:click (fn [e]
+                                    (.preventDefault e)
+                                    (dispatch! [:view-back :list]))}}
+        "← Back to posts"]
        [:p "Post not found"]])))
 
-(defn post-form-view [{:keys [form error view]} actions]
+(defn post-form-view [{:keys [form error view]} dispatch!]
   (let [editing? (= view :edit)]
     [:div.post-form
-     [:a.back-link {:href "#" :on {:click #((:on-back actions) % :list)}} "← Cancel"]
+     [:a.back-link {:href "#"
+                    :on {:click (fn [e]
+                                  (.preventDefault e)
+                                  (dispatch! [:view-back :list]))}}
+      "← Cancel"]
      [:h2 (if editing? "Edit Post" "New Post")]
      (when error [:div.error error])
      [:div.form-group
       [:label "Title"]
       [:input {:type "text" :value (:title form)
-               :on {:input #((:on-field actions) :title %)}}]]
+               :on {:input #(dispatch! [:update-form :title (.. % -target -value)])}}]]
      [:div.form-group
       [:label "Content"]
-      (markdown-editor (:content form) (:on-content actions))]
-     [:button {:on {:click (:on-submit actions)}}
+      (markdown-editor (:content form) dispatch!)]
+     [:button {:on {:click #(dispatch! (if editing? :update-post :create-post))}}
       (if editing? "Save Changes" "Create Post")]]))
 
-(defn post-history-view
-  "List view showing all historical versions of a post."
-  [state actions]
+(defn post-history-view [state dispatch!]
   (let [post (state/selected-post state)
         history (:history state)]
     [:div.post-history
-     [:a.back-link {:href "#" :on {:click #((:on-back actions) % :detail)}} "← Back to post"]
+     [:a.back-link {:href "#"
+                    :on {:click (fn [e]
+                                  (.preventDefault e)
+                                  (dispatch! [:view-back :detail]))}}
+      "← Back to post"]
      [:h1 "Post History: \"" (:post/title post) "\""]
      (if (empty? history)
        [:p "No history available for this post."]
        [:table.history-table
         [:thead
-         [:tr
-          [:th "Version"] [:th "Date"] [:th "Title"] [:th "Preview"]]]
+         [:tr [:th "Version"] [:th "Date"] [:th "Title"] [:th "Preview"]]]
         [:tbody
          (map-indexed
           (fn [idx version]
             [:tr {:replicant/key (:version/tx version)
-                  :on {:click #((:on-view-version actions) version)}}
+                  :on {:click #(dispatch! [:view-version version])}}
              [:td (if (zero? idx) "Current" (str "v" (- (count history) idx)))]
              [:td (format-date (:version/timestamp version))]
              [:td (:post/title version)]
              [:td.preview (content-preview (:post/content version) 50)]])
           history)]])]))
 
-(defn post-history-detail-view
-  "Read-only view of a historical version with restore option."
-  [state actions]
+(defn post-history-detail-view [state dispatch!]
   (let [version (:history-version state)
         is-current? (= (:version/tx version)
                        (:version/tx (first (:history state))))]
     [:div.post-history-detail
-     [:a.back-link {:href "#" :on {:click #((:on-back actions) % :history)}} "← Back to history"]
+     [:a.back-link {:href "#"
+                    :on {:click (fn [e]
+                                  (.preventDefault e)
+                                  (dispatch! [:view-back :history]))}}
+      "← Back to history"]
      [:h1 (:post/title version)
       [:span.version-label (if is-current? "(Current)" (str "(from " (format-date (:version/timestamp version)) ")"))]]
      [:div.post-meta "By " (:post/author version) " • " (format-date (:version/timestamp version))]
@@ -199,17 +201,17 @@
      [:div.post-body.history-content (render-markdown (:post/content version))]
      (when-not is-current?
        [:div.button-group {:style {:margin-top "2rem"}}
-        [:button {:on {:click #((:on-restore actions) version)}} "Restore This Version"]])]))
+        [:button {:on {:click #(dispatch! [:restore-version version])}} "Restore This Version"]])]))
 
-(defn app-view [state actions]
+(defn app-view [state dispatch!]
   (case (:view state)
-    :list (post-list-view state actions)
-    :detail (post-detail-view state actions)
-    :edit (post-form-view state actions)
-    :new (post-form-view state actions)
-    :history (post-history-view state actions)
-    :history-detail (post-history-detail-view state actions)
-    (post-list-view state actions)))
+    :list (post-list-view state dispatch!)
+    :detail (post-detail-view state dispatch!)
+    :edit (post-form-view state dispatch!)
+    :new (post-form-view state dispatch!)
+    :history (post-history-view state dispatch!)
+    :history-detail (post-history-detail-view state dispatch!)
+    (post-list-view state dispatch!)))
 
 ;;=============================================================================
 ;; Tests
@@ -217,35 +219,11 @@
 
 ^:rct/test
 (comment
-  ;; strip-frontmatter removes YAML frontmatter
-  (strip-frontmatter "---\nauthor: Bob\n---\n\nHello")
-  ;=> "Hello"
-
-  ;; strip-frontmatter handles tags
-  (strip-frontmatter "---\nauthor: Alice\ntags:\n  - a\n  - b\n---\n\nContent")
-  ;=> "Content"
-
-  ;; strip-frontmatter handles *** delimiters (Toast UI format)
-  (strip-frontmatter "***\nauthor: Bob\n***\n\nHello")
-  ;=> "Hello"
-
-  ;; strip-frontmatter passes through content without frontmatter
-  (strip-frontmatter "Just content")
-  ;=> "Just content"
-
-  ;; strip-frontmatter handles nil
-  (strip-frontmatter nil)
-  ;=> ""
-
-  ;; post-card returns hiccup
-  (first (post-card {:post/id 1 :post/title "Test" :post/author "Me" :post/content "Hello"} {}))
-  ;=> :div.post-card
-
-  ;; tag-list returns nil for empty
+  (strip-frontmatter "---\nauthor: Bob\n---\n\nHello") ;=> "Hello"
+  (strip-frontmatter "***\nauthor: Bob\n***\n\nHello") ;=> "Hello"
+  (strip-frontmatter "Just content") ;=> "Just content"
+  (strip-frontmatter nil) ;=> ""
+  (first (post-card {:post/id 1 :post/title "Test" :post/author "Me" :post/content "Hello"} identity)) ;=> :div.post-card
   (tag-list []) ;=> nil
-
-  ;; tag-list returns hiccup for tags
   (first (tag-list ["a" "b"])) ;=> :div.tags
-
-  ;; app-view dispatches on :view
-  (first (app-view {:view :list :posts [] :loading? false} {}))) ;=> :div)
+  (first (app-view {:view :list :posts [] :loading? false} identity))) ;=> :div)

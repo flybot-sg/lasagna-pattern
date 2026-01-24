@@ -1,142 +1,92 @@
 (ns sg.flybot.blog.ui.core
-  "Blog SPA entry point - browser-only wiring."
+  "Blog SPA entry point - dispatch and effect execution.
+
+   Views emit events, dispatch! routes to state functions and executes effects."
   (:require [replicant.dom :as r]
             [sg.flybot.blog.ui.state :as state]
             [sg.flybot.blog.ui.views :as views]
             [sg.flybot.blog.ui.api :as api]
-            [sg.flybot.blog.ui.log :as log]))
-
-;;=============================================================================
-;; App State (mutable)
-;;=============================================================================
+            [sg.flybot.blog.ui.log :as log]
+            [sg.flybot.blog.ui.history :as history]))
 
 (defonce app-state (atom state/initial-state))
 
-(defn swap-state! [f & args]
-  (let [old @app-state
-        new (apply swap! app-state f args)]
-    (when (not= (:view old) (:view new))
-      (log/log-state-change (str f) old new))
-    new))
-
 ;;=============================================================================
-;; API Actions
+;; Event Dispatch
 ;;=============================================================================
 
-(defn load-posts! []
-  (swap-state! state/set-loading true)
+(declare dispatch!)
+
+(def ^:private handlers
+  "Maps event keywords to state functions.
+   Events are either :keyword or [:keyword arg1 arg2 ...]"
+  {:fetch-posts     (fn [s _] (state/fetch-posts s))
+   :posts-fetched   state/posts-fetched
+   :select-post     state/select-post
+   :create-post     (fn [s _] (state/create-post s))
+   :update-post     (fn [s _] (state/update-post s))
+   :post-saved      state/post-saved
+   :delete-post     state/delete-post
+   :delete-confirmed state/delete-confirmed
+   :post-deleted    state/post-deleted
+   :view-new        (fn [s _] (state/view-new s))
+   :view-edit       state/view-edit
+   :view-back       state/set-view
+   :update-form     state/update-form
+   :view-history    (fn [s _] (state/view-history s))
+   :history-fetched state/history-fetched
+   :view-version    state/view-version
+   :restore-version state/restore-version
+   :restore-confirmed state/restore-confirmed
+   :navigate        state/navigate
+   :error           state/set-error})
+
+(defn- apply-handler [state event]
+  (let [[event-type & args] (if (vector? event) event [event])
+        handler (get handlers event-type)]
+    (if handler
+      (apply handler state args)
+      (do (log/warn "Unknown event:" event-type)
+          {:state state}))))
+
+;;=============================================================================
+;; Effect Execution
+;;=============================================================================
+
+(defn- execute-api! [{:keys [pattern on-success on-error]}]
   (api/pull!
-   '{:posts ?posts}
+   pattern
    (fn [response]
-     ;; Response is {posts [...]} (var name without ?)
-     (let [posts (get response 'posts)]
-       (swap-state! state/set-posts posts)))
+     (let [result-key (some #(when (symbol? %) %) (keys response))
+           result (get response result-key response)]
+       (dispatch! [on-success result])))
    (fn [err]
-     (swap-state! state/set-error err))))
+     (dispatch! [on-error err]))))
 
-(defn create-post! []
-  (let [data (state/form->post-data @app-state)]
-    (swap-state! state/set-loading true)
-    (api/pull!
-     {:posts {nil data}}
-     (fn [_]
-       (swap-state! state/reset-form)
-       (swap-state! state/set-view :list)
-       (load-posts!))
-     (fn [err]
-       (swap-state! state/set-error err)))))
+(defn- execute-confirm! [{:keys [message on-confirm]}]
+  (when (js/confirm message)
+    (dispatch! on-confirm)))
 
-(defn update-post! []
-  (let [id (:selected-id @app-state)
-        data (state/form->post-data @app-state)]
-    (swap-state! state/set-loading true)
-    (api/pull!
-     {:posts {{:post/id id} data}}
-     (fn [_]
-       (swap-state! state/set-view :list)
-       (load-posts!))
-     (fn [err]
-       (swap-state! state/set-error err)))))
-
-(defn delete-post! [id]
-  (when (js/confirm "Delete this post?")
-    (swap-state! state/set-loading true)
-    (api/pull!
-     {:posts {{:post/id id} nil}}
-     (fn [_]
-       (swap-state! state/set-view :list)
-       (load-posts!))
-     (fn [err]
-       (swap-state! state/set-error err)))))
-
-(defn load-history! [post-id]
-  (swap-state! state/set-loading true)
-  (api/pull!
-   {:posts/history {{:post/id post-id} '?versions}}
-   (fn [response]
-     (let [versions (get response 'versions)]
-       (swap-state! state/set-history versions)
-       (swap-state! state/set-view :history post-id)))
-   (fn [err]
-     (swap-state! state/set-error err))))
-
-(defn restore-version! [version]
-  (when (js/confirm "Restore this version? The current content will be overwritten.")
-    (let [id (:post/id version)
-          data {:post/title (:post/title version)
-                :post/content (:post/content version)}]
-      (swap-state! state/set-loading true)
-      (api/pull!
-       {:posts {{:post/id id} data}}
-       (fn [_]
-         (swap-state! state/set-view :detail id)
-         (load-posts!))
-       (fn [err]
-         (swap-state! state/set-error err))))))
+(defn- execute-effects! [state {:keys [api confirm history]}]
+  (when api (execute-api! api))
+  (when confirm (execute-confirm! confirm))
+  (when (= history :push) (history/push-state! state)))
 
 ;;=============================================================================
-;; Event Handlers
+;; Dispatch
 ;;=============================================================================
 
-(defn- get-input-value [e]
-  (.. e -target -value))
-
-(defn- load-history-for-post! [post-id]
-  "Load history for a post (for badge display). Doesn't show loading spinner."
-  (api/pull!
-   {:posts/history {{:post/id post-id} '?versions}}
-   (fn [response]
-     (swap-state! state/set-history (get response 'versions)))
-   (fn [_] nil)))  ; Silently ignore errors
-
-(def actions
-  "Action handlers passed to views."
-  {:on-select (fn [id]
-                (swap-state! state/set-view :detail id)
-                (load-history-for-post! id))
-   :on-back (fn [e target]
-              (.preventDefault e)
-              (swap-state! state/set-view target (:selected-id @app-state)))
-   :on-new (fn [_]
-             (swap-state! state/reset-form)
-             (swap-state! state/set-view :new))
-   :on-edit (fn [post]
-              (swap-state! state/set-form-from-post post)
-              (swap-state! state/set-view :edit (:post/id post)))
-   :on-delete delete-post!
-   :on-field (fn [field e]
-               (swap-state! state/update-form field (get-input-value e)))
-   :on-content (fn [markdown]
-                 (swap-state! state/update-form :content markdown))
-   :on-submit (fn [_]
-                (if (= :edit (:view @app-state))
-                  (update-post!)
-                  (create-post!)))
-   :on-history load-history!
-   :on-view-version (fn [version]
-                      (swap-state! state/set-history-version version)
-                      (swap-state! state/set-view :history-detail))
-   :on-restore restore-version!})
+(defn dispatch!
+  "Dispatch an event: :keyword or [:keyword arg1 arg2 ...]"
+  [event]
+  (log/debug "Event:" event)
+  (let [old-state @app-state
+        {:keys [state fx]} (apply-handler old-state event)]
+    (reset! app-state state)
+    (when (not= (:view old-state) (:view state))
+      (log/log-state-change (str (if (vector? event) (first event) event))
+                            old-state state))
+    (when fx (execute-effects! state fx))))
 
 ;;=============================================================================
 ;; Rendering
@@ -146,17 +96,29 @@
 
 (defn render! []
   (when @root-el
-    (r/render @root-el (views/app-view @app-state actions))))
+    (r/render @root-el (views/app-view @app-state dispatch!))))
 
-;; Re-render on state change
 (add-watch app-state :render (fn [_ _ _ _] (render!)))
+
+;;=============================================================================
+;; Initialization
+;;=============================================================================
+
+(defn- on-popstate [parsed]
+  (dispatch! [:navigate parsed]))
+
+(defn- init-from-url! []
+  (when-let [parsed (history/path->state (history/current-path))]
+    (dispatch! [:navigate parsed])
+    (history/replace-state! @app-state)))
 
 (defn ^:export init! []
   (log/info "Blog app initializing...")
   (reset! root-el (js/document.getElementById "app"))
-  (load-posts!)
+  (history/init-history! on-popstate)
+  (init-from-url!)
+  (dispatch! :fetch-posts)
   (render!)
   (log/info "Blog app initialized"))
 
-;; Initialize on load
 (init!)
