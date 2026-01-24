@@ -1788,6 +1788,44 @@
    vector-rewrite
    list-rewrite])
 
+(defn- filter-by-schema
+  "Recursively filter a value to only include keys defined in schema.
+   For record schemas (maps with valid-keys), filters to those keys and recurses.
+   For sequences, filters each element with the child schema.
+   For other types (primitives, generic :map, [:map-of k v]), returns unchanged."
+  [value schema]
+  (let [{:keys [valid-keys type child-schema]} (get-schema-info schema)]
+    (cond
+      ;; Record schema: filter to valid-keys and recurse into children
+      (and valid-keys (= type :map) (map? value))
+      (reduce-kv
+       (fn [acc k v]
+         (if (contains? valid-keys k)
+           (assoc acc k (if child-schema
+                          (filter-by-schema v (child-schema k))
+                          v))
+           acc))
+       {}
+       value)
+
+      ;; Sequence schema: filter each element with child schema
+      (and (= type :seq) child-schema (sequential? value))
+      (mapv #(filter-by-schema % (child-schema 0)) value)
+
+      ;; Other types: return unchanged
+      :else value)))
+
+(defn- wrap-with-schema-filter
+  "Wrap matcher to filter :val according to schema structure.
+   Filtering is recursive: record schemas filter to valid-keys,
+   sequences filter each element, other types pass through unchanged."
+  [matcher schema]
+  (fn [mr]
+    (let [result (matcher mr)]
+      (if (failure? result)
+        result
+        (update result :val filter-by-schema schema)))))
+
 (defn compile-pattern
   "Compile a pattern through two phases:
    1. Rewrite: Transform syntax sugar to core (? :type ...) patterns
@@ -1852,7 +1890,9 @@
      ;; Compile with custom resolver/evaluator if provided
      (binding [*resolve-sym* (or resolve *resolve-sym*)
                *eval-form* (or eval *eval-form*)]
-       (core->matcher rewritten)))))
+       (cond-> (core->matcher rewritten)
+         ;; Filter output to schema's valid-keys for record schemas
+         schema (wrap-with-schema-filter schema))))))
 
 ;;-----------------------------------------------------------------------------
 ;; Rule: Pattern → Template Transformation
@@ -2255,6 +2295,49 @@
   ;; Schema :any allows everything
   (compile-pattern '{:a ?x} {:schema :any}) ;=>> fn?
   (compile-pattern '[?x] {:schema :any}) ;=>> fn?
+
+  ;;-------------------------------------------------------------------
+  ;; Schema output filtering: record schemas filter :val to valid-keys
+  ;;-------------------------------------------------------------------
+  ;; Empty {} pattern with record schema - filters to schema keys only
+  ((compile-pattern '{} {:schema {:name :string :age :number}})
+   (vmr {:name "Alice" :age 30 :password "secret"})) ;=>>
+  {:val {:name "Alice" :age 30}}
+
+  ;; Pattern with explicit keys - $ also filtered to schema keys
+  ((compile-pattern '{:name ?n} {:schema {:name :string :age :number}})
+   (vmr {:name "Alice" :age 30 :password "secret"})) ;=>>
+  {:val {:name "Alice" :age 30} :vars {'n "Alice"}}
+
+  ;; Generic :map schema - no filtering (any keys allowed)
+  ((compile-pattern '{} {:schema :map})
+   (vmr {:name "Alice" :password "secret"})) ;=>>
+  {:val {:name "Alice" :password "secret"}}
+
+  ;; [:map-of k v] schema - no filtering (dictionary pattern)
+  ((compile-pattern '{} {:schema [:map-of :keyword :any]})
+   (vmr {:name "Alice" :password "secret"})) ;=>>
+  {:val {:name "Alice" :password "secret"}}
+
+  ;; No schema - no filtering (backward compatible)
+  ((compile-pattern '{})
+   (vmr {:name "Alice" :password "secret"})) ;=>>
+  {:val {:name "Alice" :password "secret"}}
+
+  ;; Nested record schema - filters recursively at all levels
+  ((compile-pattern '{} {:schema {:user {:name :string :age :number}}})
+   (vmr {:user {:name "Alice" :age 30 :password "secret"} :extra "removed"})) ;=>>
+  {:val {:user {:name "Alice" :age 30}}}
+
+  ;; Sequence of records - filters each element
+  ((compile-pattern '{} {:schema {:users [{:name :string}]}})
+   (vmr {:users [{:name "Alice" :password "x"} {:name "Bob" :ssn "y"}]})) ;=>>
+  {:val {:users [{:name "Alice"} {:name "Bob"}]}}
+
+  ;; Deeply nested: records inside sequences inside records
+  ((compile-pattern '{} {:schema {:dept {:employees [{:name :string}]}}})
+   (vmr {:dept {:employees [{:name "Alice" :salary 100}] :budget 999} :secret "x"})) ;=>>
+  {:val {:dept {:employees [{:name "Alice"}]}}}
 
   ;;-------------------------------------------------------------------
   ;; Tuple schema: [:tuple type1 type2 ...]
