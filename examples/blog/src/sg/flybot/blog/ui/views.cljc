@@ -87,6 +87,28 @@
 ;; Components
 ;;=============================================================================
 
+(defn user-header
+  "User header with avatar, name, and login/logout.
+
+   Shows:
+   - 'Sign in with Google' link when not logged in
+   - User avatar, name, and 'Sign out' link when logged in"
+  [state dispatch!]
+  (let [user (:user state)]
+    [:div.user-header
+     (if user
+       [:div.user-info
+        (when-let [picture (:picture user)]
+          [:img.avatar {:src picture :alt (:name user)}])
+        [:span.user-name (:name user)]
+        [:a.logout-link {:href "#"
+                         :on {:click (fn [e]
+                                       (.preventDefault e)
+                                       (dispatch! :logout))}}
+         "Sign out"]]
+       [:a.login-btn {:href "/oauth2/google"}
+        "Sign in with Google"])]))
+
 (defn post-card [{:post/keys [id title author created-at content tags]} dispatch!]
   [:div.post-card {:on {:click #(dispatch! [:select-post id])}}
    [:h2 title]
@@ -95,11 +117,13 @@
    (tag-list tags dispatch!)])
 
 (defn post-list-view [{:keys [loading? error tag-filter] :as state} dispatch!]
-  (let [posts (state/filtered-posts state)]
+  (let [posts (state/filtered-posts state)
+        can-edit? (state/can-edit? state)]
     [:div
      [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
       [:h1 "Blog Posts"]
-      [:button {:on {:click #(dispatch! :view-new)}} "New Post"]]
+      (when can-edit?
+        [:button {:on {:click #(dispatch! :view-new)}} "New Post"])]
      (when tag-filter
        [:div.tag-filter {:style {:margin-bottom "1rem"}}
         [:span.tag {:style {:cursor "pointer"}
@@ -115,7 +139,8 @@
 
 (defn post-detail-view [state dispatch!]
   (let [post (state/selected-post state)
-        history-count (count (:history state))]
+        history-count (count (:history state))
+        can-edit? (state/can-edit? state)]
     (if post
       [:div.post-detail
        [:div.detail-header
@@ -141,9 +166,10 @@
        [:div.post-meta "By " (:post/author post) " • " (format-date (:post/created-at post))]
        (tag-list (:post/tags post) dispatch!)
        [:div.post-body (render-markdown (:post/content post))]
-       [:div.button-group
-        [:button {:on {:click #(dispatch! [:view-edit post])}} "Edit"]
-        [:button.danger {:on {:click #(dispatch! [:delete-post (:post/id post)])}} "Delete"]]]
+       (when can-edit?
+         [:div.button-group
+          [:button {:on {:click #(dispatch! [:view-edit post])}} "Edit"]
+          [:button.danger {:on {:click #(dispatch! [:delete-post (:post/id post)])}} "Delete"]])]
       [:div
        [:a.back-link {:href "#"
                       :on {:click (fn [e]
@@ -201,7 +227,8 @@
 (defn post-history-detail-view [state dispatch!]
   (let [version (:history-version state)
         is-current? (= (:version/tx version)
-                       (:version/tx (first (:history state))))]
+                       (:version/tx (first (:history state))))
+        can-edit? (state/can-edit? state)]
     [:div.post-history-detail
      [:a.back-link {:href "#"
                     :on {:click (fn [e]
@@ -213,19 +240,21 @@
      [:div.post-meta "By " (:post/author version) " • " (format-date (:version/timestamp version))]
      (tag-list (:post/tags version))
      [:div.post-body.history-content (render-markdown (:post/content version))]
-     (when-not is-current?
+     (when (and can-edit? (not is-current?))
        [:div.button-group {:style {:margin-top "2rem"}}
         [:button {:on {:click #(dispatch! [:restore-version version])}} "Restore This Version"]])]))
 
 (defn app-view [state dispatch!]
-  (case (:view state)
-    :list (post-list-view state dispatch!)
-    :detail (post-detail-view state dispatch!)
-    :edit (post-form-view state dispatch!)
-    :new (post-form-view state dispatch!)
-    :history (post-history-view state dispatch!)
-    :history-detail (post-history-detail-view state dispatch!)
-    (post-list-view state dispatch!)))
+  [:div
+   (user-header state dispatch!)
+   (case (:view state)
+     :list (post-list-view state dispatch!)
+     :detail (post-detail-view state dispatch!)
+     :edit (post-form-view state dispatch!)
+     :new (post-form-view state dispatch!)
+     :history (post-history-view state dispatch!)
+     :history-detail (post-history-detail-view state dispatch!)
+     (post-list-view state dispatch!))])
 
 ;;=============================================================================
 ;; Tests
@@ -242,4 +271,4 @@
   (tag-list [] identity) ;=> nil
   (first (tag-list ["a" "b"])) ;=> :div.tags
   (first (tag-list ["a" "b"] identity)) ;=> :div.tags
-  (first (app-view {:view :list :posts [] :loading? false} identity))) ;=> :div)
+  (first (app-view {:view :list :posts [] :loading? false :user nil} identity))) ;=> :div)

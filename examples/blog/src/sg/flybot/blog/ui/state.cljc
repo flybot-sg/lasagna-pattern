@@ -18,7 +18,8 @@
    :form {:title "" :content ""}
    :history []
    :history-version nil
-   :tag-filter nil})  ; nil = show all, string = filter by tag
+   :tag-filter nil    ; nil = show all, string = filter by tag
+   :user nil})        ; {:email :name :picture :role} when logged in
 
 ;;=============================================================================
 ;; Selectors
@@ -35,6 +36,16 @@
 (defn form->post-data [{:keys [form]}]
   {:post/title (:title form)
    :post/content (:content form)})
+
+(defn logged-in?
+  "Is a user currently logged in?"
+  [{:keys [user]}]
+  (some? user))
+
+(defn can-edit?
+  "Can the current user edit/create/delete posts?"
+  [{:keys [user]}]
+  (= :owner (:role user)))
 
 ;;=============================================================================
 ;; Effect Helpers
@@ -182,6 +193,22 @@
     :history-detail {:state (assoc state :view :history-detail :selected-id id)}
     {:state state}))
 
+;; --- User/Auth ---
+
+(defn fetch-me [state]
+  "Fetch current user from :me endpoint."
+  {:state state
+   :fx (api-fx '{:me ?user} :me-fetched)})
+
+(defn me-fetched [state user]
+  "Store user data from :me endpoint response."
+  {:state (assoc state :user user)})
+
+(defn logout [state]
+  "Clear user and navigate to /logout endpoint."
+  {:state (assoc state :user nil)
+   :fx {:navigate "/logout"}})
+
 ;;=============================================================================
 ;; Tests
 ;;=============================================================================
@@ -231,5 +258,31 @@
 
   ;; filter-by-tag with nil clears filter
   (let [{:keys [state]} (filter-by-tag {:tag-filter "clojure"} nil)]
-    (:tag-filter state)))
-  ;=> nil)
+    (:tag-filter state))
+  ;=> nil
+
+  ;; logged-in? returns false for nil user
+  (logged-in? {:user nil})
+  ;=> false
+
+  ;; logged-in? returns true when user present
+  (logged-in? {:user {:email "test@example.com"}})
+  ;=> true
+
+  ;; can-edit? returns false for viewer role
+  (can-edit? {:user {:role :viewer}})
+  ;=> false
+
+  ;; can-edit? returns true for owner role
+  (can-edit? {:user {:role :owner}})
+  ;=> true
+
+  ;; me-fetched stores user data
+  (let [{:keys [state]} (me-fetched initial-state {:email "test@example.com" :role :owner})]
+    (:email (:user state)))
+  ;=> "test@example.com"
+
+  ;; logout clears user and returns navigate effect
+  (let [{:keys [state fx]} (logout {:user {:email "test@example.com"}})]
+    [(:user state) (:navigate fx)]))
+  ;=> [nil "/logout"])

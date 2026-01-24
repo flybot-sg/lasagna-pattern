@@ -40,7 +40,11 @@
    :restore-confirmed state/restore-confirmed
    :navigate        state/navigate
    :filter-by-tag   state/filter-by-tag
-   :error           state/set-error})
+   :error           state/set-error
+   ;; User/Auth
+   :fetch-me        (fn [s _] (state/fetch-me s))
+   :me-fetched      state/me-fetched
+   :logout          (fn [s _] (state/logout s))})
 
 (defn- apply-handler [state event]
   (let [[event-type & args] (if (vector? event) event [event])
@@ -68,10 +72,14 @@
   (when (js/confirm message)
     (dispatch! on-confirm)))
 
-(defn- execute-effects! [state {:keys [api confirm history]}]
+(defn- execute-navigate! [url]
+  (set! (.-location js/window) url))
+
+(defn- execute-effects! [state {:keys [api confirm history navigate]}]
   (when api (execute-api! api))
   (when confirm (execute-confirm! confirm))
-  (when (= history :push) (history/push-state! state)))
+  (when (= history :push) (history/push-state! state))
+  (when navigate (execute-navigate! navigate)))
 
 ;;=============================================================================
 ;; Dispatch
@@ -119,6 +127,7 @@
   (history/init-history! on-popstate)
   (init-from-url!)
   (dispatch! :fetch-posts)
+  (dispatch! :fetch-me)
   (render!)
   (log/info "Blog app initialized"))
 

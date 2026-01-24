@@ -59,6 +59,15 @@
   {:posts [:union [post-schema] {post-query post-schema}]
    :posts/history {post-query [version-schema]}})
 
+(def viewer-schema
+  "Read-only schema - list and lookup access only, no mutations.
+
+   Key difference from `schema`:
+   - Uses [post-schema] instead of [:union ...] to disallow mutation syntax
+   - Used for anonymous users and non-owner authenticated users"
+  {:posts [post-schema]
+   :posts/history {post-query [version-schema]}})
+
 ;;=============================================================================
 ;; API Builder
 ;;=============================================================================
