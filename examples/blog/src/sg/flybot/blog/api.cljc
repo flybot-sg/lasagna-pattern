@@ -28,19 +28,19 @@
 
 (def post-schema
   "Schema for a single post."
-  {:id :number
-   :title :string
-   :content :string
-   :author :string
-   :tags [:string]
-   :created-at :any
-   :updated-at :any})
+  {:post/id :number
+   :post/title :string
+   :post/content :string
+   :post/author :string
+   :post/tags [:string]
+   :post/created-at :any
+   :post/updated-at :any})
 
 (def post-query
   "Query schema for post lookup (indexed fields)."
   [:or
-   {:id :number}
-   {:author :string}])
+   {:post/id :number}
+   {:post/author :string}])
 
 (def schema
   "API schema - noun-only, single source of truth.
@@ -73,7 +73,7 @@
      (coll/mutate! (:posts api) {:id 3} {...})  ; UPDATE
      (coll/mutate! (:posts api) {:id 3} nil)    ; DELETE"
   ([conn] (make-api conn {}))
-  ([conn {:keys [indexes] :or {indexes #{#{:id}}}}]
+  ([conn {:keys [indexes] :or {indexes #{#{:post/id}}}}]
    (life-cycle-map
     {:posts (fnk [] (db/posts conn {:indexes indexes}))})))
 
@@ -91,31 +91,31 @@
 
   ;; READ: lookup by id via ILookup
   (let [api (make-api conn)]
-    (:title (get (:posts api) {:id 1}))) ;=> "Welcome to My Blog"
+    (:post/title (get (:posts api) {:post/id 1}))) ;=> "Welcome to My Blog"
 
   ;; CREATE: mutate! with nil query (content has frontmatter)
   (let [api (make-api conn)
-        created (coll/mutate! (:posts api) nil {:title "New" :content "---\nauthor: Test\ntags:\n  - demo\n---\n\nPost body"})]
-    (:title created)) ;=> "New"
+        created (coll/mutate! (:posts api) nil {:post/title "New" :post/content "---\nauthor: Test\ntags:\n  - demo\n---\n\nPost body"})]
+    (:post/title created)) ;=> "New"
 
   ;; READ: verify created post and frontmatter extraction
   (let [api (make-api conn)
-        post (get (:posts api) {:id 4})]
-    [(:title post) (:author post) (:tags post)])
+        post (get (:posts api) {:post/id 4})]
+    [(:post/title post) (:post/author post) (:post/tags post)])
   ;=> ["New" "Test" ["demo"]]
 
   ;; UPDATE: mutate! with query and data
   (let [api (make-api conn)
-        updated (coll/mutate! (:posts api) {:id 4} {:title "Updated"})]
-    (:title updated)) ;=> "Updated"
+        updated (coll/mutate! (:posts api) {:post/id 4} {:post/title "Updated"})]
+    (:post/title updated)) ;=> "Updated"
 
   ;; DELETE: mutate! with query and nil
   (let [api (make-api conn)]
-    (coll/mutate! (:posts api) {:id 4} nil)) ;=> true
+    (coll/mutate! (:posts api) {:post/id 4} nil)) ;=> true
 
   ;; Verify deleted
   (let [api (make-api conn)]
-    (get (:posts api) {:id 4})) ;=> nil
+    (get (:posts api) {:post/id 4})) ;=> nil
 
   ;; Pattern matching still works for LIST
   (let [api (make-api conn)]

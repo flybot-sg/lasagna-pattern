@@ -38,12 +38,12 @@
   (assoc state :form {:title "" :content "" :author "" :tags ""}))
 
 (defn set-form-from-post [state post]
-  (let [parsed (md/parse (:content post))]
+  (let [parsed (md/parse (:post/content post))]
     (assoc state :form
-           {:title (:title post "")
+           {:title (:post/title post "")
             :content (:content parsed "")
-            :author (:author parsed (:author post ""))
-            :tags (str/join ", " (:tags parsed (:tags post [])))})))
+            :author (:author parsed (:post/author post ""))
+            :tags (str/join ", " (:tags parsed (:post/tags post [])))})))
 
 ;;=============================================================================
 ;; Selectors (pure functions)
@@ -51,7 +51,7 @@
 
 (defn selected-post [state]
   (let [{:keys [posts selected-id]} state]
-    (first (filter #(= (:id %) selected-id) posts))))
+    (first (filter #(= (:post/id %) selected-id) posts))))
 
 (defn parse-tags [tags-str]
   (->> (str/split tags-str #",")
@@ -75,8 +75,8 @@
 
 (defn form->post-data [state]
   (let [{:keys [title] :as form} (:form state)]
-    {:title title
-     :content (build-content form)}))
+    {:post/title title
+     :post/content (build-content form)}))
 
 ;;=============================================================================
 ;; Tests

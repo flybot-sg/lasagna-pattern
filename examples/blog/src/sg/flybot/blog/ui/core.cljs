@@ -46,7 +46,7 @@
         data (state/form->post-data @app-state)]
     (swap-state! state/set-loading true)
     (api/pull!
-     {:posts {{:id id} data}}
+     {:posts {{:post/id id} data}}
      (fn [_]
        (swap-state! state/set-view :list)
        (load-posts!))
@@ -57,7 +57,7 @@
   (when (js/confirm "Delete this post?")
     (swap-state! state/set-loading true)
     (api/pull!
-     {:posts {{:id id} nil}}
+     {:posts {{:post/id id} nil}}
      (fn [_]
        (swap-state! state/set-view :list)
        (load-posts!))
@@ -82,7 +82,7 @@
              (swap-state! state/set-view :new))
    :on-edit (fn [post]
               (swap-state! state/set-form-from-post post)
-              (swap-state! state/set-view :edit (:id post)))
+              (swap-state! state/set-view :edit (:post/id post)))
    :on-delete delete-post!
    :on-field (fn [field e]
                (swap-state! state/update-form field (get-input-value e)))

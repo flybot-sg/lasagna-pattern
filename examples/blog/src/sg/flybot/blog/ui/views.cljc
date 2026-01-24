@@ -33,7 +33,7 @@
 ;; Components
 ;;=============================================================================
 
-(defn post-card [{:keys [id title author created-at content tags]} actions]
+(defn post-card [{:post/keys [id title author created-at content tags]} actions]
   [:div.post-card {:on {:click #((:on-select actions) id)}}
    [:h2 title]
    [:div.post-meta "By " author " • " (format-date created-at)]
@@ -50,7 +50,7 @@
      [:div.loading "Loading..."]
      [:div.posts
       (for [post posts]
-        [:div {:replicant/key (:id post)}
+        [:div {:replicant/key (:post/id post)}
          (post-card post actions)])])])
 
 (defn post-detail-view [state actions]
@@ -58,14 +58,14 @@
     (if post
       [:div.post-detail
        [:a.back-link {:href "#" :on {:click (:on-back actions)}} "← Back to posts"]
-       [:h1 (:title post)]
-       [:div.post-meta "By " (:author post) " • " (format-date (:created-at post))]
-       (tag-list (:tags post))
+       [:h1 (:post/title post)]
+       [:div.post-meta "By " (:post/author post) " • " (format-date (:post/created-at post))]
+       (tag-list (:post/tags post))
        [:div.post-body {:style {:margin-top "2rem"}}
-        (render-markdown (:content post))]
+        (render-markdown (:post/content post))]
        [:div.button-group {:style {:margin-top "2rem"}}
         [:button {:on {:click #((:on-edit actions) post)}} "Edit"]
-        [:button.danger {:on {:click #((:on-delete actions) (:id post))}} "Delete"]]]
+        [:button.danger {:on {:click #((:on-delete actions) (:post/id post))}} "Delete"]]]
       [:div
        [:a.back-link {:href "#" :on {:click (:on-back actions)}} "← Back to posts"]
        [:p "Post not found"]])))
@@ -110,7 +110,7 @@
 ^:rct/test
 (comment
   ;; post-card returns hiccup
-  (first (post-card {:id 1 :title "Test" :author "Me" :content "Hello"} {}))
+  (first (post-card {:post/id 1 :post/title "Test" :post/author "Me" :post/content "Hello"} {}))
   ;=> :div.post-card
 
   ;; tag-list returns nil for empty
