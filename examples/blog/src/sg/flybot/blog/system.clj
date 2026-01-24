@@ -37,21 +37,23 @@
    - :port - HTTP port (default 8080)
    - :seed? - Seed database (default true)
    - :owner-emails - Set of owner emails for role-based auth (optional)
+   - :db-cfg - Datahike config (default: in-memory)
 
    Returns a life-cycle-map. Access :server to start.
    Call (halt! sys) to stop."
   ([] (make-system {}))
-  ([{:keys [port seed? owner-emails] :or {port 8080 seed? true}}]
-   (let [db-atom (atom {})]
-     (when seed? (db/seed! db-atom))
+  ([{:keys [port seed? owner-emails db-cfg] :or {port 8080 seed? true}}]
+   (let [cfg (or db-cfg db/default-cfg)
+         conn (db/create-conn! cfg)]
+     (when seed? (db/seed! conn))
      (life-cycle-map
       {:port port
 
        :api-fn
        (fnk []
             (if owner-emails
-              (auth/make-api {:owner-emails owner-emails :db-atom db-atom})
-              (fn [_] {:data (api/make-api db-atom) :schema api/schema})))
+              (auth/make-api {:owner-emails owner-emails :conn conn})
+              (fn [_] {:data (api/make-api conn) :schema api/schema})))
 
        :app
        (fnk [api-fn]
@@ -70,20 +72,17 @@
               (closeable {:port port}
                          (fn []
                            (stop-fn)
-                           (reset! db-atom {})
+                           (db/release-conn! conn cfg)
                            (println "Server stopped")))))}))))
 
 ^:rct/test
 (comment
-  (require '[sg.flybot.pullable.remote.client :as client])
-
-  ;; Create and start system
-  (def sys (make-system {:port 8081}))
+  (def sys (make-system {:port 18765 :seed? true}))
   (:server sys) ;=>> map?
 
-  ;; Connect and query
-  (def api (client/connect "http://localhost:8081/api"))
-  (get-in (api '{:posts ?posts}) [:vars 'posts]) ;=>> vector?
+  (let [api-fn (:api-fn sys)
+        {:keys [data schema]} (api-fn {})]
+    [(count (seq (:posts data))) (contains? schema :posts)])
+  ;=> [3 true]
 
-  ;; Halt
   (halt! sys)) ;=> nil)

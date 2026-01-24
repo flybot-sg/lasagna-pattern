@@ -41,15 +41,15 @@
 
    Config:
    - :owner-emails - Set of owner email addresses
-   - :db-atom - Database atom (default: db/db)
+   - :conn - Datahike connection
 
    Reads :user-email from Ring session to determine role.
    Owner gets :me endpoint and full schema; viewer gets read-only."
-  [{:keys [owner-emails db-atom] :or {owner-emails #{} db-atom db/db}}]
+  [{:keys [owner-emails conn] :or {owner-emails #{}}}]
   (fn [ring-request]
     (let [email (get-in ring-request [:session :user-email])
           owner? (and email (owner? {:owner-emails owner-emails} email))
-          base-api (api/make-api db-atom)]
+          base-api (api/make-api conn)]
       {:data (if owner?
                (assoc base-api :me {:email email
                                     :name (get-in ring-request [:session :user-name] email)
@@ -62,8 +62,9 @@
 ^:rct/test
 (comment
   ;; Setup
-  (db/seed!)
-  (def api-fn (make-api {:owner-emails #{"owner@example.com"}}))
+  (def conn (db/create-conn!))
+  (db/seed! conn)
+  (def api-fn (make-api {:owner-emails #{"owner@example.com"} :conn conn}))
 
   ;; Anonymous → viewer (no :me)
   (let [{:keys [schema]} (api-fn {})]
@@ -86,4 +87,4 @@
   ;=> 3
 
   ;; Cleanup
-  (db/reset-db!))
+  (db/release-conn! conn))

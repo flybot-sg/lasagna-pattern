@@ -58,7 +58,7 @@
   "Build API with Posts collection.
 
    Arguments:
-   - db-atom - Database atom (use db/db for global, or inject your own)
+   - conn - Datahike connection
    - opts - Options map:
      - :indexes - Set of indexed field sets for queries (default #{#{:id}})
 
@@ -66,57 +66,58 @@
    - :posts - Posts collection supporting ILookup and Seqable
 
    Usage:
-     (def api (make-api db/db))
+     (def api (make-api conn))
      (seq (:posts api))                   ; LIST all posts
      (get (:posts api) {:id 3})           ; READ by id
      (coll/mutate! (:posts api) nil {...})      ; CREATE
      (coll/mutate! (:posts api) {:id 3} {...})  ; UPDATE
      (coll/mutate! (:posts api) {:id 3} nil)    ; DELETE"
-  ([db-atom] (make-api db-atom {}))
-  ([db-atom {:keys [indexes] :or {indexes #{#{:id}}}}]
+  ([conn] (make-api conn {}))
+  ([conn {:keys [indexes] :or {indexes #{#{:id}}}}]
    (life-cycle-map
-    {:posts (fnk [] (db/posts db-atom {:indexes indexes}))})))
+    {:posts (fnk [] (db/posts conn {:indexes indexes}))})))
 
 ^:rct/test
 (comment
   (require '[sg.flybot.pullable :as p])
 
   ;; Setup
-  (db/seed!)
+  (def conn (db/create-conn!))
+  (db/seed! conn)
 
   ;; LIST: get all posts via seq
-  (let [api (make-api db/db)]
+  (let [api (make-api conn)]
     (count (seq (:posts api)))) ;=> 3
 
   ;; READ: lookup by id via ILookup
-  (let [api (make-api db/db)]
+  (let [api (make-api conn)]
     (:title (get (:posts api) {:id 1}))) ;=> "Welcome to My Blog"
 
   ;; CREATE: mutate! with nil query
-  (let [api (make-api db/db)
+  (let [api (make-api conn)
         created (coll/mutate! (:posts api) nil {:title "New" :content "Post" :author "Test"})]
     (:title created)) ;=> "New"
 
   ;; READ: verify created post
-  (let [api (make-api db/db)]
+  (let [api (make-api conn)]
     (:title (get (:posts api) {:id 4}))) ;=> "New"
 
   ;; UPDATE: mutate! with query and data
-  (let [api (make-api db/db)
+  (let [api (make-api conn)
         updated (coll/mutate! (:posts api) {:id 4} {:title "Updated"})]
     (:title updated)) ;=> "Updated"
 
   ;; DELETE: mutate! with query and nil
-  (let [api (make-api db/db)]
+  (let [api (make-api conn)]
     (coll/mutate! (:posts api) {:id 4} nil)) ;=> true
 
   ;; Verify deleted
-  (let [api (make-api db/db)]
+  (let [api (make-api conn)]
     (get (:posts api) {:id 4})) ;=> nil
 
   ;; Pattern matching still works for LIST
-  (let [api (make-api db/db)]
+  (let [api (make-api conn)]
     (count ((p/match-fn {:posts ?posts} ?posts {:schema schema}) api))) ;=> 3
 
   ;; Cleanup
-  (db/reset-db!))
+  (db/release-conn! conn))
