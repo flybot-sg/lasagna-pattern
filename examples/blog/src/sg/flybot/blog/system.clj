@@ -24,12 +24,13 @@
 ;;=============================================================================
 
 (defn make-api-fn
-  "Create the API function that builds lazy API from request.
+  "Create the API function that builds API from request.
 
-   The db is injected rather than using global state."
+   The db is injected rather than using global state.
+   Returns noun-only API with Posts collection."
   [db-atom]
-  (fn [ring-request]
-    {:data (api/make-api db-atom {:params (:params ring-request)})
+  (fn [_ring-request]
+    {:data (api/make-api db-atom)
      :schema api/schema}))
 
 ;;=============================================================================
@@ -97,7 +98,7 @@
 
   ;; Connect and query
   (def api (client/connect "http://localhost:8081/api"))
-  (get-in (api '{:posts ?posts}) [:vars 'posts]) ;=>> seq?
+  (get-in (api '{:posts ?posts}) [:vars 'posts]) ;=>> vector?
 
   ;; Halt
   (halt! sys)) ;=> nil)

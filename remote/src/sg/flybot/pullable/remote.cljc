@@ -100,6 +100,25 @@
   "Decode bytes to Clojure data."
   http/decode)
 
+;; For custom collection types
+(def Wireable
+  "Protocol for types needing custom wire serialization.
+
+   Implement this for custom collection types (like database-backed collections)
+   that should be converted to standard Clojure data for Transit serialization.
+
+   Example:
+   ```clojure
+   (extend-type MyCollection
+     remote/Wireable
+     (->wire [this] (vec this)))
+   ```"
+  http/Wireable)
+
+(def ->wire
+  "Convert a Wireable value to serializable Clojure data."
+  http/->wire)
+
 ^:rct/test
 (comment
   make-handler ;=>> fn?

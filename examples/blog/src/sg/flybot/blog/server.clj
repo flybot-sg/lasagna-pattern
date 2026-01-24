@@ -21,11 +21,14 @@
 (defn api-fn
   "Build API from Ring request.
 
-   Request params are passed to the API, enabling patterns to specify
-   inputs like post-id or mutation data.
-   Uses the global db from db namespace."
-  [ring-request]
-  {:data (api/make-api db/db {:params (:params ring-request)})
+   Returns the noun-only API with Posts collection.
+   Uses the global db from db namespace.
+
+   The Posts collection supports:
+   - Sequential access via pattern: {:posts ?all}
+   - Indexed lookup via ILookup: {:posts {{:id 3} ?post}}"
+  [_ring-request]
+  {:data (api/make-api db/db)
    :schema api/schema})
 
 ;;=============================================================================

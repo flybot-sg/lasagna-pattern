@@ -4,6 +4,7 @@
    Internal namespace - use sg.flybot.pullable.remote for public API."
   (:require
    [clojure.string :as str]
+   [clojure.walk]
    [sg.flybot.pullable.impl :as pattern]
    #?(:clj [cognitect.transit :as transit])
    #?(:clj [clojure.edn :as edn])
@@ -156,8 +157,26 @@
 ;; Response Helpers
 ;;=============================================================================
 
+(defprotocol Wireable
+  "Protocol for types that need custom serialization to wire format.
+   Implement this for custom collection types (like database-backed collections)
+   that should be converted to standard Clojure data for Transit serialization."
+  (->wire [this] "Convert to serializable Clojure data (maps, vectors, etc.)"))
+
+(defn- normalize-value
+  "Normalize a value for serialization.
+   Types implementing Wireable are converted via ->wire.
+   Standard Clojure data passes through unchanged."
+  [x]
+  (clojure.walk/postwalk
+   (fn [v]
+     (if (satisfies? Wireable v)
+       (->wire v)
+       v))
+   x))
+
 (defn- success [data vars]
-  {:data data :vars vars})
+  {:data (normalize-value data) :vars (normalize-value vars)})
 
 (defn- error [code reason & [path]]
   (cond-> {:code code :reason reason}

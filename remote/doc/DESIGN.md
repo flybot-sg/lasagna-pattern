@@ -220,6 +220,88 @@ The schema returned is the **actual schema** that will be enforced when processi
 
 5. **Defer parameterization**: Keep remote layer simple. Pattern parameterization (template patterns with `$variable` holes) may belong in `pattern` library. For v0.1, clients construct complete patterns.
 
+### 2025-01: CRUD Protocol Best Practices
+
+A cohesive model for CRUD operations using noun-only schemas and unified access patterns.
+
+#### Core Principle: Schema as Single Source of Truth
+
+Schema contains **only nouns** - no verbs like `create-post` or `delete-post`:
+
+```clojure
+;; Good: noun-only
+{:posts [post-schema]}
+
+;; Bad: verbs mixed in
+{:posts [post-schema]
+ :create-post post-schema    ; ← verb
+ :delete-post :boolean}      ; ← verb
+```
+
+#### Collection Access via ILookup
+
+Collections support both sequential access and indexed lookup through ILookup interface:
+
+```clojure
+;; Schema declares union type for explicit capability
+{:posts (union [post-schema] {post-query post-schema})}
+```
+
+| Pattern | Operation | Description |
+|---------|-----------|-------------|
+| `{:posts ?all}` | LIST | Bind whole collection |
+| `{:posts {{:id 3} ?post}}` | GET | ILookup with query key |
+
+#### CRUD Operations via Pattern Syntax
+
+| Pattern | Operation | Rule |
+|---------|-----------|------|
+| `{:posts ?all}` | LIST | Variable binds collection |
+| `{:posts {{:id 3} ?post}}` | READ | Query key + variable value |
+| `{:posts {nil {:title "Hi" ...}}}` | CREATE | nil key + literal value |
+| `{:posts {{:id 3} {:title "New" ...}}}` | UPDATE | Query key + literal value |
+| `{:posts {{:id 3} nil}}` | DELETE | Query key + nil value |
+
+#### Read/Write Discrimination Rule
+
+**Presence of any variable in value position → READ operation**
+
+| Value Position | Intent | Valid? |
+|----------------|--------|--------|
+| `?post` | READ | ✓ |
+| `{:title "X" :content "Y"}` | WRITE | ✓ |
+| `{:title "X" :content ?c}` | Mixed | **ERROR** |
+
+Mixed patterns (literals + variables) are **rejected** as ambiguous. Rationale:
+1. CRUD operations have real consequences; explicit intent prevents accidents
+2. Write operations return the full mutated entity anyway
+3. Simple mental model: "Variables = read, Literals = write, Mixed = error"
+
+#### ILookup is Backend-Specific
+
+The query key (e.g., `{:id 3}`) is passed to backend's ILookup implementation, which:
+
+1. Interprets the query (translate to SQL WHERE, memory scan, API call, etc.)
+2. Validates query is supported (e.g., reject if no index on queried field)
+3. Returns result or error
+
+```
+Pattern                      Backend ILookup              Execution
+──────────────────────────────────────────────────────────────────────
+{:posts {{:id 3} ?p}}    →  posts.get({:id 3})     →  SELECT * WHERE id=3
+{:posts {{:author "X"} ?p}} →  posts.get({:author "X"}) →  ERROR (no index)
+                                                          or query if indexed
+```
+
+#### Return Values
+
+| Operation | Returns |
+|-----------|---------|
+| CREATE | Full created entity (with generated `:id`, timestamps, etc.) |
+| UPDATE | Full updated entity |
+| DELETE | `true` on success, or deleted entity |
+| READ | Matched entity/entities |
+
 ## Open Questions
 
 1. **Partial success semantics**: When pattern partially matches (some fields succeed, some fail due to schema), should we return partial data with errors, or fail the entire request?

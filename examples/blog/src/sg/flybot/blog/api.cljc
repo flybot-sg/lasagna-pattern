@@ -1,15 +1,22 @@
 (ns sg.flybot.blog.api
-  "Blog API - lazy data structure with schema.
+  "Blog API - noun-only schema with ILookup-based CRUD.
 
-   The API is a lazy map where keys compute on demand.
-   Pattern matching drives what gets evaluated.
+   The schema is purely nouns - no verbs like create/update/delete.
+   CRUD operations are expressed through pattern syntax on collections.
 
-   Usage:
-     ;; With injected db (system integration)
-     (make-api my-db {:params {:post-id 1}})
+   ## Schema
+   {:posts (union [post-schema] {post-query post-schema})}
 
-     ;; With global db (simple usage)
-     (make-api db/db {:params {:post-id 1}})"
+   ## Access Patterns
+   | Pattern                              | Operation |
+   |--------------------------------------|-----------|
+   | {:posts ?all}                        | LIST      |
+   | {:posts {{:id 3} ?post}}             | READ      |
+   | {:posts {nil {:title ...}}}          | CREATE    |
+   | {:posts {{:id 3} {:title ...}}}      | UPDATE    |
+   | {:posts {{:id 3} nil}}               | DELETE    |
+
+   See remote/doc/DESIGN.md for full CRUD protocol specification."
   (:require
    [sg.flybot.blog.db :as db]
    [robertluo.fun-map :refer [fnk life-cycle-map]]))
@@ -19,6 +26,7 @@
 ;;=============================================================================
 
 (def post-schema
+  "Schema for a single post."
   {:id :number
    :title :string
    :content :string
@@ -27,72 +35,46 @@
    :created-at :any
    :updated-at :any})
 
+(def post-query
+  "Query schema for post lookup (indexed fields)."
+  [:or
+   {:id :number}
+   {:author :string}])
+
 (def schema
-  "API schema - defines what patterns can request."
-  {:post post-schema
-   :posts [post-schema]
-   :post-count :number
-   ;; Mutations look the same as queries
-   :create-post post-schema
-   :update-post post-schema
-   :delete-post :boolean})
+  "API schema - noun-only, single source of truth.
+
+   :posts supports both sequential and indexed access:
+   - As sequence: (seq posts) → all posts
+   - As lookup: (get posts {:id 3}) → post by query"
+  {:posts [:union [post-schema] {post-query post-schema}]})
 
 ;;=============================================================================
 ;; API Builder
 ;;=============================================================================
 
 (defn make-api
-  "Build lazy API with database and request context.
+  "Build API with Posts collection.
 
    Arguments:
    - db-atom - Database atom (use db/db for global, or inject your own)
-   - context - Map with :params for query parameters
+   - opts - Options map:
+     - :indexes - Set of indexed field sets for queries (default #{#{:id}})
 
-   The API is a life-cycle-map where:
-   - Keys are computed only when accessed
-   - Dependencies between keys are tracked
-   - Schema metadata controls what's accessible
+   Returns a map with:
+   - :posts - Posts collection supporting ILookup and Seqable
 
-   Pattern input fields (literals) drive mutations:
-   - {:create-post {:title \"Hello\" :content \"World\" :author \"Me\"} ...}
-     ^-- this creates a post because :create-post depends on input
-
-   Query fields (variables) extract data:
-   - {:post {:id 1 :title ?title}}
-     ^-- this reads post 1 and binds title to ?title"
-  [db-atom {:keys [params] :as _context}]
-  (life-cycle-map
-   ;; ---- Queries ----
-
-   {:post
-    (fnk []
-         (when-let [id (:post-id params)]
-           (db/get-post db-atom id)))
-
-    :posts
-    (fnk []
-         (db/list-posts db-atom params))
-
-    :post-count
-    (fnk []
-         (db/count-posts db-atom params))
-
-    ;; ---- Mutations ----
-
-    :create-post
-    (fnk []
-         (when-let [data (:create-post params)]
-           (db/create-post! db-atom data)))
-
-    :update-post
-    (fnk []
-         (when-let [{:keys [id] :as data} (:update-post params)]
-           (db/update-post! db-atom id (dissoc data :id))))
-
-    :delete-post
-    (fnk []
-         (when-let [id (:post-id params)]
-           (db/delete-post! db-atom id)))}))
+   Usage:
+     (def api (make-api db/db))
+     (seq (:posts api))              ; LIST all posts
+     (get (:posts api) {:id 3})      ; READ by id
+     (db/mutate! (:posts api) nil {...})      ; CREATE
+     (db/mutate! (:posts api) {:id 3} {...})  ; UPDATE
+     (db/mutate! (:posts api) {:id 3} nil)    ; DELETE"
+  ([db-atom] (make-api db-atom {}))
+  ([db-atom {:keys [indexes] :or {indexes #{#{:id}}}}]
+   (life-cycle-map
+    {:posts (fnk [] (db/posts db-atom {:indexes indexes}))})))
 
 ^:rct/test
 (comment
@@ -101,22 +83,39 @@
   ;; Setup
   (db/seed!)
 
-  ;; Query: list posts (bind whole sequence)
-  (let [api (make-api db/db {})]
+  ;; LIST: get all posts via seq
+  (let [api (make-api db/db)]
+    (count (seq (:posts api)))) ;=> 3
+
+  ;; READ: lookup by id via ILookup
+  (let [api (make-api db/db)]
+    (:title (get (:posts api) {:id 1}))) ;=> "Welcome to My Blog"
+
+  ;; CREATE: mutate! with nil query
+  (let [api (make-api db/db)
+        created (db/mutate! (:posts api) nil {:title "New" :content "Post" :author "Test"})]
+    (:title created)) ;=> "New"
+
+  ;; READ: verify created post
+  (let [api (make-api db/db)]
+    (:title (get (:posts api) {:id 4}))) ;=> "New"
+
+  ;; UPDATE: mutate! with query and data
+  (let [api (make-api db/db)
+        updated (db/mutate! (:posts api) {:id 4} {:title "Updated"})]
+    (:title updated)) ;=> "Updated"
+
+  ;; DELETE: mutate! with query and nil
+  (let [api (make-api db/db)]
+    (db/mutate! (:posts api) {:id 4} nil)) ;=> true
+
+  ;; Verify deleted
+  (let [api (make-api db/db)]
+    (get (:posts api) {:id 4})) ;=> nil
+
+  ;; Pattern matching still works for LIST
+  (let [api (make-api db/db)]
     (count ((p/match-fn {:posts ?posts} ?posts {:schema schema}) api))) ;=> 3
-
-  ;; Query: single post
-  (let [api (make-api db/db {:params {:post-id 1}})]
-    ((p/match-fn {:post {:id ?id :title ?t}} ?t) api)) ;=> "Welcome to My Blog"
-
-  ;; Mutation: create post
-  (let [api (make-api db/db {:params {:create-post {:title "New" :content "Post" :author "Test"}}})]
-    ((p/match-fn {:create-post {:id ?id :title ?t}} ?t) api)) ;=> "New"
-
-  ;; Mutation: delete
-  (let [id 4 ;; the one we just created
-        api (make-api db/db {:params {:post-id id}})]
-    ((p/match-fn {:delete-post ?deleted} ?deleted) api)) ;=> true
 
   ;; Cleanup
   (db/reset-db!))
