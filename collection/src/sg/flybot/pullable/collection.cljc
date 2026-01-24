@@ -1,37 +1,49 @@
 (ns sg.flybot.pullable.collection
-  "CRUD collection abstraction.
+  "CRUD collection abstraction with transactional support.
 
    Provides a generic Collection type that wraps a DataSource backend
    and implements ILookup, Seqable, Counted for pattern-based access.
 
-   ## Usage
-
-   1. Implement DataSource for your backend:
+   ## Basic Usage
 
    ```clojure
-   (defrecord MyDB [db-atom]
-     DataSource
-     (fetch [_ query] (get @db-atom (:id query)))
-     (list-all [_] (vals @db-atom))
-     (create! [_ data] (swap! db-atom assoc (:id data) data) data)
-     (update! [_ query data] ...)
-     (delete! [_ query] ...))
+   (def src (atom-source))
+   (def items (collection src))
+
+   (get items {:id 3})           ; fetch by query
+   (seq items)                   ; list all
+   (mutate! items nil data)      ; create
+   (mutate! items {:id 3} data)  ; update
+   (mutate! items {:id 3} nil)   ; delete
    ```
 
-   2. Create a collection:
+   ## Transactional Mutations
+
+   For queries containing mutations, apply all mutations atomically
+   via `transact!`, then query the new state via `snapshot`:
 
    ```clojure
-   (def items (collection (->MyDB db) {:indexes #{#{:id}}}))
+   (def src (atom-source))
+
+   ;; Apply mutations atomically
+   (transact! src
+     [{:op :create :data {:title \"Post 1\"}}
+      {:op :create :data {:title \"Post 2\"}}])
+
+   ;; Query the new state
+   (count (snapshot src))  ;=> 2
    ```
 
-   3. Use via ILookup and Seqable:
+   For multiple collections, call `transact!` on each, then `snapshot`:
 
    ```clojure
-   (get items {:id 3})       ; fetch by query
-   (seq items)               ; list all
-   (mutate! items nil data)  ; create
-   (mutate! items query data) ; update
-   (mutate! items query nil)  ; delete
+   (def sources {:posts (atom-source) :users (atom-source)})
+
+   (transact! (:users sources) [{:op :create :data {:name \"Alice\"}}])
+   (transact! (:posts sources) [{:op :create :data {:title \"Hello\"}}])
+
+   {:users (vals (snapshot (:users sources)))
+    :posts (vals (snapshot (:posts sources)))}
    ```")
 
 ;;=============================================================================
@@ -68,6 +80,23 @@
    standard Clojure data for Transit/EDN serialization."
   (->wire [this]
     "Convert to serializable Clojure data (maps, vectors, etc.)"))
+
+(defprotocol TxSource
+  "Protocol for transactional data sources.
+
+   Extends DataSource concept with ability to apply multiple mutations
+   atomically and snapshot state for querying."
+  (snapshot [this]
+    "Get immutable snapshot of current state for querying.")
+  (transact! [this mutations]
+    "Apply mutations atomically. Returns snapshot after mutations.
+
+     Each mutation is a map:
+     {:op :create | :update | :delete
+      :query map (for update/delete)
+      :data map (for create/update)}
+
+     All mutations succeed or none do."))
 
 ;;=============================================================================
 ;; Collection Type
@@ -178,43 +207,123 @@
    (->Collection data-source indexes)))
 
 ;;=============================================================================
+;; Atom-backed Transactional Source
+;;=============================================================================
+
+(defn- apply-mutation
+  "Apply a single mutation to db state. Pure function for use in swap!."
+  [db id-key id-counter {:keys [op query data]}]
+  (case op
+    :create
+    (let [id (swap! id-counter inc)
+          item (assoc data id-key id)]
+      (assoc db id item))
+
+    :update
+    (if-let [id (get query id-key)]
+      (if-let [item (get db id)]
+        (assoc db id (merge item data))
+        db)
+      ;; Query by other fields
+      (if-let [item (first (filter #(every? (fn [[k v]] (= (get % k) v)) query)
+                                   (vals db)))]
+        (assoc db (get item id-key) (merge item data))
+        db))
+
+    :delete
+    (if-let [id (get query id-key)]
+      (dissoc db id)
+      ;; Query by other fields
+      (if-let [item (first (filter #(every? (fn [[k v]] (= (get % k) v)) query)
+                                   (vals db)))]
+        (dissoc db (get item id-key))
+        db))
+
+    ;; Unknown op - return unchanged
+    db))
+
+(defrecord AtomSource [db-atom id-key id-counter]
+  DataSource
+  (fetch [_ query]
+    (let [db @db-atom]
+      (if (contains? query id-key)
+        (get db (get query id-key))
+        (first (filter #(every? (fn [[k v]] (= (get % k) v)) query)
+                       (vals db))))))
+
+  (list-all [_]
+    (sort-by id-key (vals @db-atom)))
+
+  (create! [_ data]
+    (let [id (swap! id-counter inc)
+          item (assoc data id-key id)]
+      (swap! db-atom assoc id item)
+      item))
+
+  (update! [this query data]
+    (when-let [item (fetch this query)]
+      (let [updated (merge item data)]
+        (swap! db-atom assoc (get item id-key) updated)
+        updated)))
+
+  (delete! [this query]
+    (if-let [item (fetch this query)]
+      (do (swap! db-atom dissoc (get item id-key)) true)
+      false))
+
+  TxSource
+  (snapshot [_]
+    @db-atom)
+
+  (transact! [_ mutations]
+    (swap! db-atom
+           (fn [db]
+             (reduce #(apply-mutation %1 id-key id-counter %2)
+                     db
+                     mutations)))))
+
+(defn atom-source
+  "Create an atom-backed transactional data source.
+
+   Implements both DataSource (for individual CRUD) and TxSource
+   (for atomic batch mutations).
+
+   Options:
+   - :id-key - Primary key field (default :id)
+   - :initial - Initial data as map {id -> item} or vector [item ...]
+
+   Examples:
+   ```clojure
+   (def src (atom-source))
+   (def src (atom-source {:id-key :user-id}))
+   (def src (atom-source {:initial {1 {:id 1 :name \"Alice\"}}}))
+   ```"
+  ([] (atom-source {}))
+  ([{:keys [id-key initial] :or {id-key :id}}]
+   (let [init-map (cond
+                    (nil? initial) {}
+                    (map? initial) initial
+                    (sequential? initial) (into {} (map (juxt id-key identity) initial))
+                    :else {})
+         max-id (if (seq init-map)
+                  (apply max (keys init-map))
+                  0)]
+     (->AtomSource (atom init-map) id-key (atom max-id)))))
+
+;;=============================================================================
 ;; Tests
 ;;=============================================================================
 
 ^:rct/test
 (comment
-  ;; Test DataSource with atom backend
-  (defrecord AtomDS [db-atom id-counter]
-    DataSource
-    (fetch [_ query]
-      (if (contains? query :id)
-        (get @db-atom (:id query))
-        (first (filter #(every? (fn [[k v]] (= (get % k) v)) query)
-                       (vals @db-atom)))))
-    (list-all [_]
-      (sort-by :id (vals @db-atom)))
-    (create! [_ data]
-      (let [id (swap! id-counter inc)
-            item (assoc data :id id)]
-        (swap! db-atom assoc id item)
-        item))
-    (update! [_ query data]
-      (when-let [item (fetch _ query)]
-        (let [updated (merge item data)]
-          (swap! db-atom assoc (:id item) updated)
-          updated)))
-    (delete! [_ query]
-      (if-let [item (fetch _ query)]
-        (do (swap! db-atom dissoc (:id item)) true)
-        false)))
+  ;;---------------------------------------------------------------------------
+  ;; Collection with atom-source
+  ;;---------------------------------------------------------------------------
 
-  ;; Setup
-  (def db (atom {}))
-  (def counter (atom 0))
-  (def ds (->AtomDS db counter))
-  (def coll (collection ds {:indexes #{#{:id} #{:name}}}))
+  (def src (atom-source))
+  (def coll (collection src {:indexes #{#{:id} #{:name}}}))
 
-  ;; CREATE
+  ;; CREATE via mutate!
   (:id (mutate! coll nil {:name "Alice"})) ;=> 1
   (:id (mutate! coll nil {:name "Bob"})) ;=> 2
 
@@ -240,6 +349,45 @@
   ;; Wireable - converts to vector
   (->wire coll) ;=>> vector?
 
-  ;; Cleanup
-  (reset! db {})
-  (reset! counter 0))
+  ;;---------------------------------------------------------------------------
+  ;; Transactional Operations via transact! + snapshot
+  ;;---------------------------------------------------------------------------
+
+  (def tx-src (atom-source))
+
+  ;; Multiple creates in one transaction
+  (transact! tx-src
+             [{:op :create :data {:title "A"}}
+              {:op :create :data {:title "B"}}
+              {:op :create :data {:title "C"}}])
+  (count (snapshot tx-src)) ;=> 3
+
+  ;; Mixed operations in one transaction
+  (transact! tx-src
+             [{:op :create :data {:title "D"}}
+              {:op :update :query {:id 1} :data {:title "A-updated"}}
+              {:op :delete :query {:id 2}}])
+  (count (snapshot tx-src)) ;=> 3  ;; added 1, deleted 1
+
+  ;; Verify mutations applied correctly
+  (:title (get (snapshot tx-src) 1)) ;=> "A-updated"
+  (get (snapshot tx-src) 2) ;=> nil
+
+  ;;---------------------------------------------------------------------------
+  ;; Multiple Collections
+  ;;---------------------------------------------------------------------------
+
+  (def sources {:posts (atom-source) :users (atom-source)})
+
+  ;; Transact on each source
+  (transact! (:users sources)
+             [{:op :create :data {:name "Alice"}}
+              {:op :create :data {:name "Bob"}}])
+  (transact! (:posts sources)
+             [{:op :create :data {:title "Hello" :author-id 1}}])
+
+  ;; Query snapshots
+  (count (snapshot (:users sources))) ;=> 2
+  (count (snapshot (:posts sources))) ;=> 1
+  (set (map :name (vals (snapshot (:users sources))))) ;=> #{"Alice" "Bob"}
+  )

@@ -19,7 +19,7 @@
    See remote/doc/DESIGN.md for full CRUD protocol specification."
   (:require
    [sg.flybot.blog.db :as db]
-   [sg.flybot.pullable.remote :as remote]
+   [sg.flybot.pullable.collection :as coll]
    [robertluo.fun-map :refer [fnk life-cycle-map]]))
 
 ;;=============================================================================
@@ -69,9 +69,9 @@
      (def api (make-api db/db))
      (seq (:posts api))                   ; LIST all posts
      (get (:posts api) {:id 3})           ; READ by id
-     (remote/mutate! (:posts api) nil {...})      ; CREATE
-     (remote/mutate! (:posts api) {:id 3} {...})  ; UPDATE
-     (remote/mutate! (:posts api) {:id 3} nil)    ; DELETE"
+     (coll/mutate! (:posts api) nil {...})      ; CREATE
+     (coll/mutate! (:posts api) {:id 3} {...})  ; UPDATE
+     (coll/mutate! (:posts api) {:id 3} nil)    ; DELETE"
   ([db-atom] (make-api db-atom {}))
   ([db-atom {:keys [indexes] :or {indexes #{#{:id}}}}]
    (life-cycle-map
@@ -94,7 +94,7 @@
 
   ;; CREATE: mutate! with nil query
   (let [api (make-api db/db)
-        created (remote/mutate! (:posts api) nil {:title "New" :content "Post" :author "Test"})]
+        created (coll/mutate! (:posts api) nil {:title "New" :content "Post" :author "Test"})]
     (:title created)) ;=> "New"
 
   ;; READ: verify created post
@@ -103,12 +103,12 @@
 
   ;; UPDATE: mutate! with query and data
   (let [api (make-api db/db)
-        updated (remote/mutate! (:posts api) {:id 4} {:title "Updated"})]
+        updated (coll/mutate! (:posts api) {:id 4} {:title "Updated"})]
     (:title updated)) ;=> "Updated"
 
   ;; DELETE: mutate! with query and nil
   (let [api (make-api db/db)]
-    (remote/mutate! (:posts api) {:id 4} nil)) ;=> true
+    (coll/mutate! (:posts api) {:id 4} nil)) ;=> true
 
   ;; Verify deleted
   (let [api (make-api db/db)]
