@@ -135,8 +135,10 @@
   ;; LIST - response is {posts [...]}
   (count (get (pull '{:posts ?posts}) 'posts)) ;=> 3
 
-  ;; CREATE - returns created post
-  (:title (get (pull '{:posts {nil {:title "New" :content "C" :author "A"}}}) 'posts)) ;=> "New"
+  ;; CREATE - returns created post (content has frontmatter, author extracted)
+  (let [result (get (pull '{:posts {nil {:title "New" :content "---\nauthor: A\n---\n\nC"}}}) 'posts)]
+    [(:title result) (:author result)])
+  ;=> ["New" "A"]
 
   ;; Cleanup
   (db/release-conn! test-conn))

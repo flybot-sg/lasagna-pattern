@@ -1,0 +1,12 @@
+# Build artifacts
+resources/public/js/cljs-runtime/
+resources/public/js/main.js
+resources/public/js/manifest.edn
+
+# Node
+node_modules/
+package-lock.json
+
+# Editor
+.nrepl-port
+.shadow-cljs/

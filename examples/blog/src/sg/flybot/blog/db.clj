@@ -4,6 +4,21 @@
    Implements DataSource for CRUD operations using Datahike.
    Use `posts` to get a collection for pattern-based access.
 
+   ## Markdown Format
+
+   Posts are stored as markdown with YAML frontmatter:
+
+   ```markdown
+   ---
+   author: Alice
+   tags:
+     - clojure
+     - patterns
+   ---
+
+   The actual post content in markdown...
+   ```
+
    ## Usage
 
    ```clojure
@@ -17,14 +32,18 @@
    ```"
   (:require
    [datahike.api :as d]
-   [sg.flybot.pullable.collection :as coll]))
+   [sg.flybot.pullable.collection :as coll]
+   [sg.flybot.blog.markdown :as md]))
 
 ;;=============================================================================
 ;; Schema
 ;;=============================================================================
 
 (def post-schema
-  "Datahike schema for posts."
+  "Datahike schema for posts.
+
+   Content is stored as markdown with YAML frontmatter containing author/tags.
+   Author/tags are also indexed separately for queries."
   [{:db/ident :post/id
     :db/valueType :db.type/long
     :db/cardinality :db.cardinality/one
@@ -99,6 +118,17 @@
              [(keyword "post" (name k)) (if (= k :tags) (set v) v)])))
 
 ;;=============================================================================
+;; Markdown Content Handling
+;;=============================================================================
+
+(defn- extract-frontmatter
+  "Extract properties from markdown frontmatter in content."
+  [data]
+  (if-let [content (:content data)]
+    (merge data (dissoc (md/parse content) :content))
+    data))
+
+;;=============================================================================
 ;; DataSource Implementation
 ;;=============================================================================
 
@@ -127,7 +157,7 @@
 
   (create! [_ data]
     (let [ts (now)
-          entity (merge (add-ns data)
+          entity (merge (add-ns (extract-frontmatter data))
                         {:post/id (next-id conn)
                          :post/created-at ts
                          :post/updated-at ts})]
@@ -136,7 +166,7 @@
 
   (update! [this query data]
     (when-let [post (coll/fetch this query)]
-      (let [updates (merge (add-ns data)
+      (let [updates (merge (add-ns (extract-frontmatter data))
                            {:post/id (:id post)
                             :post/updated-at (now)})]
         (d/transact conn [updates])
@@ -165,14 +195,25 @@
   (def conn (create-conn!))
   (def p (posts conn))
 
-  ;; CRUD
-  (:id (coll/mutate! p nil {:title "Test" :content "Hello" :author "Me"})) ;=> 1
+  ;; Create with markdown frontmatter
+  (:id (coll/mutate! p nil {:title "Test" :content "---\nauthor: Me\n---\n\nHello"})) ;=> 1
   (:title (get p {:id 1})) ;=> "Test"
-  (coll/mutate! p nil {:title "Second" :content "Two" :author "You"})
+  (:author (get p {:id 1})) ;=> "Me"
+
+  ;; Frontmatter with tags
+  (coll/mutate! p nil {:title "Second" :content "---\nauthor: You\ntags:\n  - test\n---\n\nTwo"})
   (count (seq p)) ;=> 2
+  (:author (get p {:id 2})) ;=> "You"
+  (:tags (get p {:id 2})) ;=> ["test"]
+
+  ;; Plain content (no frontmatter, no author/tags)
+  (coll/mutate! p nil {:title "Plain" :content "Just text"})
+  (:author (get p {:id 3})) ;=> nil
+
+  ;; Update and delete
   (:title (coll/mutate! p {:id 1} {:title "Updated"})) ;=> "Updated"
   (coll/mutate! p {:id 1} nil) ;=> true
-  (count p) ;=> 1
+  (count p) ;=> 2
 
   ;; Index enforcement
   (def p2 (posts conn {:indexes #{#{:id} #{:author}}}))
@@ -185,15 +226,33 @@
 ;;=============================================================================
 
 (defn seed!
-  "Seed database with sample data."
+  "Seed database with sample data using markdown format."
   [conn]
   (let [ds (->PostsDataSource conn)]
     (coll/create! ds {:title "Welcome to My Blog"
-                      :content "This is my first post using the pull-based API!"
-                      :author "Alice" :tags ["welcome" "meta"]})
+                      :content "---
+author: Alice
+tags:
+  - welcome
+  - meta
+---
+
+This is my first post using the pull-based API!"})
     (coll/create! ds {:title "Understanding Pull Patterns"
-                      :content "Pull patterns let you declaratively specify what data you want..."
-                      :author "Alice" :tags ["clojure" "patterns"]})
+                      :content "---
+author: Alice
+tags:
+  - clojure
+  - patterns
+---
+
+Pull patterns let you declaratively specify what data you want..."})
     (coll/create! ds {:title "Building APIs with Lazy Data"
-                      :content "The key insight is that your API is just a lazy data structure..."
-                      :author "Bob" :tags ["clojure" "api"]})))
+                      :content "---
+author: Bob
+tags:
+  - clojure
+  - api
+---
+
+The key insight is that your API is just a lazy data structure..."})))

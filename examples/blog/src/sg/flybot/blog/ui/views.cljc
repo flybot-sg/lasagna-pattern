@@ -3,7 +3,9 @@
 
    All functions take state and return hiccup data.
    Event handlers are passed as a map of action functions."
-  (:require [sg.flybot.blog.ui.state :as state]))
+  (:require [sg.flybot.blog.ui.state :as state]
+            [sg.flybot.blog.markdown :as md]
+            #?(:cljs ["marked" :refer [marked]])))
 
 ;;=============================================================================
 ;; Helpers
@@ -19,6 +21,14 @@
      (for [tag tags]
        [:span.tag {:replicant/key tag} tag])]))
 
+(defn render-markdown
+  "Render markdown content as hiccup (strips frontmatter)."
+  [content]
+  (let [body (:content (md/parse content))]
+    #?(:clj [:pre body]
+       :cljs (when (seq body)
+               [:div {:innerHTML (marked body)}]))))
+
 ;;=============================================================================
 ;; Components
 ;;=============================================================================
@@ -27,10 +37,7 @@
   [:div.post-card {:on {:click #((:on-select actions) id)}}
    [:h2 title]
    [:div.post-meta "By " author " • " (format-date created-at)]
-   [:p.post-content
-    (if (> (count content) 150)
-      (str (subs content 0 150) "...")
-      content)]
+   [:div.post-content (render-markdown content)]
    (tag-list tags)])
 
 (defn post-list-view [{:keys [posts loading? error]} actions]
@@ -54,7 +61,8 @@
        [:h1 (:title post)]
        [:div.post-meta "By " (:author post) " • " (format-date (:created-at post))]
        (tag-list (:tags post))
-       [:div {:style {:margin-top "2rem" :white-space "pre-wrap"}} (:content post)]
+       [:div.post-body {:style {:margin-top "2rem"}}
+        (render-markdown (:content post))]
        [:div.button-group {:style {:margin-top "2rem"}}
         [:button {:on {:click #((:on-edit actions) post)}} "Edit"]
         [:button.danger {:on {:click #((:on-delete actions) (:id post))}} "Delete"]]]
@@ -106,13 +114,10 @@
   ;=> :div.post-card
 
   ;; tag-list returns nil for empty
-  (tag-list [])
-  ;=> nil
+  (tag-list []) ;=> nil
 
   ;; tag-list returns hiccup for tags
-  (first (tag-list ["a" "b"]))
-  ;=> :div.tags
+  (first (tag-list ["a" "b"])) ;=> :div.tags
 
   ;; app-view dispatches on :view
-  (first (app-view {:view :list :posts [] :loading? false} {})))
-  ;=> :div)
+  (first (app-view {:view :list :posts [] :loading? false} {}))) ;=> :div)

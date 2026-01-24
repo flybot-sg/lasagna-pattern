@@ -93,14 +93,16 @@
   (let [api (make-api conn)]
     (:title (get (:posts api) {:id 1}))) ;=> "Welcome to My Blog"
 
-  ;; CREATE: mutate! with nil query
+  ;; CREATE: mutate! with nil query (content has frontmatter)
   (let [api (make-api conn)
-        created (coll/mutate! (:posts api) nil {:title "New" :content "Post" :author "Test"})]
+        created (coll/mutate! (:posts api) nil {:title "New" :content "---\nauthor: Test\ntags:\n  - demo\n---\n\nPost body"})]
     (:title created)) ;=> "New"
 
-  ;; READ: verify created post
-  (let [api (make-api conn)]
-    (:title (get (:posts api) {:id 4}))) ;=> "New"
+  ;; READ: verify created post and frontmatter extraction
+  (let [api (make-api conn)
+        post (get (:posts api) {:id 4})]
+    [(:title post) (:author post) (:tags post)])
+  ;=> ["New" "Test" ["demo"]]
 
   ;; UPDATE: mutate! with query and data
   (let [api (make-api conn)

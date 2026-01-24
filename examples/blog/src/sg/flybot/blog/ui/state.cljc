@@ -1,6 +1,7 @@
 (ns sg.flybot.blog.ui.state
   "Application state - pure data manipulation."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [sg.flybot.blog.markdown :as md]))
 
 ;;=============================================================================
 ;; State Shape
@@ -37,11 +38,12 @@
   (assoc state :form {:title "" :content "" :author "" :tags ""}))
 
 (defn set-form-from-post [state post]
-  (assoc state :form
-         {:title (:title post "")
-          :content (:content post "")
-          :author (:author post "")
-          :tags (str/join ", " (:tags post []))}))
+  (let [parsed (md/parse (:content post))]
+    (assoc state :form
+           {:title (:title post "")
+            :content (:content parsed "")
+            :author (:author parsed (:author post ""))
+            :tags (str/join ", " (:tags parsed (:tags post [])))})))
 
 ;;=============================================================================
 ;; Selectors (pure functions)
@@ -57,12 +59,24 @@
        (remove empty?)
        vec))
 
+(defn build-content
+  "Build markdown content with YAML frontmatter from form fields."
+  [{:keys [content author tags]}]
+  (let [tag-list (parse-tags tags)
+        has-frontmatter? (and (seq author) (or (seq author) (seq tag-list)))]
+    (if has-frontmatter?
+      (str "---\n"
+           (when (seq author) (str "author: " author "\n"))
+           (when (seq tag-list)
+             (str "tags:\n" (str/join "" (map #(str "  - " % "\n") tag-list))))
+           "---\n\n"
+           content)
+      content)))
+
 (defn form->post-data [state]
-  (let [{:keys [title content author tags]} (:form state)]
+  (let [{:keys [title] :as form} (:form state)]
     {:title title
-     :content content
-     :author author
-     :tags (parse-tags tags)}))
+     :content (build-content form)}))
 
 ;;=============================================================================
 ;; Tests
@@ -85,7 +99,13 @@
   (parse-tags "")
   ;=> []
 
+  ;; build-content creates frontmatter
+  (build-content {:content "Hello" :author "Me" :tags "a, b"})
+  ;=> "---\nauthor: Me\ntags:\n  - a\n  - b\n---\n\nHello"
+
+  ;; form->post-data builds content with frontmatter
   (-> initial-state
       (assoc :form {:title "T" :content "C" :author "A" :tags "x, y"})
-      form->post-data))
-  ;=> {:title "T", :content "C", :author "A", :tags ["x" "y"]})
+      form->post-data
+      :title))
+  ;=> "T")
