@@ -96,35 +96,27 @@
 
 ^:rct/test
 (comment
-  (require '[sg.flybot.pullable.core :as p])
+  (require '[sg.flybot.pullable :as p])
 
   ;; Setup
   (db/seed!)
 
   ;; Query: list posts (bind whole sequence)
-  (let [api (make-api db/db {})
-        pat (p/compile-pattern '{:posts ?posts} {:schema schema})
-        result (pat (p/vmr api))]
-    (count (get (:vars result) 'posts))) ;=> 3
+  (let [api (make-api db/db {})]
+    (count ((p/match-fn {:posts ?posts} ?posts {:schema schema}) api))) ;=> 3
 
   ;; Query: single post
-  (let [api (make-api db/db {:params {:post-id 1}})
-        pat (p/compile-pattern '{:post {:id ?id :title ?t}})
-        result (pat (p/vmr api))]
-    (get (:vars result) 't)) ;=> "Welcome to My Blog"
+  (let [api (make-api db/db {:params {:post-id 1}})]
+    ((p/match-fn {:post {:id ?id :title ?t}} ?t) api)) ;=> "Welcome to My Blog"
 
   ;; Mutation: create post
-  (let [api (make-api db/db {:params {:create-post {:title "New" :content "Post" :author "Test"}}})
-        pat (p/compile-pattern '{:create-post {:id ?id :title ?t}})
-        result (pat (p/vmr api))]
-    (get (:vars result) 't)) ;=> "New"
+  (let [api (make-api db/db {:params {:create-post {:title "New" :content "Post" :author "Test"}}})]
+    ((p/match-fn {:create-post {:id ?id :title ?t}} ?t) api)) ;=> "New"
 
   ;; Mutation: delete
   (let [id 4 ;; the one we just created
-        api (make-api db/db {:params {:post-id id}})
-        pat (p/compile-pattern '{:delete-post ?deleted})
-        result (pat (p/vmr api))]
-    (get (:vars result) 'deleted)) ;=> true
+        api (make-api db/db {:params {:post-id id}})]
+    ((p/match-fn {:delete-post ?deleted} ?deleted) api)) ;=> true
 
   ;; Cleanup
   (db/reset-db!))

@@ -4,7 +4,7 @@
    Internal namespace - use sg.flybot.pullable.remote for public API."
   (:require
    [clojure.string :as str]
-   [sg.flybot.pullable.core :as pattern]
+   [sg.flybot.pullable.impl :as pattern]
    #?(:clj [cognitect.transit :as transit])
    #?(:clj [clojure.edn :as edn])
    #?(:clj [clojure.java.io :as io]))
@@ -95,6 +95,64 @@
      (throw (ex-info "Server-side only" {:format format}))))
 
 ;;=============================================================================
+;; Pattern Parameterization
+;;=============================================================================
+
+(defn- param-rule
+  "Create a rule that substitutes a $-prefixed symbol with a value.
+   Follows rule protocol: returns value on match, nil otherwise."
+  [param-sym value]
+  (fn [data]
+    (when (= data param-sym)
+      value)))
+
+(defn- params->rules
+  "Convert params map to substitution rules.
+   {:id \"123\"} -> rule replacing '$id with \"123\""
+  [params]
+  (map (fn [[k v]]
+         (param-rule (symbol (str "$" (name k))) v))
+       params))
+
+(defn- resolve-params
+  "Apply parameter substitution to pattern using rule system."
+  [pattern params]
+  (if (seq params)
+    (pattern/apply-rules (params->rules params) pattern)
+    pattern))
+
+^:rct/test
+(comment
+  ;; param-rule: matches exact symbol
+  ((param-rule '$id "123") '$id) ;=> "123"
+  ;; param-rule: returns nil on no match
+  ((param-rule '$id "123") '$other) ;=> nil
+  ((param-rule '$id "123") :id) ;=> nil
+
+  ;; resolve-params: substitutes $-prefixed symbols
+  (resolve-params '{:user {:id $id :name ?name}} {:id "user-123"})
+  ;=> '{:user {:id "user-123" :name ?name}}
+
+  ;; resolve-params: multiple params
+  (resolve-params '{:user {:id $id :role $role}} {:id "123" :role "admin"})
+  ;=> '{:user {:id "123" :role "admin"}}
+
+  ;; resolve-params: nested structures
+  (resolve-params '{:query {:filter {:status $status}}} {:status "active"})
+  ;=> '{:query {:filter {:status "active"}}}
+
+  ;; resolve-params: structural params (maps/vectors as values)
+  (resolve-params '{:query $filter} {:filter {:status "active" :role "admin"}})
+  ;=> '{:query {:status "active" :role "admin"}}
+
+  ;; resolve-params: empty params returns pattern unchanged
+  (resolve-params '{:user {:id $id}} {})
+  ;=> '{:user {:id $id}}
+  (resolve-params '{:user {:id $id}} nil)
+  ;=> '{:user {:id $id}}
+  )
+
+;;=============================================================================
 ;; Response Helpers
 ;;=============================================================================
 
@@ -146,14 +204,20 @@
    :content-type (get content-types format)})
 
 (defn- execute-pull
-  "Execute pull pattern against API data."
+  "Execute pull pattern against API data.
+   Params in pull-request are used for:
+   1. Pattern parameterization: $key in pattern replaced with value
+   2. Ring request params: merged into ring-request :params"
   [api-fn ring-request pull-request]
   (try
-    ;; Merge params from pull request body into ring request
-    (let [ring-request (update ring-request :params merge (:params pull-request))
+    (let [params (:params pull-request)
+          ;; Resolve $params in pattern using rule-based substitution
+          resolved-pattern (resolve-params (:pattern pull-request) params)
+          ;; Also merge params into ring request for API use
+          ring-request (update ring-request :params merge params)
           {:keys [data schema]} (api-fn ring-request)
           compiled (pattern/compile-pattern
-                    (:pattern pull-request)
+                    resolved-pattern
                     (cond-> {} schema (assoc :schema schema)))
           result (compiled (pattern/vmr data))]
       (if (pattern/failure? result)

@@ -1,4 +1,4 @@
-(ns sg.flybot.pullable.core
+(ns sg.flybot.pullable.impl
   "Core pattern matching engine.
 
    This namespace provides the pattern matching implementation:
@@ -1935,12 +1935,19 @@
      (?_ :skip N)   - Skip exactly N elements
      NOTE: Add ?_* at end to consume remaining elements
 
-   Extended options:
+   Variable options:
      (?x :when pred)    - Constrained match
      (?x :default val)  - Default on failure
      NOTE: :when on quantified vars (?x* :when pred) filters individual
            elements during collection, not the final collected result.
            To validate the collection, use body: (when (pred ?x) ?x)
+
+   Compile options (optional third argument):
+     :rules   - custom rewrite rules (prepended to defaults)
+     :only    - use only these rules, ignoring defaults
+     :schema  - schema for compile-time validation
+     :resolve - custom symbol resolver (fn [sym] -> value)
+     :eval    - custom form evaluator (fn [form] -> value)
 
    Special binding: $ is bound to the matched/transformed value.
 
@@ -1948,35 +1955,43 @@
      ((match-fn {:a ?a :b ?b} (+ ?a ?b)) {:a 1 :b 2})  ;=> 3
      ((match-fn [?first ?rest*] ?rest) [1 2 3])        ;=> (2 3)
      ((match-fn {:a ?x} (assoc $ :sum ?x)) {:a 1 :b 2});=> {:a 1 :b 2 :sum 1}
-     ((match-fn [(?_ :skip 2) (?page* :take 3) ?_*] ?page) [1 2 3 4 5 6 7]) ;=> [3 4 5]"
-  [pattern body]
-  (let [;; Collect all variable bindings from pattern
-        vars (atom #{})
-        _ (walk/postwalk
-           (fn [x]
-             (when (and (symbol? x) (= \? (first (name x))))
-               (let [nm (name x)
-                     ;; Strip prefix ? and any suffix quantifiers
-                     base (if-let [[_ b] (re-matches #"\?([^\s\?\+\*\!]+)[\?\+\*]?\!?" nm)]
-                            b
-                            (subs nm 1))]
-                 (when (and (not= "_" base)
-                            (not (re-find forbidden-var-chars base)))
-                   (swap! vars conj (symbol base)))))
-             x)
-           pattern)
-        var-syms @vars
-        ;; Create let bindings: ?x -> (get vars 'x)
-        bindings (vec (mapcat (fn [s] [(symbol (str "?" s)) `(get ~'vars '~s)]) var-syms))]
-    `(let [matcher# (compile-pattern '~pattern)]
-       (fn [data#]
-         (let [result# (matcher# (vmr data#))]
-           (if (failure? result#)
-             result#
-             (let [~'$ (:val result#)
-                   ~'vars (:vars result#)
-                   ~@bindings]
-               ~body)))))))
+     ((match-fn [(?_ :skip 2) (?page* :take 3) ?_*] ?page) [1 2 3 4 5 6 7]) ;=> [3 4 5]
+
+     ;; With schema validation
+     ((match-fn {:name ?n} ?n {:schema {:name :string}}) {:name \"alice\"}) ;=> \"alice\"
+
+     ;; With custom rules
+     (let [not-nil (rule (not-nil ?x) (?x :when some?))]
+       ((match-fn {:name (not-nil ?n)} ?n {:rules [not-nil]}) {:name \"bob\"})) ;=> \"bob\""
+  ([pattern body] `(match-fn ~pattern ~body {}))
+  ([pattern body opts]
+   (let [;; Collect all variable bindings from pattern
+         vars (atom #{})
+         _ (walk/postwalk
+            (fn [x]
+              (when (and (symbol? x) (= \? (first (name x))))
+                (let [nm (name x)
+                      ;; Strip prefix ? and any suffix quantifiers
+                      base (if-let [[_ b] (re-matches #"\?([^\s\?\+\*\!]+)[\?\+\*]?\!?" nm)]
+                             b
+                             (subs nm 1))]
+                  (when (and (not= "_" base)
+                             (not (re-find forbidden-var-chars base)))
+                    (swap! vars conj (symbol base)))))
+              x)
+            pattern)
+         var-syms @vars
+         ;; Create let bindings: ?x -> (get vars 'x)
+         bindings (vec (mapcat (fn [s] [(symbol (str "?" s)) `(get ~'vars '~s)]) var-syms))]
+     `(let [matcher# (compile-pattern '~pattern ~opts)]
+        (fn [data#]
+          (let [result# (matcher# (vmr data#))]
+            (if (failure? result#)
+              result#
+              (let [~'$ (:val result#)
+                    ~'vars (:vars result#)
+                    ~@bindings]
+                ~body))))))))
 
 ;;-----------------------------------------------------------------------------
 ;; Built-in Schema Rules

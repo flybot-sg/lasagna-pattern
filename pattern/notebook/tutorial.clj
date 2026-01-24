@@ -19,7 +19,6 @@
 ;; - `failure?`    - Check if a match failed
 ;; - `rule`        - Create pattern → template transformation rules
 ;; - `apply-rules` - Apply rules recursively to transform data
-;; - `compile-pattern` - Compile patterns to matcher functions (advanced)
 ;; - `register-var-option!` - Extend variable syntax (advanced)
 ;; - `register-schema-rule!` - Extend schema vocabulary (advanced)
 ;;
@@ -506,54 +505,51 @@
 ;=> 8080
 
 ;;=============================================================================
-;; PART 14: Advanced - compile-pattern
+;; PART 14: Custom Rewrite Rules
 ;;=============================================================================
 ;;
-;; For lower-level control, use compile-pattern directly.
-;; It returns a matcher function that operates on internal MatchResult types.
-;;
-;; NOTE: This section uses internal APIs from sg.flybot.pullable.core.
-;; These are useful for building custom tooling but may change between versions.
-
-(require '[sg.flybot.pullable.core :as pc])
-
-;; Compile a pattern to a matcher
-(def name-matcher (p/compile-pattern '{:name ?n}))
-
-;; The matcher takes a ValMatchResult (created via vmr) and returns either
-;; a ValMatchResult with :val and :vars, or a MatchFailure
-(name-matcher (pc/vmr {:name "Alice" :age 30}))
-;=> {:val {:name "Alice" :age 30} :vars {n "Alice"}}
-
-;; Check for failure (can use either p/failure? or pc/failure? - same fn)
-(p/failure? (name-matcher (pc/vmr "not a map")))
-;=> true
+;; You can extend the pattern syntax with custom rewrite rules.
+;; Pass rules via the optional third argument to match-fn.
 
 ;;-------------------------------------------------------------------
 ;; Custom rewrite rules
 ;;-------------------------------------------------------------------
-;; You can extend the pattern syntax with custom rewrite rules.
+;; Define a rule for (not-nil ?x) syntax using the `rule` macro
 
-;; Define a rule for (not-nil ?x) syntax
-(def not-nil-rule
-  (fn [form]
-    (when (and (seq? form) (= 'not-nil (first form)))
-      (let [var (second form)]
-        (list var :when some?)))))
+(def not-nil-rule (p/rule (not-nil ?x) (?x :when some?)))
 
-;; Use with :rules option
-((p/compile-pattern '(not-nil ?n) {:rules [not-nil-rule]})
- (pc/vmr "hello"))
-;=> {:val "hello" :vars {n "hello"}}
+;; Use with :rules option in match-fn
+((p/match-fn (not-nil ?n) ?n {:rules [not-nil-rule]}) "hello")
+;=> "hello"
 
-((p/compile-pattern '(not-nil ?n) {:rules [not-nil-rule]})
- (pc/vmr nil))
-;=> MatchFailure (predicate failed)
+(p/failure? ((p/match-fn (not-nil ?n) ?n {:rules [not-nil-rule]}) nil))
+;=> true
 
 ;; Use rules in map patterns
-((p/compile-pattern '{:name (not-nil ?n)} {:rules [not-nil-rule]})
- (pc/vmr {:name "Alice"}))
-;=> {:vars {n "Alice"}}
+((p/match-fn {:name (not-nil ?n)} ?n {:rules [not-nil-rule]})
+ {:name "Alice"})
+;=> "Alice"
+
+((p/match-fn {:name (not-nil ?n)} ?n {:rules [not-nil-rule]})
+ {:name nil})
+;=> MatchFailure
+
+;;-------------------------------------------------------------------
+;; Rules as functions
+;;-------------------------------------------------------------------
+;; Rules can also be plain functions: (form) -> rewritten-form | nil
+
+(defn not-empty-rule [form]
+  (when (and (seq? form) (= 'not-empty (first form)))
+    (let [var (second form)]
+      (list var :when seq))))
+
+((p/match-fn {:items (not-empty ?items)} ?items {:rules [not-empty-rule]})
+ {:items [1 2 3]})
+;=> [1 2 3]
+
+(p/failure? ((p/match-fn {:items (not-empty ?items)} ?items {:rules [not-empty-rule]})
+             {:items []}))
 
 ;;=============================================================================
 ;; PART 15: Schema Validation
@@ -562,6 +558,8 @@
 ;; Schemas validate pattern structure at compile time.
 ;; When provided, patterns that don't match the schema are rejected
 ;; BEFORE runtime - catching errors early.
+;;
+;; Pass schemas via the :schema option in match-fn's third argument.
 
 ;;-------------------------------------------------------------------
 ;; Basic schema types
@@ -569,11 +567,12 @@
 ;; Type keywords: :map :seq :string :number :keyword :symbol :any
 
 ;; This pattern is valid for a map schema
-(p/compile-pattern '{:name ?n} {:schema :map})
-;=> <matcher-fn>
+(def get-name (p/match-fn {:name ?n} ?n {:schema :map}))
+(get-name {:name "Alice"})
+;=> "Alice"
 
 ;; This would FAIL at compile time (seq pattern on map schema):
-;; (p/compile-pattern '[?x] {:schema :map})
+;; (p/match-fn [?x] ?x {:schema :map})
 ;; => ExceptionInfo: Schema violation: pattern uses :seq but schema expects :map
 
 ;;-------------------------------------------------------------------
@@ -585,11 +584,14 @@
    :email :string})
 
 ;; Valid: pattern only uses declared fields
-(p/compile-pattern '{:name ?n :age ?a} {:schema user-schema})
-;=> <matcher-fn>
+(def get-user-info
+  (p/match-fn {:name ?n :age ?a} {:name ?n :age ?a} {:schema user-schema}))
+
+(get-user-info {:name "Alice" :age 30 :email "alice@example.com"})
+;=> {:name "Alice" :age 30}
 
 ;; Invalid: pattern uses undeclared field
-;; (p/compile-pattern '{:name ?n :secret ?s} {:schema user-schema})
+;; (p/match-fn {:name ?n :secret ?s} ?s {:schema user-schema})
 ;; => ExceptionInfo: Schema violation: pattern has key :secret not defined in record schema
 
 ;;-------------------------------------------------------------------
@@ -613,12 +615,14 @@
    :age :number})
 
 ;; Patterns can only extract public fields
-(def get-user (p/compile-pattern '{:name ?n :age ?a} {:schema public-user-schema}))
-(get-user (pc/vmr user-data))
-;=> {:val {...} :vars {n "Alice" a 30}}
+(def get-public-user
+  (p/match-fn {:name ?n :age ?a} {:name ?n :age ?a} {:schema public-user-schema}))
+
+(get-public-user user-data)
+;=> {:name "Alice" :age 30}
 
 ;; Attempting to access internal fields is REJECTED at compile time:
-;; (p/compile-pattern '{:name ?n :_internal-id ?id} {:schema public-user-schema})
+;; (p/match-fn {:name ?n :_internal-id ?id} ?id {:schema public-user-schema})
 ;; => ExceptionInfo: pattern has key :_internal-id not defined in record schema
 
 ;; This provides:
@@ -631,34 +635,43 @@
 ;;-------------------------------------------------------------------
 ;; For maps where all keys share a type (not specific fields)
 
-(p/compile-pattern '{:x ?x :y ?y} {:schema [:map-of :keyword :number]})
-;=> <matcher-fn>  ; any keyword keys with number values
+(def get-coords
+  (p/match-fn {:x ?x :y ?y} [?x ?y] {:schema [:map-of :keyword :number]}))
+
+(get-coords {:x 10 :y 20})
+;=> [10 20]
 
 ;;-------------------------------------------------------------------
 ;; Sequence schemas
 ;;-------------------------------------------------------------------
 ;; Homogeneous sequences
-(p/compile-pattern '[?first ?rest*] {:schema [:number]})
-;=> <matcher-fn>  ; seq of numbers
+(def get-first-num
+  (p/match-fn [?first ?rest*] ?first {:schema [:number]}))
+
+(get-first-num [1 2 3])
+;=> 1
 
 ;; Tuples (fixed positions with types)
-(p/compile-pattern '[?x ?y] {:schema [:tuple :number :string]})
-;=> <matcher-fn>  ; [number, string] pair
+(def parse-pair
+  (p/match-fn [?x ?y] {:num ?x :str ?y} {:schema [:tuple :number :string]}))
+
+(parse-pair [42 "hello"])
+;=> {:num 42 :str "hello"}
 
 ;;-------------------------------------------------------------------
 ;; Advanced schema types
 ;;-------------------------------------------------------------------
 ;; Literal values
-(p/compile-pattern '{:status ?s} {:schema {:status [:= :active]}})
+(p/match-fn {:status ?s} ?s {:schema {:status [:= :active]}})
 
 ;; Enums (sets)
-(p/compile-pattern '{:status ?s} {:schema {:status #{:active :pending :closed}}})
+(p/match-fn {:status ?s} ?s {:schema {:status #{:active :pending :closed}}})
 
 ;; Union types
-(p/compile-pattern '{:id ?id} {:schema {:id [:or :string :number]}})
+(p/match-fn {:id ?id} ?id {:schema {:id [:or :string :number]}})
 
 ;; Optional fields
-(p/compile-pattern '{:name ?n} {:schema {:name :string :bio [:optional :string]}})
+(p/match-fn {:name ?n} ?n {:schema {:name :string :bio [:optional :string]}})
 
 ;;-------------------------------------------------------------------
 ;; Extending schema vocabulary
@@ -878,8 +891,10 @@
 ;; - :path   - Location in data structure (vector of keys/indices)
 ;; - :value  - The value that failed to match
 ;;
-;; Advanced:
-;; - `compile-pattern` - Direct pattern compilation with custom rules
+;; Advanced (match-fn options):
+;; - :rules   - Custom rewrite rules
+;; - :schema  - Compile-time schema validation
 ;; - `register-var-option!` - Extend variable syntax
+;; - `register-schema-rule!` - Extend schema vocabulary
 ;;
 ;; For more details, see PROJECT_SUMMARY.md and the source code!

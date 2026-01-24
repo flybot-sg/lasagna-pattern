@@ -4,7 +4,7 @@ Work-in-progress pull-based data transformation engine for Clojure/ClojureScript
 
 ## Status
 - Active development; APIs are unstable.
-- Implemented: internal engine in `sg.flybot.pullable.core`.
+- Implemented: internal engine in `sg.flybot.pullable.impl`.
 
 ## Installation
 Not yet released to a registry. Once a public API is stabilized, a git or tag-based dependency will be provided here.
@@ -15,8 +15,8 @@ Not yet released to a registry. Once a public API is stabilized, a git or tag-ba
 - Composable matchers and transformation primitives
 
 ## Components
-- `sg.flybot.pullable.core` (internal): core matchers and transformation primitives.
-- Planned: `sg.flybot.pullable` (public API), `sg.flybot.pullable.util` (helpers), `sg.flybot.pullable.core2` (advanced).
+- `sg.flybot.pullable.impl` (internal): core matchers and transformation primitives.
+- Planned: `sg.flybot.pullable` (public API), `sg.flybot.pullable.util` (helpers).
 
 ## Development
 

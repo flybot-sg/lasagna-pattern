@@ -2,10 +2,6 @@
 
 A monorepo for pull-based pattern matching and data transformation tools in Clojure/ClojureScript.
 
-**Use `jj` instead of `git`** - This is a jj/git co-located repo.
-
-**Use `/clojure` skill** when working on this project.
-
 ## Build System
 
 All builds run from root via Babashka:
@@ -54,12 +50,11 @@ Components are auto-discovered (any directory with `deps.edn`).
 
 Core pattern DSL enabling declarative matching and transformation of Clojure data structures.
 
-**Source:** `pattern/src/sg/flybot/pullable/core.cljc`
+**Source:** `pattern/src/sg/flybot/pullable/impl.cljc`
 
 **Public API:**
-- `match-fn` - Create pattern-matching functions with variable bindings
+- `match-fn` - Create pattern-matching functions with variable bindings (supports `:schema`, `:rules` options)
 - `rule` - Pattern → template transformation rules
-- `compile-pattern` - Low-level pattern compilation
 - `apply-rules` - Recursive tree transformation
 
 **Pattern syntax:**

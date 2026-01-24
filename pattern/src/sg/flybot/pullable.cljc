@@ -1,6 +1,6 @@
 (ns sg.flybot.pullable
   "Public API for the pullable pattern matching library."
-  (:require [sg.flybot.pullable.core :as core]))
+  (:require [sg.flybot.pullable.impl :as impl]))
 
 ;;=============================================================================
 ;; Core API
@@ -18,7 +18,7 @@
      (let [result ((match-fn {:a ?x} ?x) \"not a map\")]
        (when (failure? result)
          (:reason result)))  ;=> \"expected map, got ...\""
-  core/failure?)
+  impl/failure?)
 
 (def register-var-option!
   "Register a custom option handler for extended matching variables.
@@ -37,7 +37,7 @@
      ;; Usage: (?x :transform str/upper-case)
      ((match-fn {:name (?n :transform clojure.string/upper-case)} ?n)
       {:name \"alice\"})  ;=> \"ALICE\""
-  core/register-var-option!)
+  impl/register-var-option!)
 
 (def register-schema-rule!
   "Register a rule for schema type inference and validation.
@@ -59,7 +59,7 @@
                   :child-schema (constantly ?elem-type)}))
 
      ;; Usage: [:non-empty :number] validates sequences of numbers"
-  core/register-schema-rule!)
+  impl/register-schema-rule!)
 
 (defmacro match-fn
   "Create a pattern-matching function. Returns body result on match, MatchFailure on failure.
@@ -73,6 +73,13 @@
      {}       - Map pattern
      []       - Sequence pattern
 
+   Compile options (optional third argument):
+     :rules   - custom rewrite rules (prepended to defaults)
+     :only    - use only these rules, ignoring defaults
+     :schema  - schema for compile-time validation
+     :resolve - custom symbol resolver (fn [sym] -> value)
+     :eval    - custom form evaluator (fn [form] -> value)
+
    Special binding: $ is bound to the matched/transformed value.
 
    Examples:
@@ -80,12 +87,15 @@
      ((match-fn [?first ?rest*] ?rest) [1 2 3])        ;=> (2 3)
      ((match-fn {:a ?x} (assoc $ :sum ?x)) {:a 1 :b 2});=> {:a 1 :b 2 :sum 1}
 
+     ;; With schema validation
+     ((match-fn {:name ?n} ?n {:schema {:name :string}}) {:name \"alice\"}) ;=> \"alice\"
+
    Failure handling:
      (let [result ((match-fn {:x ?x} ?x) \"bad\")]
        (when (failure? result)
          (:reason result)))  ; human-readable error"
-  [pattern body]
-  `(core/match-fn ~pattern ~body))
+  ([pattern body] `(impl/match-fn ~pattern ~body))
+  ([pattern body opts] `(impl/match-fn ~pattern ~body ~opts)))
 
 ;;=============================================================================
 ;; Rule-based Transformation
@@ -98,57 +108,13 @@
    - On match: returns template with ?vars substituted
    - On no match: returns nil
 
-   Can be used for:
-   1. Runtime data transformation
-   2. Compile-time pattern rewriting (via :rules option in compile-pattern)
-
    Examples:
      ;; Algebraic simplification
      (def double-to-add (rule (* 2 ?x) (+ ?x ?x)))
      (double-to-add '(* 2 5))  ;=> (+ 5 5)
-     (double-to-add '(* 3 5))  ;=> nil
-
-     ;; Custom pattern syntax
-     (def not-nil (rule (not-nil ?x) (?x :when some?)))
-     (compile-pattern '{:name (not-nil ?n)} {:rules [not-nil]})"
+     (double-to-add '(* 3 5))  ;=> nil"
   [pattern template]
-  `(core/rule ~pattern ~template))
-
-(def compile-pattern
-  "Compile a pattern to a matcher function.
-
-   Two-phase compilation:
-   1. Rewrite: Transform syntax sugar to core patterns
-   2. Compile: Build matcher functions
-
-   Options (optional second argument):
-     :rules  - additional rewrite rules prepended to defaults
-     :only   - use only these rules, ignoring defaults
-     :schema - schema to validate pattern against at compile time
-
-   Schema format:
-     Type keywords: :map :seq :string :number :keyword :symbol :any
-     Literal: [:= value]
-     Enum: #{:a :b :c}
-     Union: [:or schema1 schema2]
-     Optional: [:optional schema]
-     Record: {:field1 :type1 :field2 :type2}
-     Dictionary: [:map-of key-type value-type]
-     Tuple: [:tuple type1 type2]
-     Homogeneous seq: [:element-type]
-
-   Examples:
-     (compile-pattern '{:name ?n})
-     ; Returns a matcher
-
-     ;; With schema validation
-     (compile-pattern '{:name ?n :age ?a}
-                      {:schema {:name :string :age :number}})
-
-     ;; With custom rules
-     (def not-nil (rule (not-nil ?x) (?x :when some?)))
-     (compile-pattern '{:name (not-nil ?n)} {:rules [not-nil]})"
-  core/compile-pattern)
+  `(impl/rule ~pattern ~template))
 
 (def apply-rules
   "Apply rules recursively throughout a data structure (bottom-up).
@@ -161,4 +127,4 @@
      (apply-rules [simplify-mul-2 simplify-add-0]
                   '(+ 0 (* 2 y)))
      ;=> (+ y y)"
-  core/apply-rules)
+  impl/apply-rules)
