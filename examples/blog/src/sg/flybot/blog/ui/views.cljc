@@ -48,6 +48,14 @@
        :cljs (when (seq body)
                [:div {:innerHTML (marked body)}]))))
 
+(defn- content-preview
+  "Get first n chars of content body (without frontmatter)."
+  [content n]
+  (let [body (strip-frontmatter (or content ""))]
+    (if (> (count body) n)
+      (str (subs body 0 n) "...")
+      body)))
+
 ;;=============================================================================
 ;; Markdown Editor (Toast UI)
 ;;=============================================================================
@@ -108,23 +116,24 @@
   (let [post (state/selected-post state)]
     (if post
       [:div.post-detail
-       [:a.back-link {:href "#" :on {:click (:on-back actions)}} "← Back to posts"]
+       [:div.detail-header
+        [:a.back-link {:href "#" :on {:click #((:on-back actions) % :list)}} "← Back to posts"]
+        [:button.secondary {:on {:click #((:on-history actions) (:post/id post))}} "View History"]]
        [:h1 (:post/title post)]
        [:div.post-meta "By " (:post/author post) " • " (format-date (:post/created-at post))]
        (tag-list (:post/tags post))
-       [:div.post-body {:style {:margin-top "2rem"}}
-        (render-markdown (:post/content post))]
-       [:div.button-group {:style {:margin-top "2rem"}}
+       [:div.post-body (render-markdown (:post/content post))]
+       [:div.button-group
         [:button {:on {:click #((:on-edit actions) post)}} "Edit"]
         [:button.danger {:on {:click #((:on-delete actions) (:post/id post))}} "Delete"]]]
       [:div
-       [:a.back-link {:href "#" :on {:click (:on-back actions)}} "← Back to posts"]
+       [:a.back-link {:href "#" :on {:click #((:on-back actions) % :list)}} "← Back to posts"]
        [:p "Post not found"]])))
 
 (defn post-form-view [{:keys [form error view]} actions]
   (let [editing? (= view :edit)]
     [:div.post-form
-     [:a.back-link {:href "#" :on {:click (:on-back actions)}} "← Cancel"]
+     [:a.back-link {:href "#" :on {:click #((:on-back actions) % :list)}} "← Cancel"]
      [:h2 (if editing? "Edit Post" "New Post")]
      (when error [:div.error error])
      [:div.form-group
@@ -137,12 +146,56 @@
      [:button {:on {:click (:on-submit actions)}}
       (if editing? "Save Changes" "Create Post")]]))
 
+(defn post-history-view
+  "List view showing all historical versions of a post."
+  [state actions]
+  (let [post (state/selected-post state)
+        history (:history state)]
+    [:div.post-history
+     [:a.back-link {:href "#" :on {:click #((:on-back actions) % :detail)}} "← Back to post"]
+     [:h1 "Post History: \"" (:post/title post) "\""]
+     (if (empty? history)
+       [:p "No history available for this post."]
+       [:table.history-table
+        [:thead
+         [:tr
+          [:th "Version"] [:th "Date"] [:th "Title"] [:th "Preview"]]]
+        [:tbody
+         (map-indexed
+          (fn [idx version]
+            [:tr {:replicant/key (:version/tx version)
+                  :on {:click #((:on-view-version actions) version)}}
+             [:td (if (zero? idx) "Current" (str "v" (- (count history) idx)))]
+             [:td (format-date (:version/timestamp version))]
+             [:td (:post/title version)]
+             [:td.preview (content-preview (:post/content version) 50)]])
+          history)]])]))
+
+(defn post-history-detail-view
+  "Read-only view of a historical version with restore option."
+  [state actions]
+  (let [version (:history-version state)
+        is-current? (= (:version/tx version)
+                       (:version/tx (first (:history state))))]
+    [:div.post-history-detail
+     [:a.back-link {:href "#" :on {:click #((:on-back actions) % :history)}} "← Back to history"]
+     [:h1 (:post/title version)
+      [:span.version-label (if is-current? "(Current)" (str "(from " (format-date (:version/timestamp version)) ")"))]]
+     [:div.post-meta "By " (:post/author version) " • " (format-date (:version/timestamp version))]
+     (tag-list (:post/tags version))
+     [:div.post-body.history-content (render-markdown (:post/content version))]
+     (when-not is-current?
+       [:div.button-group {:style {:margin-top "2rem"}}
+        [:button {:on {:click #((:on-restore actions) version)}} "Restore This Version"]])]))
+
 (defn app-view [state actions]
   (case (:view state)
     :list (post-list-view state actions)
     :detail (post-detail-view state actions)
     :edit (post-form-view state actions)
     :new (post-form-view state actions)
+    :history (post-history-view state actions)
+    :history-detail (post-history-detail-view state actions)
     (post-list-view state actions)))
 
 ;;=============================================================================

@@ -320,20 +320,30 @@
 ;;## Map matcher
 
 (defn mmap
-  "a matcher matches on `matcher-map`, which is a key to matcher map"
+  "A matcher that matches on `matcher-map`, a map of keys to matchers.
+   Supports maps and ILookup implementations (for lazy data sources).
+   For maps: preserves unmatched keys in :val (passthrough semantics).
+   For ILookup: returns only matched keys (can't enumerate all keys)."
   [matcher-map]
   (matcher :map
            (fn [mr]
-             (let [m (:val mr)]
-               (if-not (map? m)
+             (let [m (:val mr)
+                   is-map? (map? m)]
+               (if-not #?(:clj  (instance? clojure.lang.ILookup m)
+                          :cljs (satisfies? ILookup m))
                  (fail (str "expected map, got " (type m)) :map m)
                  (reduce
                   (fn [mr' [k mch]]
                     (let [result (mch (vmr (get m k)))]
                       (if (failure? result)
                         (reduced (nest-failure result k))
-                        (-> mr' (update :val conj [k (:val result)]) (merge-vars result)))))
-                  mr matcher-map))))))
+                        (-> mr'
+                            (update :val assoc k (:val result))
+                            (merge-vars result)))))
+                  ;; For maps: preserve unmatched keys (passthrough)
+                  ;; For ILookup: start with empty map (can't enumerate)
+                  (if is-map? mr (assoc mr :val {}))
+                  matcher-map))))))
 
 ^:rct/test
 (comment
@@ -342,7 +352,24 @@
   (mm (vmr {:a 4 :b 0})) ;=>> {:val {:a 4 :b 0} :vars {'a 4}}
   ;; mmap fails when any key matcher fails
   (mm (vmr {:a 4 :b 3})) ;=>>
-  failure?)
+  failure?
+
+  ;; mmap works with ILookup implementations (not just maps)
+  ;; This is essential for lazy data sources
+  (def test-ilookup
+    (reify clojure.lang.ILookup
+      (valAt [_ k] (get {:a 1 :b 2} k))
+      (valAt [_ k nf] (get {:a 1 :b 2} k nf))))
+  ((mmap {:a (mvar 'x wildcard)}) (vmr test-ilookup)) ;=>>
+  {:val {:a 1} :vars {'x 1}}
+
+  ;; mmap with non-keyword keys (indexed lookup)
+  (def idx-lookup
+    (reify clojure.lang.ILookup
+      (valAt [_ k] (get {{:id 1} {:name "Alice"}} k))
+      (valAt [_ k nf] (get {{:id 1} {:name "Alice"}} k nf))))
+  ((mmap {{:id 1} (mvar 'result wildcard)}) (vmr idx-lookup)) ;=>>
+  {:val {{:id 1} {:name "Alice"}} :vars {'result {:name "Alice"}}})
 
 ;;## Sequence matchers
 ;;
@@ -902,12 +929,12 @@
 
 (defmatcher :map "(? :map <key> <pattern>...)"
   ;; Collect key-pattern pairs as flat variadic args
+  ;; Keys can be keywords (record access) or any value (indexed lookup)
   (mzcollect (constantly true) 'pairs 0)
   (vars-> [pairs]
           (when-not (and (even? (count pairs))
-                         (every? keyword? (take-nth 2 pairs))
                          (every? matcher-type (take-nth 2 (rest pairs))))
-            (throw (ex-info "Invalid :map args: expected alternating keywords and matchers"
+            (throw (ex-info "Invalid :map args: expected alternating keys and matchers"
                             {:pairs pairs})))
           (mmap (apply hash-map pairs))))
 
@@ -1088,13 +1115,15 @@
   "Rewrite syntax sugar to core patterns.
    Uses postwalk to apply rules bottom-up (inner forms first).
    Skips descending into fn forms (they're kept as-is for resolve-fn).
+   For maps, only walks values (keys are literal lookup keys).
    Each rule is a fn: pattern -> core-pattern or nil"
   [ptn rules]
   (let [apply-rules (fn [x] (or (some #(% x) rules) x))]
     ((fn walk [x]
-       (if (fn-form? x)
-         x  ;; Don't descend into fn forms
-         (apply-rules (walk/walk walk identity x))))
+       (cond
+         (fn-form? x) x
+         (and (map? x) (not (record? x))) (apply-rules (update-vals x walk))
+         :else (apply-rules (walk/walk walk identity x))))
      ptn)))
 
 (defn- wrap-map-value
@@ -2028,7 +2057,7 @@
           (let [result# (matcher# (vmr data#))]
             (if (failure? result#)
               result#
-              (let [~'$ (:val result#)
+              (let [~'$ data#
                     ~'vars (:vars result#)
                     ~@bindings]
                 ~body))))))))
@@ -2064,12 +2093,18 @@
      {:type schema})))
 
 ;; Record map: {:field1 type1 :field2 type2 ...}
+;; Only restrict valid-keys for true record schemas (all keys are keywords).
+;; Indexed/lookup schemas have non-keyword keys (maps, vectors) and allow any
+;; query matching the key schema.
 (register-schema-rule!
  (fn [schema]
    (when (map? schema)
-     {:type :map
-      :child-schema (fn [k] (get schema k :any))
-      :valid-keys (set (keys schema))})))
+     (let [ks (keys schema)
+           ;; Only restrict keys if this is a record schema (all keys are keywords)
+           record-schema? (every? keyword? ks)]
+       {:type :map
+        :child-schema (fn [k] (get schema k :any))
+        :valid-keys (when record-schema? (set ks))}))))
 
 ;; Enum (set): #{:a :b :c}
 (register-schema-rule!
@@ -2466,6 +2501,25 @@
   (try
     (compile-pattern '{:nick {:x ?x}} {:schema {:nick [:optional :string]}})
     (catch clojure.lang.ExceptionInfo e
-      (:schema-type (ex-data e)))))
-  ;=> :string)
+      (:schema-type (ex-data e))))
+  ;=> :string
+
+  ;;-------------------------------------------------------------------
+  ;; Indexed lookup: map keys that are not keywords
+  ;;-------------------------------------------------------------------
+  ;; Map keys that are maps themselves should be used as literal lookup keys,
+  ;; not rewritten as patterns. This is essential for indexed lookup patterns
+  ;; like {:posts/history {{:post/id 1} ?versions}}
+
+  ;; Map with map key - key should be treated as literal, not a pattern
+  ((compile-pattern '{{:id 1} ?result}) (vmr {{:id 1} {:name "Alice"}})) ;=>>
+  {:val {{:id 1} {:name "Alice"}} :vars {'result {:name "Alice"}}}
+
+  ;; Map with vector key - key should be treated as literal
+  ((compile-pattern '{[1 2] ?result}) (vmr {[1 2] "found"})) ;=>>
+  {:val {[1 2] "found"} :vars {'result "found"}}
+
+  ;; Nested indexed lookup
+  ((compile-pattern '{:data {{:id 1} ?x}}) (vmr {:data {{:id 1} 42}})) ;=>>
+  {:vars {'x 42}})
 

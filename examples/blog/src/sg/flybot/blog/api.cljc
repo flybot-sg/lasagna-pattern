@@ -42,13 +42,22 @@
    {:post/id :number}
    {:post/author :string}])
 
+(def version-schema
+  "Schema for a historical version of a post."
+  (merge post-schema
+         {:version/tx :number
+          :version/timestamp :any}))
+
 (def schema
   "API schema - noun-only, single source of truth.
 
    :posts supports both sequential and indexed access:
    - As sequence: (seq posts) → all posts
-   - As lookup: (get posts {:id 3}) → post by query"
-  {:posts [:union [post-schema] {post-query post-schema}]})
+   - As lookup: (get posts {:id 3}) → post by query
+   :posts/history returns historical versions of a post:
+   - {:posts/history {{:post/id 1} ?versions}}"
+  {:posts [:union [post-schema] {post-query post-schema}]
+   :posts/history {post-query [version-schema]}})
 
 ;;=============================================================================
 ;; API Builder
@@ -64,6 +73,7 @@
 
    Returns a map with:
    - :posts - Posts collection supporting ILookup and Seqable
+   - :posts/history - History lookup supporting ILookup
 
    Usage:
      (def api (make-api conn))
@@ -71,11 +81,13 @@
      (get (:posts api) {:id 3})           ; READ by id
      (coll/mutate! (:posts api) nil {...})      ; CREATE
      (coll/mutate! (:posts api) {:id 3} {...})  ; UPDATE
-     (coll/mutate! (:posts api) {:id 3} nil)    ; DELETE"
+     (coll/mutate! (:posts api) {:id 3} nil)    ; DELETE
+     (get (:posts/history api) {:post/id 3})    ; HISTORY"
   ([conn] (make-api conn {}))
   ([conn {:keys [indexes] :or {indexes #{#{:post/id}}}}]
    (life-cycle-map
-    {:posts (fnk [] (db/posts conn {:indexes indexes}))})))
+    {:posts (fnk [] (db/posts conn {:indexes indexes}))
+     :posts/history (fnk [] (db/post-history-lookup conn))})))
 
 ^:rct/test
 (comment

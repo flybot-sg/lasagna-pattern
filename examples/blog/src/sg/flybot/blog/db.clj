@@ -183,6 +183,58 @@
       false)))
 
 ;;=============================================================================
+;; History Query
+;;=============================================================================
+
+(defn- find-by-at
+  "Find entity by query at a specific database state."
+  [db query]
+  (let [[k v] (first query)]
+    (d/q `[:find (~'pull ~'?e [~'*]) ~'.
+           :in ~'$ ~'?v
+           :where [~'?e ~k ~'?v]]
+         db v)))
+
+(defn post-history
+  "Get all historical versions of a post by ID.
+   Returns list of {:version/tx, :version/timestamp, :post/*} maps sorted newest first.
+   Takes a db value (not conn) to ensure consistent view."
+  [db post-id]
+  (let [history-db (d/history db)
+        ;; Find all transactions that touched this post's content or title
+        txs (d/q '[:find ?tx ?inst
+                   :in $ ?id
+                   :where
+                   [?e :post/id ?id]
+                   (or [?e :post/content _ ?tx true]
+                       [?e :post/title _ ?tx true])
+                   [?tx :db/txInstant ?inst]]
+                 history-db post-id)]
+    (->> txs
+         (sort-by second)
+         reverse
+         (map (fn [[tx inst]]
+                (let [db-at (d/as-of db tx)
+                      post (normalize-entity (find-by-at db-at {:post/id post-id}))]
+                  (assoc post
+                         :version/tx tx
+                         :version/timestamp inst)))))))
+
+;;=============================================================================
+;; History Lookup (ILookup for API)
+;;=============================================================================
+
+(defn post-history-lookup
+  "Create an ILookup for post history queries."
+  [conn]
+  (reify clojure.lang.ILookup
+    (valAt [_ query]
+      (when-let [post-id (:post/id query)]
+        (post-history @conn post-id)))
+    (valAt [this query not-found]
+      (or (.valAt this query) not-found))))
+
+;;=============================================================================
 ;; Collection Constructor
 ;;=============================================================================
 

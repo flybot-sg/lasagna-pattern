@@ -64,6 +64,31 @@
      (fn [err]
        (swap-state! state/set-error err)))))
 
+(defn load-history! [post-id]
+  (swap-state! state/set-loading true)
+  (api/pull!
+   {:posts/history {{:post/id post-id} '?versions}}
+   (fn [response]
+     (let [versions (get response 'versions)]
+       (swap-state! state/set-history versions)
+       (swap-state! state/set-view :history post-id)))
+   (fn [err]
+     (swap-state! state/set-error err))))
+
+(defn restore-version! [version]
+  (when (js/confirm "Restore this version? The current content will be overwritten.")
+    (let [id (:post/id version)
+          data {:post/title (:post/title version)
+                :post/content (:post/content version)}]
+      (swap-state! state/set-loading true)
+      (api/pull!
+       {:posts {{:post/id id} data}}
+       (fn [_]
+         (swap-state! state/set-view :detail id)
+         (load-posts!))
+       (fn [err]
+         (swap-state! state/set-error err))))))
+
 ;;=============================================================================
 ;; Event Handlers
 ;;=============================================================================
@@ -74,9 +99,9 @@
 (def actions
   "Action handlers passed to views."
   {:on-select (fn [id] (swap-state! state/set-view :detail id))
-   :on-back (fn [e]
+   :on-back (fn [e target]
               (.preventDefault e)
-              (swap-state! state/set-view :list))
+              (swap-state! state/set-view target (:selected-id @app-state)))
    :on-new (fn [_]
              (swap-state! state/reset-form)
              (swap-state! state/set-view :new))
@@ -91,7 +116,12 @@
    :on-submit (fn [_]
                 (if (= :edit (:view @app-state))
                   (update-post!)
-                  (create-post!)))})
+                  (create-post!)))
+   :on-history load-history!
+   :on-view-version (fn [version]
+                      (swap-state! state/set-history-version version)
+                      (swap-state! state/set-view :history-detail))
+   :on-restore restore-version!})
 
 ;;=============================================================================
 ;; Rendering

@@ -6,12 +6,14 @@
 ;;=============================================================================
 
 (def initial-state
-  {:view :list        ; :list | :detail | :edit | :new
+  {:view :list        ; :list | :detail | :edit | :new | :history | :history-detail
    :posts []
    :selected-id nil
    :loading? false
    :error nil
-   :form {:title "" :content ""}})
+   :form {:title "" :content ""}
+   :history []              ; list of historical versions
+   :history-version nil})   ; currently viewing version
 
 ;;=============================================================================
 ;; State Transitions (pure functions)
@@ -40,6 +42,12 @@
          {:title (:post/title post "")
           :content (:post/content post "")}))
 
+(defn set-history [state history]
+  (assoc state :history history :loading? false))
+
+(defn set-history-version [state version]
+  (assoc state :history-version version))
+
 ;;=============================================================================
 ;; Selectors (pure functions)
 ;;=============================================================================
@@ -60,7 +68,7 @@
 ^:rct/test
 (comment
   (set-loading initial-state true)
-  ;=> {:view :list, :posts [], :selected-id nil, :loading? true, :error nil, :form {:title "", :content ""}}
+  ;=> {:view :list, :posts [], :selected-id nil, :loading? true, :error nil, :form {:title "", :content ""}, :history [], :history-version nil}
 
   (-> initial-state
       (set-posts [{:id 1 :title "Test"}])

@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx shadow-cljs:*)",
+      "Bash(curl:*)",
+      "Bash(clj-nrepl-eval:*)",
+      "Bash(lsof:*)",
+      "Bash(kill:*)",
+      "Bash(grep:*)",
+      "Bash(xargs kill:*)",
+      "Bash(clj:*)",
+      "Bash(bb test:*)",
+      "Bash(jj status:*)",
+      "Bash(jj diff:*)",
+      "Bash(jj commit:*)"
+    ]
+  }
+}
