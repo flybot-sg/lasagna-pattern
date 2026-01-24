@@ -23,7 +23,8 @@ Components are auto-discovered (any directory with `deps.edn`).
 | Directory | Description | Status |
 |-----------|-------------|--------|
 | `pattern/` | Core pattern DSL for matching/transforming Clojure data | Active |
-| `remote/` | Remote protocol (GraphQL-like) using pattern language | Planned |
+| `collection/` | CRUD collection abstraction with DataSource protocol | Active |
+| `remote/` | Remote protocol (GraphQL-like) using pattern language | Active |
 
 ### Adding a New Component
 

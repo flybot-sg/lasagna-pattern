@@ -6,6 +6,7 @@
    [clojure.string :as str]
    [clojure.walk]
    [sg.flybot.pullable.impl :as pattern]
+   [sg.flybot.pullable.collection :as coll]
    #?(:clj [cognitect.transit :as transit])
    #?(:clj [clojure.edn :as edn])
    #?(:clj [clojure.java.io :as io]))
@@ -157,12 +158,6 @@
 ;; Response Helpers
 ;;=============================================================================
 
-(defprotocol Wireable
-  "Protocol for types that need custom serialization to wire format.
-   Implement this for custom collection types (like database-backed collections)
-   that should be converted to standard Clojure data for Transit serialization."
-  (->wire [this] "Convert to serializable Clojure data (maps, vectors, etc.)"))
-
 (defn- normalize-value
   "Normalize a value for serialization.
    Types implementing Wireable are converted via ->wire.
@@ -170,8 +165,8 @@
   [x]
   (clojure.walk/postwalk
    (fn [v]
-     (if (satisfies? Wireable v)
-       (->wire v)
+     (if (satisfies? coll/Wireable v)
+       (coll/->wire v)
        v))
    x))
 

@@ -1,6 +1,7 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         local/pattern {:local/root "../pattern"}
+        local/collection {:local/root "../collection"}
         com.cognitect/transit-clj {:mvn/version "1.0.333"}
         ring/ring-core {:mvn/version "1.12.1"}}
  :aliases

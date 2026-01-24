@@ -1,5 +1,5 @@
-(ns sg.flybot.pullable.remote.collection
-  "CRUD collection abstraction for remote protocol.
+(ns sg.flybot.pullable.collection
+  "CRUD collection abstraction.
 
    Provides a generic Collection type that wraps a DataSource backend
    and implements ILookup, Seqable, Counted for pattern-based access.
@@ -27,14 +27,12 @@
    3. Use via ILookup and Seqable:
 
    ```clojure
-   (get items {:id 3})     ; fetch by query
-   (seq items)             ; list all
-   (mutate! items nil data) ; create
+   (get items {:id 3})       ; fetch by query
+   (seq items)               ; list all
+   (mutate! items nil data)  ; create
    (mutate! items query data) ; update
    (mutate! items query nil)  ; delete
-   ```"
-  (:require
-   [sg.flybot.pullable.remote.http :as http]))
+   ```")
 
 ;;=============================================================================
 ;; Protocols
@@ -62,6 +60,14 @@
      - (mutate! coll nil data) -> CREATE
      - (mutate! coll query data) -> UPDATE
      - (mutate! coll query nil) -> DELETE"))
+
+(defprotocol Wireable
+  "Protocol for types needing custom wire serialization.
+
+   Implement this for custom types that should be converted to
+   standard Clojure data for Transit/EDN serialization."
+  (->wire [this]
+    "Convert to serializable Clojure data (maps, vectors, etc.)"))
 
 ;;=============================================================================
 ;; Collection Type
@@ -144,7 +150,7 @@
         :else
         (throw (ex-info "Invalid mutation" {:query query :value value})))))
 
-  http/Wireable
+  Wireable
   (->wire [coll]
     (vec (seq coll))))
 
@@ -232,7 +238,7 @@
         (catch Exception e e))) ;=>> {:query {:age 30}}
 
   ;; Wireable - converts to vector
-  (http/->wire coll) ;=>> vector?
+  (->wire coll) ;=>> vector?
 
   ;; Cleanup
   (reset! db {})

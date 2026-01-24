@@ -71,7 +71,7 @@
    Failure:  `{:errors [{:code :schema-violation :reason \"...\"}]}`"
   (:require
    [sg.flybot.pullable.remote.http :as http]
-   [sg.flybot.pullable.remote.collection :as coll]))
+   [sg.flybot.pullable.collection :as coll]))
 
 ;;=============================================================================
 ;; Public API
@@ -205,11 +205,11 @@
 
    Note: Collection already implements Wireable, so you typically
    don't need this unless creating custom types."
-  http/Wireable)
+  coll/Wireable)
 
 (def ->wire
   "Convert a Wireable value to serializable Clojure data."
-  http/->wire)
+  coll/->wire)
 
 ^:rct/test
 (comment
