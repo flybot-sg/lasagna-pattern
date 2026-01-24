@@ -3,7 +3,8 @@
         local/pattern {:local/root "../../pattern"}
         local/remote {:local/root "../../remote"}
         io.github.robertluo/fun-map {:mvn/version "0.5.124"}
-        http-kit/http-kit {:mvn/version "2.8.0"}}
+        http-kit/http-kit {:mvn/version "2.8.0"}
+        ring/ring-core {:mvn/version "1.12.2"}}  ;; For wrap-session
  :aliases
  {:dev {:extra-paths ["dev" "test"]
         :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
