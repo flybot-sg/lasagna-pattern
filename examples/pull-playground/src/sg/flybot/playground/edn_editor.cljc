@@ -5,7 +5,8 @@
    syntax highlighting. Supports rainbow parentheses for visual
    nesting depth indication."
   (:require [parinferish.core :as paren]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [clojure.pprint :as pp]))
 
 ;;=============================================================================
 ;; Token Classification
@@ -120,20 +121,91 @@
 
 (defn highlight-edn
   "Render EDN text with syntax highlighting as hiccup.
-   Returns a [:span ...] with highlighted tokens."
-  [text]
-  (if (or (nil? text) (str/blank? text))
-    [:span.edn-empty]
-    (let [tokens (parse-edn text)]
-      (into [:span.edn-highlighted]
-            (for [{:keys [token type] :as tok} tokens]
-              (if (= type :whitespace)
-                token  ; Preserve whitespace as-is
-                [:span {:class (token-class tok)} token]))))))
+   Returns a [:span ...] with highlighted tokens.
+
+   Options:
+   - :on-hover - callback (fn [token]) when hovering a keyword
+   - :on-leave - callback (fn []) when leaving a token"
+  ([text] (highlight-edn text nil))
+  ([text {:keys [on-hover on-leave]}]
+   (if (or (nil? text) (str/blank? text))
+     [:span.edn-empty]
+     (let [tokens (parse-edn text)]
+       (into [:span.edn-highlighted]
+             (for [{:keys [token type] :as tok} tokens]
+               (if (= type :whitespace)
+                 token  ; Preserve whitespace as-is
+                 (let [base-attrs {:class (token-class tok)}
+                       ;; Add hover handlers for keywords (schema keys)
+                       attrs (if (and (= type :keyword) on-hover)
+                               (assoc base-attrs
+                                      :data-token token
+                                      :on (cond-> {}
+                                            on-hover (assoc :mouseenter #(on-hover token))
+                                            on-leave (assoc :mouseleave (fn [_] (on-leave)))))
+                               base-attrs)]
+                   [:span attrs token]))))))))
 
 ;;=============================================================================
 ;; Editor Component (read-only display)
 ;;=============================================================================
+
+(defn pretty-str
+  "Pretty-print a Clojure value to a string."
+  [v]
+  (if (nil? v)
+    "nil"
+    (with-out-str (pp/pprint v))))
+
+;;=============================================================================
+;; Schema Documentation Lookup
+;;=============================================================================
+
+(defn keyword-from-token
+  "Parse a keyword token string like ':name' into a keyword."
+  [token-str]
+  (when (and token-str (str/starts-with? token-str ":"))
+    (keyword (subs token-str 1))))
+
+(defn- deep-lookup-field-doc
+  "Recursively search for field documentation in nested :fields maps."
+  [fields-docs field-key]
+  (when (map? fields-docs)
+    ;; First check direct match
+    (if-let [doc (get fields-docs field-key)]
+      (dissoc doc :fields)  ; Return doc without nested :fields
+      ;; Otherwise search nested :fields maps
+      (some (fn [[_ v]]
+              (when (and (map? v) (:fields v))
+                (deep-lookup-field-doc (:fields v) field-key)))
+            fields-docs))))
+
+(defn lookup-field-doc
+  "Look up documentation for a field in schema metadata.
+
+   Schema structure (per SPECIFICATION.md section 7.3):
+   ^{:doc \"...\"
+     :version \"1.0.0\"
+     :fields {:field1 {:doc \"...\" :example ... :deprecated ...}
+              :nested {:doc \"...\"
+                       :fields {:inner {:doc \"...\"}}}}}
+   {:field1 :type
+    :nested {:inner :type}}
+
+   Searches recursively through nested :fields maps.
+   Returns map with :doc, :example, :deprecated, :since or nil."
+  [schema field-key]
+  (when (and schema field-key)
+    (let [;; Get metadata from schema
+          schema-meta (meta schema)
+          ;; Look up in :fields map (recursively)
+          fields-docs (:fields schema-meta)
+          field-doc (deep-lookup-field-doc fields-docs field-key)]
+      (when field-doc
+        (merge field-doc
+               ;; Also include the type from schema if available (top-level only)
+               (when-let [field-type (get schema field-key)]
+                 {:type field-type}))))))
 
 (defn edn-display
   "Read-only EDN display with syntax highlighting.
@@ -179,4 +251,26 @@
   (open-paren? ")") ;=> false
 
   ;; highlight-edn returns hiccup
-  (first (highlight-edn "{:a 1}"))) ;=> :span.edn-highlighted)
+  (first (highlight-edn "{:a 1}")) ;=> :span.edn-highlighted
+
+  ;; keyword-from-token parses keywords
+  (keyword-from-token ":foo") ;=> :foo
+  (keyword-from-token "foo") ;=> nil
+
+  ;; lookup-field-doc finds top-level fields
+  (let [schema ^{:fields {:name {:doc "User name" :example "Alice"}}}
+        {:name :string}]
+    (:doc (lookup-field-doc schema :name)))
+  ;=> "User name"
+
+  ;; lookup-field-doc finds nested fields recursively
+  (let [schema ^{:fields {:user {:doc "User info"
+                                 :fields {:email {:doc "Email address"}}}}}
+        {:user {:email :string}}]
+    (:doc (lookup-field-doc schema :email)))
+  ;=> "Email address"
+
+  ;; lookup-field-doc returns nil for unknown fields
+  (let [schema ^{:fields {:name {:doc "Name"}}} {:name :string}]
+    (lookup-field-doc schema :unknown)))
+  ;=> nil)
