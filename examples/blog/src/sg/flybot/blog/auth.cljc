@@ -88,11 +88,12 @@
   (db/seed! conn)
   (def api-fn (make-api {:owner-emails #{"owner@example.com"} :conn conn}))
 
-  ;; Anonymous → viewer-schema (no :me)
-  (let [{:keys [schema]} (api-fn {})]
+  ;; Anonymous → viewer-schema with :me (nil indicates not logged in)
+  (let [{:keys [data schema]} (api-fn {})]
     [(contains? schema :me)
+     (nil? (:me data))
      (= (:posts schema) [api/post-schema])])
-  ;=> [false true]
+  ;=> [true true true]
 
   ;; Non-owner logged in → viewer-schema with :me
   (let [{:keys [data schema]} (api-fn {:session {:user-email "reader@example.com"

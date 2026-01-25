@@ -70,8 +70,9 @@
 (defn- email-allowed?
   "Check if email matches the allowed pattern."
   [email allowed-pattern]
-  (or (nil? allowed-pattern)
-      (and email (re-matches allowed-pattern email))))
+  (boolean
+   (or (nil? allowed-pattern)
+       (and email (re-matches allowed-pattern email)))))
 
 (defn wrap-fetch-profile
   "After OAuth callback, fetch Google profile and store in session.
