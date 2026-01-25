@@ -131,6 +131,18 @@
     (js/localStorage.setItem "theme" new-theme)
     (render!)))
 
+;; Export post - pure browser download, no state change
+(defn ^:export export-post! [title content]
+  (let [filename (str (or title "untitled") ".md")
+        blob (js/Blob. #js [content] #js {:type "text/markdown"})
+        url (js/URL.createObjectURL blob)
+        a (js/document.createElement "a")]
+    (set! (.-href a) url)
+    (set! (.-download a) filename)
+    (.click a)
+    (js/URL.revokeObjectURL url)
+    (log/info "Exported:" filename)))
+
 (defn- init-theme! []
   (let [saved (js/localStorage.getItem "theme")]
     (when (= saved "dark")

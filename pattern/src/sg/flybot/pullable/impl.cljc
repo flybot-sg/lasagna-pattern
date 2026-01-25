@@ -1212,6 +1212,14 @@
              (not (extended-var-form? x)))
     (apply list '? :seq (concat (map wrap-seq-element x) ['(? :term)]))))
 
+(defn set-rewrite
+  "Throws an error for set patterns - sets are not supported as patterns.
+   Sets in schemas represent enums, but pattern syntax doesn't support them."
+  [x]
+  (when (set? x)
+    (throw (ex-info "Sets are not supported as patterns. Use (? :or ...) for alternatives or (? :pred #(contains? #{...} %)) for set membership."
+                    {:set x}))))
+
 (def ^:private forbidden-var-chars
   "Characters forbidden in matching variable names"
   #"[\?\+\*\!]")
@@ -1815,7 +1823,8 @@
    matching-var-rewrite
    map-rewrite
    vector-rewrite
-   list-rewrite])
+   list-rewrite
+   set-rewrite])
 
 (defn- filter-by-schema
   "Recursively filter a value to only include keys defined in schema.

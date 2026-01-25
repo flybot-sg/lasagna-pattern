@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(/opt/homebrew/bin/clojure:*)"
+      "Bash(/opt/homebrew/bin/clojure:*)",
+      "Bash(jj new:*)"
     ]
   }
 }

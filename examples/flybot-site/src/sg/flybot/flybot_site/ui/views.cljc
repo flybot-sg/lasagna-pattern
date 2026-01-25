@@ -296,6 +296,8 @@
        (when can-edit?
          [:div.button-group
           [:button {:on {:click #(dispatch! [:view-edit post])}} "Edit"]
+          #?(:cljs [:button {:on {:click #(js/sg.flybot.flybot_site.ui.core.export_post_BANG_
+                                           (:post/title post) (:post/content post))}} "Export"])
           [:button.danger {:on {:click #(dispatch! [:delete-post (:post/id post)])}} "Delete"]])]
       [:div
        [:a.back-link {:href "#"
