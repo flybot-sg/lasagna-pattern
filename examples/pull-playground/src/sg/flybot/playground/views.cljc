@@ -102,7 +102,7 @@
        (if loading? "Executing..." "Execute")]]]))
 
 (defn results-panel [state _dispatch!]
-  (let [{:keys [mode result error loading?]} state]
+  (let [{:keys [result error loading?]} state]
     [:div.panel.results-panel
      [:div.panel-header
       [:h2 "Results"]]
@@ -117,16 +117,9 @@
          [:div.result-value.error error]]
 
         result
-        [:div.result-sections
-         ;; Local mode shows both matched data and bindings
-         ;; Remote mode only shows bindings (per spec)
-         (when (and (= mode :local) (:data result))
-           [:div.result-section
-            [:h3 "Matched Data"]
-            [:div.result-value.success (format-result (:data result))]])
-         [:div.result-section
-          [:h3 "Variable Bindings"]
-          [:div.result-value.success (format-result (:vars result))]]]
+        [:div.result-section
+         [:h3 "Variable Bindings"]
+         [:div.result-value.success (format-result result)]]
 
         :else
         [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]))
