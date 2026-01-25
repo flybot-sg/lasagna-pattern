@@ -2,7 +2,9 @@
   "UI views - pure functions returning hiccup.
 
    Views emit events by calling (dispatch! :event) or (dispatch! [:event arg])."
-  (:require [sg.flybot.playground.examples :as examples]))
+  (:require [sg.flybot.playground.examples :as examples]
+            [sg.flybot.playground.edn-editor :as edn]
+            #?(:cljs [sg.flybot.playground.edn-editor-interactive :as edn-i])))
 
 ;;=============================================================================
 ;; Helpers
@@ -35,8 +37,13 @@
   [:svg {:width "16" :height "16" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
    [:path {:d "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"}]])
 
+(defn- sidebar-icon []
+  [:svg {:width "16" :height "16" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:rect {:x "3" :y "3" :width "18" :height "18" :rx "2"}]
+   [:line {:x1 "15" :y1 "3" :x2 "15" :y2 "21"}]])
+
 (defn site-header [state dispatch!]
-  (let [mode (:mode state)]
+  (let [{:keys [mode sidebar-collapsed?]} state]
     [:header.site-header
      [:h1 "Pull Pattern Playground"]
      [:div.header-right
@@ -47,6 +54,11 @@
        [:button {:class (when (= mode :remote) "active")
                  :on {:click #(dispatch! [:set-mode :remote])}}
         "Remote"]]
+      (when (= mode :remote)
+        [:button.sidebar-toggle {:title (if sidebar-collapsed? "Show sidebar" "Hide sidebar")
+                                 :class (when sidebar-collapsed? "collapsed")
+                                 :on {:click #(dispatch! :toggle-sidebar)}}
+         (sidebar-icon)])
       [:button.theme-toggle {:title "Toggle theme"
                              :on {:click #?(:clj identity
                                             :cljs #(js/sg.flybot.playground.core.toggle_theme_BANG_))}}
@@ -61,16 +73,16 @@
       [:button.fetch-schema-btn {:on {:click #(dispatch! :fetch-schema)}
                                  :disabled schema-loading?}
        (if schema-loading? "Loading..." "Fetch")]]
-     [:div.schema-content
-      (cond
-        schema-error
-        [:div.schema-error schema-error]
-
-        schema
-        [:pre.schema-value (format-result schema)]
-
-        :else
-        [:div.schema-empty "Click Fetch to load schema"])]]))
+     #?(:cljs (edn-i/schema-viewer
+               {:value (when schema (format-result schema))
+                :loading? schema-loading?
+                :error schema-error
+                :placeholder "Click Fetch to load schema"})
+        :clj [:div.schema-content
+              (cond
+                schema-error [:div.schema-error schema-error]
+                schema [:pre.schema-value (format-result schema)]
+                :else [:div.schema-empty "Click Fetch to load schema"])])]))
 
 (defn editor-panel [state dispatch!]
   (let [{:keys [mode pattern-text data-text server-url loading?]} state]
@@ -80,15 +92,23 @@
      [:div.panel-content
       [:div.editor-section
        [:label "Pattern"]
-       [:textarea {:value pattern-text
-                   :placeholder "Enter a pull pattern, e.g. {:name ?n}"
-                   :on {:input #(dispatch! [:update-pattern (.. % -target -value)])}}]]
+       #?(:cljs (edn-i/edn-editor
+                 {:value pattern-text
+                  :placeholder "Enter a pull pattern, e.g. {:name ?n}"
+                  :on-change #(dispatch! [:update-pattern %])
+                  :parinfer-mode :indent})
+          :clj [:textarea {:value pattern-text
+                           :placeholder "Enter a pull pattern, e.g. {:name ?n}"}])]
       (if (= mode :local)
         [:div.editor-section
          [:label "Data (EDN)"]
-         [:textarea {:value data-text
-                     :placeholder "Enter EDN data to match against"
-                     :on {:input #(dispatch! [:update-data (.. % -target -value)])}}]]
+         #?(:cljs (edn-i/edn-editor
+                   {:value data-text
+                    :placeholder "Enter EDN data to match against"
+                    :on-change #(dispatch! [:update-data %])
+                    :parinfer-mode :indent})
+            :clj [:textarea {:value data-text
+                             :placeholder "Enter EDN data to match against"}])]
         [:div.remote-sections
          [:div.editor-section
           [:label "Server URL"]
@@ -119,7 +139,8 @@
         result
         [:div.result-section
          [:h3 "Variable Bindings"]
-         [:div.result-value.success (format-result result)]]
+         [:div.result-value.success
+          (edn/highlight-edn (format-result result))]]
 
         :else
         [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]))
@@ -147,12 +168,15 @@
            [:span description]])]]]]))
 
 (defn app-view [state dispatch!]
-  [:div.app-container
-   (site-header state dispatch!)
-   [:div.main-content
-    (editor-panel state dispatch!)
-    (results-panel state dispatch!)
-    (examples-panel state dispatch!)]])
+  (let [{:keys [mode sidebar-collapsed?]} state
+        hide-sidebar? (and (= mode :remote) sidebar-collapsed?)]
+    [:div.app-container
+     (site-header state dispatch!)
+     [:div.main-content {:class (when hide-sidebar? "sidebar-collapsed")}
+      (editor-panel state dispatch!)
+      (results-panel state dispatch!)
+      (when-not hide-sidebar?
+        (examples-panel state dispatch!))]]))
 
 ;;=============================================================================
 ;; Tests

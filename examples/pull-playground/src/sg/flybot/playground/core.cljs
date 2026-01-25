@@ -28,7 +28,8 @@
    :clear-result          (fn [s _] (state/clear-result s))
    :fetch-schema          (fn [s _] (state/fetch-schema s))
    :fetch-schema-success  (fn [s schema] (state/fetch-schema-success s schema))
-   :fetch-schema-error    (fn [s error] (state/fetch-schema-error s error))})
+   :fetch-schema-error    (fn [s error] (state/fetch-schema-error s error))
+   :toggle-sidebar        (fn [s _] (state/toggle-sidebar s))})
 
 (defn- apply-handler [state event]
   (let [[event-type & args] (if (vector? event) event [event])
