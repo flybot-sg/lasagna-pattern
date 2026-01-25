@@ -63,12 +63,8 @@
   (api/pull!
    pattern
    (fn [response]
-     ;; Response format: {:data {...} :vars {sym val ...}}
-     ;; Look for symbol keys in :vars, fall back to :data
-     (let [vars (:vars response)
-           result-key (some #(when (symbol? %) %) (keys vars))
-           result (or (get vars result-key) (:data response))]
-       (dispatch! [on-success result])))
+     ;; Response is vars map: {'posts [...]} or {'user {...}}
+     (dispatch! [on-success (-> response vals first)]))
    (fn [err]
      (dispatch! [on-error err]))))
 

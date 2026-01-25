@@ -2,7 +2,7 @@
 .clj-kondo/.cache/
 .clj-kondo/imports/
 .calva/
-.claude/settings.local.json
+**/.claude/settings.local.json
 .claude/.clojure-ready
 .cpcache/
 .nrepl*

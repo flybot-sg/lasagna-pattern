@@ -102,27 +102,33 @@
 ;; Collection Type
 ;;=============================================================================
 
-(deftype Collection [data-source indexes]
+(defn- lookup-by-query
+  "Core lookup logic shared by CLJ and CLJS implementations."
+  [data-source id-key indexes query not-found]
+  (cond
+    (not (map? query))
+    not-found
+
+    (empty? query)
+    (throw (ex-info "Empty query not allowed" {:query query}))
+
+    (contains? query id-key)
+    (or (fetch data-source query) not-found)
+
+    (some #(= (set (keys query)) %) indexes)
+    (or (fetch data-source query) not-found)
+
+    :else
+    (throw (ex-info "No index for query"
+                    {:query query :available-indexes indexes}))))
+
+(deftype Collection [data-source id-key indexes]
   #?@(:clj
       [clojure.lang.ILookup
        (valAt [this query]
               (.valAt this query nil))
        (valAt [_ query not-found]
-              (cond
-                ;; Primary key lookup (always allowed)
-                (and (map? query) (contains? query :id))
-                (or (fetch data-source query) not-found)
-
-                ;; Other indexed queries - validate index exists
-                (map? query)
-                (let [query-keys (set (keys query))]
-                  (if (some #(= query-keys %) indexes)
-                    (or (fetch data-source query) not-found)
-                    (throw (ex-info "No index for query"
-                                    {:query query
-                                     :available-indexes indexes}))))
-
-                :else not-found))
+              (lookup-by-query data-source id-key indexes query not-found))
 
        clojure.lang.Seqable
        (seq [_]
@@ -137,19 +143,7 @@
        (-lookup [this query]
                 (-lookup this query nil))
        (-lookup [_ query not-found]
-                (cond
-                  (and (map? query) (contains? query :id))
-                  (or (fetch data-source query) not-found)
-
-                  (map? query)
-                  (let [query-keys (set (keys query))]
-                    (if (some #(= query-keys %) indexes)
-                      (or (fetch data-source query) not-found)
-                      (throw (ex-info "No index for query"
-                                      {:query query
-                                       :available-indexes indexes}))))
-
-                  :else not-found))
+                (lookup-by-query data-source id-key indexes query not-found))
 
        ISeqable
        (-seq [_]
@@ -164,20 +158,10 @@
   (mutate! [coll query value]
     (let [ds (.-data-source coll)]
       (cond
-        ;; CREATE: nil query + data
-        (and (nil? query) (some? value))
-        (create! ds value)
-
-        ;; DELETE: query + nil value
-        (and (some? query) (nil? value))
-        (delete! ds query)
-
-        ;; UPDATE: query + data
-        (and (some? query) (some? value))
-        (update! ds query value)
-
-        :else
-        (throw (ex-info "Invalid mutation" {:query query :value value})))))
+        (and (nil? query) (some? value))  (create! ds value)
+        (and (some? query) (nil? value))  (delete! ds query)
+        (and (some? query) (some? value)) (update! ds query value)
+        :else (throw (ex-info "Invalid mutation" {:query query :value value})))))
 
   Wireable
   (->wire [coll]
@@ -191,8 +175,9 @@
   "Create a Collection wrapping a DataSource.
 
    Options:
+   - :id-key  - Primary key field (default :id). Must match data-source config.
    - :indexes - Set of indexed field sets for queries.
-                Default: #{#{:id}} (primary key only)
+                Default: #{#{<id-key>}} (primary key only)
                 Example: #{#{:id} #{:author} #{:status :type}}
 
    The collection implements:
@@ -203,53 +188,47 @@
    - Wireable: automatically serializes to vector for wire format"
   ([data-source]
    (collection data-source {}))
-  ([data-source {:keys [indexes] :or {indexes #{#{:id}}}}]
-   (->Collection data-source indexes)))
+  ([data-source {:keys [id-key indexes]}]
+   (let [id-key (or id-key :id)
+         indexes (or indexes #{#{id-key}})]
+     (->Collection data-source id-key indexes))))
 
 ;;=============================================================================
 ;; Atom-backed Transactional Source
 ;;=============================================================================
 
+(defn- matches-query?
+  "Check if item matches all key-value pairs in query."
+  [item query]
+  (every? (fn [[k v]] (= (get item k) v)) query))
+
+(defn- find-by-query
+  "Find first item in db matching query. Looks up by id-key first if present."
+  [db id-key query]
+  (when (empty? query)
+    (throw (ex-info "Empty query not allowed" {:query query})))
+  (if-let [id (get query id-key)]
+    (get db id)
+    (first (filter #(matches-query? % query) (vals db)))))
+
 (defn- apply-mutation
-  "Apply a single mutation to db state. Pure function for use in swap!."
-  [db id-key id-counter {:keys [op query data]}]
+  "Apply a single mutation to db state. Pure function for use in swap!.
+   For :create, next-id is the pre-computed ID (computed outside swap!)."
+  [db id-key next-id {:keys [op query data]}]
   (case op
-    :create
-    (let [id (swap! id-counter inc)
-          item (assoc data id-key id)]
-      (assoc db id item))
-
-    :update
-    (if-let [id (get query id-key)]
-      (if-let [item (get db id)]
-        (assoc db id (merge item data))
-        db)
-      ;; Query by other fields
-      (if-let [item (first (filter #(every? (fn [[k v]] (= (get % k) v)) query)
-                                   (vals db)))]
-        (assoc db (get item id-key) (merge item data))
-        db))
-
-    :delete
-    (if-let [id (get query id-key)]
-      (dissoc db id)
-      ;; Query by other fields
-      (if-let [item (first (filter #(every? (fn [[k v]] (= (get % k) v)) query)
-                                   (vals db)))]
-        (dissoc db (get item id-key))
-        db))
-
-    ;; Unknown op - return unchanged
-    db))
+    :create (assoc db next-id (assoc data id-key next-id))
+    :update (if-let [item (find-by-query db id-key query)]
+              (assoc db (get item id-key) (merge item data))
+              db)
+    :delete (if-let [item (find-by-query db id-key query)]
+              (dissoc db (get item id-key))
+              db)
+    (throw (ex-info "Unknown mutation op" {:op op :valid-ops #{:create :update :delete}}))))
 
 (defrecord AtomSource [db-atom id-key id-counter]
   DataSource
   (fetch [_ query]
-    (let [db @db-atom]
-      (if (contains? query id-key)
-        (get db (get query id-key))
-        (first (filter #(every? (fn [[k v]] (= (get % k) v)) query)
-                       (vals db))))))
+    (find-by-query @db-atom id-key query))
 
   (list-all [_]
     (sort-by id-key (vals @db-atom)))
@@ -276,11 +255,17 @@
     @db-atom)
 
   (transact! [_ mutations]
-    (swap! db-atom
-           (fn [db]
-             (reduce #(apply-mutation %1 id-key id-counter %2)
-                     db
-                     mutations)))))
+    ;; Pre-compute IDs for all creates BEFORE swap! to ensure atomicity.
+    (let [create-count (count (filter #(= :create (:op %)) mutations))
+          start-id (- (swap! id-counter + create-count) create-count)]
+      (swap! db-atom
+             (fn [db]
+               (first
+                (reduce (fn [[db next-id] mut]
+                          [(apply-mutation db id-key next-id mut)
+                           (if (= :create (:op mut)) (inc next-id) next-id)])
+                        [db (inc start-id)]
+                        mutations)))))))
 
 (defn atom-source
   "Create an atom-backed transactional data source.
@@ -292,11 +277,15 @@
    - :id-key - Primary key field (default :id)
    - :initial - Initial data as map {id -> item} or vector [item ...]
 
+   Note: IDs must be positive integers. Auto-generated IDs start from 1
+   and increment. If providing initial data, all keys must be integers.
+
    Examples:
    ```clojure
    (def src (atom-source))
    (def src (atom-source {:id-key :user-id}))
    (def src (atom-source {:initial {1 {:id 1 :name \"Alice\"}}}))
+   (def src (atom-source {:initial [{:id 10 :name \"Bob\"}]}))
    ```"
   ([] (atom-source {}))
   ([{:keys [id-key initial] :or {id-key :id}}]
@@ -305,6 +294,11 @@
                     (map? initial) initial
                     (sequential? initial) (into {} (map (juxt id-key identity) initial))
                     :else {})
+         _ (when (seq init-map)
+             (when-not (every? integer? (keys init-map))
+               (throw (ex-info "Initial data keys must be integers"
+                               {:keys (keys init-map)
+                                :hint "atom-source uses auto-incrementing integer IDs"}))))
          max-id (if (seq init-map)
                   (apply max (keys init-map))
                   0)]
@@ -355,12 +349,13 @@
 
   (def tx-src (atom-source))
 
-  ;; Multiple creates in one transaction
+  ;; Multiple creates in one transaction - IDs should be sequential
   (transact! tx-src
              [{:op :create :data {:title "A"}}
               {:op :create :data {:title "B"}}
               {:op :create :data {:title "C"}}])
   (count (snapshot tx-src)) ;=> 3
+  (sort (keys (snapshot tx-src))) ;=> '(1 2 3)
 
   ;; Mixed operations in one transaction
   (transact! tx-src
@@ -390,4 +385,51 @@
   (count (snapshot (:users sources))) ;=> 2
   (count (snapshot (:posts sources))) ;=> 1
   (set (map :name (vals (snapshot (:users sources))))) ;=> #{"Alice" "Bob"}
+
+  ;;---------------------------------------------------------------------------
+  ;; Empty query validation
+  ;;---------------------------------------------------------------------------
+
+  (def empty-src (atom-source))
+  (create! empty-src {:name "Test"})
+
+  (ex-message
+   (try (fetch empty-src {})
+        (catch Exception e e))) ;=> "Empty query not allowed"
+
+  (def empty-coll (collection empty-src))
+  (ex-message
+   (try (get empty-coll {})
+        (catch Exception e e))) ;=> "Empty query not allowed"
+
+  ;;---------------------------------------------------------------------------
+  ;; Unknown op throws
+  ;;---------------------------------------------------------------------------
+
+  (def unk-src (atom-source))
+  (ex-message
+   (try (transact! unk-src [{:op :invalid :data {:foo "bar"}}])
+        (catch Exception e e))) ;=> "Unknown mutation op"
+
+  ;;---------------------------------------------------------------------------
+  ;; Non-integer IDs rejected
+  ;;---------------------------------------------------------------------------
+
+  (ex-message
+   (try (atom-source {:initial {"a" {:id "a"}}})
+        (catch Exception e e))) ;=> "Initial data keys must be integers"
+
+  ;;---------------------------------------------------------------------------
+  ;; Custom id-key works correctly
+  ;;---------------------------------------------------------------------------
+
+  (def custom-src (atom-source {:id-key :uid}))
+  (def custom-coll (collection custom-src {:id-key :uid}))
+  (create! custom-src {:name "Alice"})
+  (:name (get custom-coll {:uid 1})) ;=> "Alice"
+
+  ;; Query by wrong key throws (not indexed)
+  (ex-message
+   (try (get custom-coll {:id 1})
+        (catch Exception e e))) ;=> "No index for query"
   )

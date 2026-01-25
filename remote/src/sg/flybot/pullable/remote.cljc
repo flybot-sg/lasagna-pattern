@@ -22,7 +22,7 @@
 
    (def api (client/connect \"http://localhost:8080/api\"))
    (api '{:user {:name ?n}})
-   ;; => {:data {:user {:name \"Alice\"}} :vars {'n \"Alice\"}}
+   ;; => {'n \"Alice\"}
 
    (client/schema api)  ; introspect
    ```
@@ -42,7 +42,7 @@
    ## Request/Response
 
    Request:  `{:pattern '{:user {:name ?n}}}`
-   Success:  `{:data {:user {:name \"Alice\"}} :vars {'n \"Alice\"}}`
+   Success:  `{'n \"Alice\"}`
    Failure:  `{:errors [{:code :schema-violation :reason \"...\"}]}`"
   (:require
    [sg.flybot.pullable.remote.http :as http]))

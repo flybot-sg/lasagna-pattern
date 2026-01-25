@@ -13,6 +13,109 @@
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
 
 ;;=============================================================================
+;; Wire Serialization
+;;=============================================================================
+
+(defn- prepare-for-wire
+  "Recursively convert Wireable objects to serializable data.
+   Walks maps and vectors, converting any Wireable values."
+  [x]
+  (cond
+    (satisfies? coll/Wireable x)
+    (prepare-for-wire (coll/->wire x))
+
+    (map? x)
+    (persistent!
+     (reduce-kv (fn [m k v]
+                  (assoc! m k (prepare-for-wire v)))
+                (transient {})
+                x))
+
+    (vector? x)
+    (mapv prepare-for-wire x)
+
+    (sequential? x)
+    (map prepare-for-wire x)
+
+    :else x))
+
+;;=============================================================================
+;; Security: Safe Pattern Evaluation
+;;=============================================================================
+
+(def ^:private max-pattern-depth
+  "Maximum nesting depth for patterns. Prevents stack overflow DoS."
+  100)
+
+(def ^:private safe-predicates
+  "Whitelist of safe predicate functions for (? :pred ...) patterns.
+   Only type-checking predicates - no side effects, no I/O."
+  {'string?   string?
+   'number?   number?
+   'integer?  integer?
+   'float?    float?
+   'keyword?  keyword?
+   'symbol?   symbol?
+   'ident?    ident?
+   'map?      map?
+   'vector?   vector?
+   'list?     list?
+   'set?      set?
+   'seq?      seq?
+   'coll?     coll?
+   'nil?      nil?
+   'some?     some?
+   'true?     true?
+   'false?    false?
+   'boolean?  boolean?
+   'empty?    empty?
+   'pos?      pos?
+   'neg?      neg?
+   'zero?     zero?
+   'even?     even?
+   'odd?      odd?
+   'pos-int?  pos-int?
+   'neg-int?  neg-int?
+   'nat-int?  nat-int?
+   'uuid?     uuid?
+   'inst?     inst?})
+
+(defn- safe-resolve
+  "Sandboxed symbol resolver. Only allows whitelisted predicates."
+  [sym]
+  (or (get safe-predicates sym)
+      (throw (ex-info "Predicate not allowed in remote patterns"
+                      {:symbol sym
+                       :allowed (keys safe-predicates)}))))
+
+(defn- safe-eval
+  "Sandboxed evaluator. Blocks all fn/fn* forms to prevent code execution."
+  [form]
+  (throw (ex-info "Code evaluation not allowed in remote patterns"
+                  {:form form})))
+
+(defn- pattern-depth
+  "Calculate the nesting depth of a pattern."
+  [pattern]
+  (cond
+    (map? pattern)
+    (inc (reduce max 0 (map pattern-depth (vals pattern))))
+
+    (sequential? pattern)
+    (inc (reduce max 0 (map pattern-depth pattern)))
+
+    :else 0))
+
+(defn- validate-pattern-depth!
+  "Throws if pattern exceeds maximum depth."
+  [pattern]
+  (let [depth (pattern-depth pattern)]
+    (when (> depth max-pattern-depth)
+      (throw (ex-info "Pattern too deeply nested"
+                      {:depth depth
+                       :max-depth max-pattern-depth})))))
+
+;;=============================================================================
 ;; Content Types & Negotiation
 ;;=============================================================================
 
@@ -72,7 +175,9 @@
      (let [s (if (instance? ByteArrayInputStream input)
                (slurp input)
                (String. ^bytes input "UTF-8"))]
-       (edn/read-string {:readers {'? #(list '? %)}} s))))
+       ;; NOTE: ?x symbols are valid Clojure symbols and read natively.
+       ;; No custom reader needed.
+       (edn/read-string s))))
 
 (defn encode
   "Encode value to bytes. Format: :transit-json, :transit-msgpack, or :edn."
@@ -169,9 +274,9 @@
   (parse-mutation '{:posts ?all})
   ;=> nil
 
-  (parse-mutation '{:posts {{:id 3} ?post}})
+  (parse-mutation '{:posts {{:id 3} ?post}}))
   ;=> nil
-  )
+  
 
 ;;=============================================================================
 ;; Response Helpers
@@ -190,8 +295,9 @@
    x))
 
 (defn- success
-  "Build success response. Returns vars directly (normalized for wire)."
-  [vars]
+  "Build success response containing only the vars bindings.
+   The response IS the vars map directly - no wrapper."
+  [_data vars]
   (normalize-value vars))
 
 (defn- error [code reason & [path]]
@@ -234,7 +340,7 @@
    :body #?(:clj (ByteArrayInputStream. body-bytes) :cljs body-bytes)})
 
 (defn- encode-response [response format]
-  {:body (encode response format)
+  {:body (encode (prepare-for-wire response) format)
    :content-type (get content-types format)})
 
 (defn- parse-mutation
@@ -265,7 +371,7 @@
           coll (get data coll-key)]
       (if (and coll (satisfies? coll/Mutable coll))
         (let [result (coll/mutate! coll query value)]
-          (success {(symbol (name coll-key)) result}))
+          (success {coll-key result} {(symbol (name coll-key)) result}))
         (failure (error :invalid-collection
                         (str "Collection " coll-key " not found or not mutable")))))
     (catch #?(:clj Exception :cljs js/Error) e
@@ -276,12 +382,17 @@
   "Execute pull pattern against API data.
    Params in pull-request are used for:
    1. Pattern parameterization: $key in pattern replaced with value
-   2. Ring request params: merged into ring-request :params"
+   2. Ring request params: merged into ring-request :params
+
+   Security: Patterns are compiled with sandboxed resolve/eval to prevent
+   arbitrary code execution. Only whitelisted predicates are allowed."
   [api-fn ring-request pull-request]
   (try
     (let [params (:params pull-request)
           ;; Resolve $params in pattern using rule-based substitution
           resolved-pattern (resolve-params (:pattern pull-request) params)
+          ;; Validate pattern depth to prevent DoS
+          _ (validate-pattern-depth! resolved-pattern)
           ;; Also merge params into ring request for API use
           ring-request (update ring-request :params merge params)]
       ;; Check if it's a mutation pattern first
@@ -289,13 +400,16 @@
         (execute-mutation api-fn ring-request mutation)
         ;; Otherwise execute as read pattern
         (let [{:keys [data schema]} (api-fn ring-request)
+              ;; SECURITY: Use sandboxed resolve/eval to prevent code execution
               compiled (pattern/compile-pattern
                         resolved-pattern
-                        (cond-> {} schema (assoc :schema schema)))
+                        (cond-> {:resolve safe-resolve
+                                 :eval    safe-eval}
+                          schema (assoc :schema schema)))
               result (compiled (pattern/vmr data))]
           (if (pattern/failure? result)
             (failure (match-failure->error result))
-            (success (:vars result))))))
+            (success (:val result) (:vars result))))))
     (catch #?(:clj Exception :cljs js/Error) e
       (failure (error :execution-error
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
@@ -326,7 +440,7 @@
   (let [res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
         schema (:schema (api-fn ring-request))
         response (if schema
-                   (success {'schema schema})
+                   (normalize-value schema)
                    (failure (error :not-found "No schema available")))
         {:keys [body content-type]} (encode-response response res-fmt)]
     (ring-response (if (success? response) 200 404) body content-type)))
@@ -354,7 +468,7 @@
 (defn make-handler
   "Create Ring handler for pull API.
 
-   api-fn: (ring-request) → {:data lazy-map, :schema schema-map}
+   api-fn: (ring-request) -> {:data lazy-map, :schema schema-map}
 
    Options:
    - :path - Base path (default \"/api\")"
@@ -379,3 +493,16 @@
 
            :else
            (handle-not-found request)))))))
+
+^:rct/test
+(comment
+  ;; Security: safe-resolve allows only whitelisted predicates
+  (safe-resolve 'string?) ;=>> fn?
+  (try (safe-resolve 'slurp) (catch Exception e (:symbol (ex-data e)))) ;=> 'slurp
+
+  ;; Security: safe-eval blocks all code evaluation
+  (try (safe-eval '(fn [x] x)) (catch Exception e (:form (ex-data e)))) ;=> '(fn [x] x)
+
+  ;; Security: pattern depth validation
+  (pattern-depth '{:a {:b {:c 1}}})) ;=> 3
+  

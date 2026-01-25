@@ -18,6 +18,7 @@
   (:require
    [sg.flybot.flybot-site.api :as api]
    [sg.flybot.flybot-site.auth :as auth]
+   [sg.flybot.flybot-site.backup :as backup]
    [sg.flybot.flybot-site.db :as db]
    [sg.flybot.flybot-site.log :as log]
    [sg.flybot.pullable.remote :as remote]
@@ -36,21 +37,27 @@
 
    Options:
    - :port - HTTP port (default 8080)
-   - :seed? - Seed database (default true)
+   - :seed? - Seed database with sample data (default true, ignored if :backup-dir)
+   - :backup-dir - Directory to import posts from (optional, overrides :seed?)
    - :owner-emails - Set of owner emails for role-based auth (optional)
    - :db-cfg - Datahike config (default: in-memory)
 
    Returns a life-cycle-map. Access :server to start.
    Call (halt! sys) to stop."
   ([] (make-system {}))
-  ([{:keys [port seed? owner-emails db-cfg] :or {port 8080 seed? true}}]
+  ([{:keys [port seed? backup-dir owner-emails db-cfg] :or {port 8080 seed? true}}]
    (log/info "Creating blog system...")
    (let [cfg (or db-cfg db/default-cfg)
          conn (db/create-conn! cfg)]
      (log/log-db-connected cfg)
-     (when seed?
-       (db/seed! conn)
-       (log/log-db-seeded 3))
+     (cond
+       backup-dir
+       (let [result (backup/import-all! conn backup-dir)]
+         (log/info "Imported" (:count result) "posts from" backup-dir))
+
+       seed?
+       (do (db/seed! conn)
+           (log/log-db-seeded 3)))
      (when owner-emails
        (log/info "Role-based auth enabled for:" owner-emails))
      (life-cycle-map

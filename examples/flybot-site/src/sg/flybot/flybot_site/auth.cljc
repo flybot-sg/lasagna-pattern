@@ -92,7 +92,7 @@
   (let [{:keys [data schema]} (api-fn {})]
     [(contains? schema :me)
      (nil? (:me data))
-     (= (:posts schema) [api/post-schema])])
+     (= (:posts schema) :any)])  ;; viewer-schema uses :any for posts
   ;=> [true true true]
 
   ;; Non-owner logged in → viewer-schema with :me
@@ -101,7 +101,7 @@
                                                  :user-picture "http://example.com/pic.jpg"}})]
     [(contains? schema :me)
      (:role (:me data))
-     (= (:posts schema) [api/post-schema])])
+     (= (:posts schema) :any)])  ;; viewer-schema uses :any for posts
   ;=> [true :viewer true]
 
   ;; Owner → full schema with :me

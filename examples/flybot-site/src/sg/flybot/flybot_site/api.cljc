@@ -26,15 +26,27 @@
 ;; Schema
 ;;=============================================================================
 
+(def post-fields
+  "Field documentation for post schema."
+  {:post/id         {:doc "Unique identifier" :example 1}
+   :post/title      {:doc "Post title"}
+   :post/content    {:doc "Markdown content with optional YAML frontmatter"}
+   :post/author     {:doc "Author name (extracted from frontmatter)"}
+   :post/tags       {:doc "List of tags (extracted from frontmatter)" :example ["clojure" "web"]}
+   :post/created-at {:doc "Creation timestamp"}
+   :post/updated-at {:doc "Last update timestamp"}})
+
 (def post-schema
   "Schema for a single post."
-  {:post/id :number
-   :post/title :string
-   :post/content :string
-   :post/author :string
-   :post/tags [:string]
-   :post/created-at :any
-   :post/updated-at :any})
+  (with-meta
+    {:post/id :number
+     :post/title :string
+     :post/content :string
+     :post/author :string
+     :post/tags [:string]
+     :post/created-at :any
+     :post/updated-at :any}
+    {:doc "Blog post" :fields post-fields}))
 
 (def post-query
   "Query schema for post lookup (indexed fields)."
@@ -44,29 +56,37 @@
 
 (def version-schema
   "Schema for a historical version of a post."
-  (merge post-schema
-         {:version/tx :number
-          :version/timestamp :any}))
+  (with-meta
+    (merge post-schema
+           {:version/tx :number
+            :version/timestamp :any})
+    {:doc "Historical version of a post"
+     :fields (merge post-fields
+                    {:version/tx        {:doc "Transaction ID"}
+                     :version/timestamp {:doc "When this version was created"}})}))
 
 (def schema
-  "API schema - noun-only, single source of truth.
-
-   :posts supports both sequential and indexed access:
-   - As sequence: (seq posts) → all posts
-   - As lookup: (get posts {:id 3}) → post by query
-   :posts/history returns historical versions of a post:
-   - {:posts/history {{:post/id 1} ?versions}}"
-  {:posts [:union [post-schema] {post-query post-schema}]
-   :posts/history {post-query [version-schema]}})
+  "API schema - noun-only, single source of truth."
+  (with-meta
+    {:posts [:union [post-schema] {post-query post-schema}]
+     :posts/history {post-query [version-schema]}}
+    {:doc "Flybot Blog API"
+     :fields {:posts         {:doc "Blog posts collection"}
+              :posts/history {:doc "Post version history"}}
+     :operations {:posts {:list   "Returns all posts"
+                          :get    "Lookup by {:post/id n} or {:post/author s}"
+                          :create "Provide {:post/title :post/content}"
+                          :update "Partial updates supported"
+                          :delete "Returns true on success"}}}))
 
 (def viewer-schema
-  "Read-only schema - list and lookup access only, no mutations.
-
-   Key difference from `schema`:
-   - Allows value binding for :posts (to return collection as-is)
-   - Used for anonymous users and non-owner authenticated users"
-  {:posts :any
-   :posts/history {post-query [version-schema]}})
+  "Read-only schema for anonymous and non-owner users."
+  (with-meta
+    {:posts :any
+     :posts/history {post-query [version-schema]}}
+    {:doc "Flybot Blog API (read-only)"
+     :fields {:posts         {:doc "Blog posts (read-only)"}
+              :posts/history {:doc "Post version history"}}}))
 
 ;;=============================================================================
 ;; API Builder

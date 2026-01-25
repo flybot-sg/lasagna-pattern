@@ -103,7 +103,7 @@
         {:keys [status body]} (send-request client request)
         response (http/decode body format)]
     (if (< status 400)
-      (:data response)
+      response
       (throw (ex-info "Schema request failed"
                       {:status status :response response})))))
 
