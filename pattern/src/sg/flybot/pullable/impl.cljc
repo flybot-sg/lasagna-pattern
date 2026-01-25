@@ -121,10 +121,11 @@
    (ValMatchResult. val vars)))
 
 (defn merge-vars
-  "Merge variables from `other` into `mr`"
+  "Merge variables from `other` into `mr`, enforcing unification.
+   Returns MatchFailure if same variable has conflicting values."
   [mr other]
   (if-let [vo (:vars other)]
-    (vmr (:val mr) (merge (:vars mr) vo))
+    (reduce-kv (fn [acc sym v] (-bind acc sym v)) mr vo)
     mr))
 
 ^:rct/test
@@ -156,12 +157,16 @@
   (-bind (fail "test" :t 1) 'x 2) ;=>> failure?
 
   ;;-------------------------------------------------------------------
-  ;; merge-vars - merge variable bindings
+  ;; merge-vars - merge variable bindings with unification
   ;;-------------------------------------------------------------------
   ;; merges vars from other into mr
   (merge-vars (vmr 1 {'a 1}) (vmr 2 {'b 2})) ;=>> {:val 1 :vars {'a 1 'b 2}}
   ;; handles nil vars gracefully
   (merge-vars (vmr 1 {'a 1}) (vmr 2)) ;=>> {:val 1 :vars {'a 1}}
+  ;; unification succeeds when same var has same value
+  (merge-vars (vmr 1 {'x 5}) (vmr 2 {'x 5})) ;=>> {:val 1 :vars {'x 5}}
+  ;; unification fails when same var has different values
+  (merge-vars (vmr 1 {'x 5}) (vmr 2 {'x 6})) ;=>> failure?
 
   ;;-------------------------------------------------------------------
   ;; deeper-failure - select best failure
@@ -1649,6 +1654,15 @@
   (vector-rewrite (first {:a 1})) ;=> nil
 
   ;;-------------------------------------------------------------------
+  ;; set-rewrite - throws error for set patterns
+  ;;-------------------------------------------------------------------
+  ;; sets throw error with helpful message
+  (try (set-rewrite #{1 2 3}) :no-error (catch Exception _ :threw)) ;=> :threw
+  ;; returns nil for non-sets
+  (set-rewrite [1 2 3]) ;=> nil
+  (set-rewrite {:a 1}) ;=> nil
+
+  ;;-------------------------------------------------------------------
   ;; matching-var-rewrite - transforms ?x, ?x?, ?x+, ?x* etc.
   ;;-------------------------------------------------------------------
   ;; simple ?x becomes variable binding
@@ -2177,6 +2191,12 @@
   ;; nested patterns
   ((compile-pattern '{:user {:name ?n}}) (vmr {:user {:name "Eve"}})) ;=>>
   {:vars {'n "Eve"}}
+  ;; map unification: same var with same value succeeds
+  ((compile-pattern '{:a ?x :b ?x}) (vmr {:a 1 :b 1})) ;=>>
+  {:vars {'x 1}}
+  ;; map unification: same var with different values fails
+  ((compile-pattern '{:a ?x :b ?x}) (vmr {:a 1 :b 2})) ;=>>
+  failure?
 
   ;;-------------------------------------------------------------------
   ;; match-fn macro - pattern matching function

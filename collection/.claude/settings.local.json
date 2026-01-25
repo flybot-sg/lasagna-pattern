@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(clj-nrepl-eval:*)"
+      "Bash(clj-nrepl-eval:*)",
+      "Bash(git -C /Users/tianluo/workspace/pull2/collection diff --stat)",
+      "Bash(git -C /Users/tianluo/workspace/pull2/collection status)"
     ]
   }
 }

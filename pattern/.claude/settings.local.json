@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(clj-nrepl-eval:*)"
+      "Bash(clj-nrepl-eval:*)",
+      "Bash(jj git push:*)",
+      "Bash(jj bookmark:*)"
     ]
   }
 }
