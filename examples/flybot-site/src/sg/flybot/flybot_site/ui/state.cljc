@@ -14,13 +14,42 @@
    :posts []
    :selected-id nil
    :loading? false
-   :error nil
+   :error nil          ; {:message "..." :retryable? bool} or nil
    :form {:title "" :content ""}
    :history []
    :history-version nil
    :tag-filter nil    ; nil = show all, string = filter by tag (includes pages)
-   :pages #{"Home"}   ; tags that are pages (get nav tabs, different styling)
+   :pages #{"Home" "About" "Apply"}  ; tags that are pages (get nav tabs, different styling)
    :user nil})        ; {:email :name :picture :role} when logged in
+
+;;=============================================================================
+;; Error Classification
+;;=============================================================================
+
+(defn- retryable-error-pattern?
+  "Check if error string indicates a retryable error (network/server issues)."
+  [s]
+  (let [lc (some-> s clojure.string/lower-case)]
+    (boolean
+     (and lc
+          (or (clojure.string/includes? lc "failed to fetch")
+              (clojure.string/includes? lc "networkerror")
+              (clojure.string/includes? lc "network error")
+              (clojure.string/includes? lc "http 5")
+              (clojure.string/includes? lc "500"))))))
+
+(defn classify-error
+  "Classify error into {:message ... :retryable? ...}"
+  [error]
+  (let [raw (cond
+              (string? error) error
+              (map? error) (or (:message error) (:error error) (str error))
+              :else (str error))
+        retryable? (retryable-error-pattern? raw)]
+    {:message (if retryable?
+                "Unable to connect. Please try again."
+                (or raw "An error occurred."))
+     :retryable? retryable?}))
 
 ;;=============================================================================
 ;; Selectors
@@ -62,6 +91,16 @@
   [{:keys [user]}]
   (= :owner (:role user)))
 
+(defn can-edit-post?
+  "Can the current user edit this specific post?
+   Returns true if user is an admin (owner) OR the post author."
+  [state post]
+  (let [user (:user state)]
+    (boolean
+     (and user
+          (or (= :owner (:role user))
+              (= (:post/author post) (:name user)))))))
+
 ;;=============================================================================
 ;; Effect Helpers
 ;;=============================================================================
@@ -86,8 +125,13 @@
 (defn set-loading [state]
   {:state (assoc state :loading? true :error nil)})
 
-(defn set-error [state error]
-  {:state (assoc state :loading? false :error (str error))})
+(defn set-error
+  "Set error state with classification."
+  [state error]
+  {:state (assoc state :loading? false :error (classify-error error))})
+
+(defn clear-error [state]
+  {:state (assoc state :error nil)})
 
 ;; --- Posts ---
 
@@ -255,10 +299,10 @@
     (get-in fx [:confirm :message]))
   ;=> "Delete this post?"
 
-  ;; set-error clears loading
+  ;; set-error clears loading and classifies error
   (let [{:keys [state]} (set-error (assoc initial-state :loading? true) "Oops")]
-    [(:loading? state) (:error state)])
-  ;=> [false "Oops"]
+    [(:loading? state) (:retryable? (:error state))])
+  ;=> [false false]
 
   ;; filtered-posts returns all when no filter
   (filtered-posts {:posts [{:post/id 1}] :tag-filter nil :pages #{}})
@@ -334,5 +378,44 @@
 
   ;; logout clears user and returns navigate effect
   (let [{:keys [state fx]} (logout {:user {:email "test@example.com"}})]
-    [(:user state) (:navigate fx)]))
-  ;=> [nil "/logout"])
+    [(:user state) (:navigate fx)])
+  ;=> [nil "/logout"]
+
+  ;; can-edit-post? returns false when not logged in
+  (can-edit-post? {:user nil} {:post/author "Alice"})
+  ;=> false
+
+  ;; can-edit-post? returns true for owner role (admin)
+  (can-edit-post? {:user {:role :owner :name "Admin"}} {:post/author "Alice"})
+  ;=> true
+
+  ;; can-edit-post? returns true when user is author
+  (can-edit-post? {:user {:role :viewer :name "Alice"}} {:post/author "Alice"})
+  ;=> true
+
+  ;; can-edit-post? returns false when viewer is not the author
+  (can-edit-post? {:user {:role :viewer :name "Bob"}} {:post/author "Alice"})
+  ;=> false
+
+  ;; --- Error Classification Tests ---
+
+  ;; classify-error detects retryable errors (network)
+  (:retryable? (classify-error "Failed to fetch"))
+  ;=> true
+
+  ;; classify-error detects retryable errors (server)
+  (:retryable? (classify-error "HTTP 500"))
+  ;=> true
+
+  ;; classify-error marks other errors as non-retryable
+  (:retryable? (classify-error "Something weird"))
+  ;=> false
+
+  ;; classify-error provides message
+  (some? (:message (classify-error "Failed to fetch")))
+  ;=> true
+
+  ;; set-error uses classification
+  (let [{:keys [state]} (set-error initial-state "Failed to fetch")]
+    (:retryable? (:error state))))
+  ;=> true)

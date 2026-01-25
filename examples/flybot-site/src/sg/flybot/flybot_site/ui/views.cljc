@@ -55,6 +55,28 @@
       body)))
 
 ;;=============================================================================
+;; Error Components
+;;=============================================================================
+
+(defn- warning-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:path {:d "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"}]
+   [:line {:x1 "12" :y1 "9" :x2 "12" :y2 "13"}]
+   [:line {:x1 "12" :y1 "17" :x2 "12.01" :y2 "17"}]])
+
+(defn error-banner
+  "Display an error banner with retry button for retryable errors."
+  [state dispatch!]
+  (when-let [error (:error state)]
+    [:div.error-banner {:class (if (:retryable? error) "retryable" "error")}
+     (warning-icon)
+     [:span (:message error)]
+     (when (:retryable? error)
+       [:button {:on {:click #(do (dispatch! :clear-error)
+                                  (dispatch! :fetch-posts))}}
+        "Retry"])]))
+
+;;=============================================================================
 ;; Markdown Editor
 ;;=============================================================================
 
@@ -87,79 +109,137 @@
 ;; Components
 ;;=============================================================================
 
-(defn- login-icon
-  "SVG login icon - arrow entering door"
-  []
-  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2" :stroke-linecap "round" :stroke-linejoin "round"}
+(defn- login-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
    [:path {:d "M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"}]
    [:polyline {:points "10 17 15 12 10 7"}]
    [:line {:x1 "15" :y1 "12" :x2 "3" :y2 "12"}]])
 
-(defn- logout-icon
-  "SVG logout icon - arrow exiting door"
-  []
-  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2" :stroke-linecap "round" :stroke-linejoin "round"}
+(defn- logout-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
    [:path {:d "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"}]
    [:polyline {:points "16 17 21 12 16 7"}]
    [:line {:x1 "21" :y1 "12" :x2 "9" :y2 "12"}]])
 
-(defn user-header
-  "User header with avatar, name, and login/logout.
+(defn- sun-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:circle {:cx "12" :cy "12" :r "5"}]
+   [:line {:x1 "12" :y1 "1" :x2 "12" :y2 "3"}]
+   [:line {:x1 "12" :y1 "21" :x2 "12" :y2 "23"}]
+   [:line {:x1 "4.22" :y1 "4.22" :x2 "5.64" :y2 "5.64"}]
+   [:line {:x1 "18.36" :y1 "18.36" :x2 "19.78" :y2 "19.78"}]
+   [:line {:x1 "1" :y1 "12" :x2 "3" :y2 "12"}]
+   [:line {:x1 "21" :y1 "12" :x2 "23" :y2 "12"}]
+   [:line {:x1 "4.22" :y1 "19.78" :x2 "5.64" :y2 "18.36"}]
+   [:line {:x1 "18.36" :y1 "5.64" :x2 "19.78" :y2 "4.22"}]])
 
-   Shows:
-   - Round login icon button when not logged in
-   - User avatar, name, and round logout icon when logged in"
-  [state dispatch!]
-  (let [user (:user state)]
-    [:div.user-header
-     (if user
-       [:div.user-info
-        (when-let [picture (:picture user)]
-          [:img.avatar {:src picture :alt (:name user)}])
-        [:span.user-name (:name user)]
-        [:button.auth-btn.logout {:title "Sign out"
-                                  :on {:click (fn [e]
-                                                (.preventDefault e)
-                                                (dispatch! :logout))}}
-         (logout-icon)]]
-       [:a.auth-btn.login {:href "/oauth2/google" :title "Sign in with Google"}
-        (login-icon)])]))
+(defn- moon-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:path {:d "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"}]])
 
-(defn nav-tabs
-  "Navigation tabs for pages and posts list."
+(defn- edit-icon []
+  [:svg {:width "16" :height "16" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:path {:d "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"}]
+   [:path {:d "M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"}]])
+
+(def ^:private page-order ["Home" "About" "Apply"])
+
+(defn- header-nav
+  "Navigation in header - pages in order, then Posts."
   [{:keys [tag-filter pages] :as state} dispatch!]
-  (let [pages (or pages #{})
+  (let [pages-set (or pages #{})
         page-mode? (state/page-mode? state)]
-    [:nav.nav-tabs
-     ;; Page tabs
-     (for [p (sort pages)]
-       [:a.nav-tab {:replicant/key p
-                    :class (when (and page-mode? (= tag-filter p)) "active")
-                    :href "#"
-                    :on {:click (fn [e]
-                                  (.preventDefault e)
-                                  (dispatch! [:filter-by-tag p]))}}
+    [:nav.header-nav
+     ;; Pages in defined order
+     (for [p page-order
+           :when (contains? pages-set p)]
+       [:a.nav-link {:replicant/key p
+                     :class (when (and page-mode? (= tag-filter p)) "active")
+                     :href "#"
+                     :on {:click (fn [e]
+                                   (.preventDefault e)
+                                   (dispatch! [:filter-by-tag p]))}}
         p])
      ;; Posts tab
-     [:a.nav-tab {:class (when (not page-mode?) "active")
-                  :href "#"
-                  :on {:click (fn [e]
-                                (.preventDefault e)
-                                (dispatch! [:filter-by-tag nil]))}}
+     [:a.nav-link {:class (when (not page-mode?) "active")
+                   :href "#"
+                   :on {:click (fn [e]
+                                 (.preventDefault e)
+                                 (dispatch! [:filter-by-tag nil]))}}
       "Posts"]]))
 
+(defn site-header
+  "Site header with logo, navigation, theme toggle, and user auth."
+  [state dispatch!]
+  (let [user (:user state)]
+    [:header.site-header
+     [:a.logo {:href "#" :on {:click (fn [e] (.preventDefault e) (dispatch! [:filter-by-tag "Home"]))}}
+      [:img {:src "/assets/flybot-logo.png" :alt "Flybot"}]]
+     [:div.header-right
+      (header-nav state dispatch!)
+      [:button.icon-btn.theme-toggle {:title "Toggle theme"
+                                      :on {:click #?(:clj identity
+                                                     :cljs #(js/sg.flybot.flybot_site.ui.core.toggle_theme_BANG_))}}
+       [:span.show-light (moon-icon)]
+       [:span.show-dark (sun-icon)]]
+      (if user
+        [:div.user-info
+         (when-let [picture (:picture user)]
+           [:img.avatar {:src picture :alt (:name user)}])
+         [:span.user-name (:name user)]
+         [:button.icon-btn {:title "Sign out"
+                            :on {:click #(dispatch! :logout)}}
+          (logout-icon)]]
+        [:a.icon-btn {:href "/oauth2/google" :title "Sign in with Google"}
+         (login-icon)])]]))
+
+(defn site-footer []
+  [:footer.site-footer
+   [:div.footer-content
+    [:div.footer-section
+     [:h4 "Address"]
+     [:p "1 Commonwealth Lane" [:br]
+      "#08-14" [:br]
+      "One Commonwealth" [:br]
+      "Singapore 149544"]]
+    [:div.footer-section
+     [:h4 "Business Hours"]
+     [:p "Monday - Friday" [:br]
+      "08:30 - 17:00"]]
+    [:div.footer-section
+     [:h4 "Contact"]
+     [:p [:a {:href "mailto:zhengliming@basecity.com"} "zhengliming@basecity.com"]]
+     [:p [:a {:href "https://www.linkedin.com/company/flybot-pte-ltd" :target "_blank"} "LinkedIn"]]]]])
+
 (defn post-card
-  "Post card. In page mode: minimal (no metadata, no height limit)."
-  [{:post/keys [id title author created-at content tags]} dispatch! & [page-mode?]]
-  (if page-mode?
-    [:div.page-card {:on {:click #(dispatch! [:select-post id])}}
-     [:h2 title]
-     [:div.page-content (render-markdown content)]]
-    [:div.post-card {:on {:click #(dispatch! [:select-post id])}}
-     [:h2 title]
-     [:div.post-meta "By " author " • " (format-date created-at)]
-     [:div.post-content (render-markdown content)]
-     (tag-list tags dispatch!)]))
+  "Post card. In page mode: minimal (no metadata, no height limit).
+   Shows edit button for author/admin users."
+  [post dispatch! state & [page-mode?]]
+  (let [{:post/keys [id title author created-at content tags]} post
+        can-edit? (state/can-edit-post? state post)]
+    (if page-mode?
+      [:div.page-card {:on {:click #(dispatch! [:select-post id])}}
+       [:div.card-header
+        [:h2 title]
+        (when can-edit?
+          [:button.edit-btn {:title "Edit"
+                             :on {:click (fn [e]
+                                           (.stopPropagation e)
+                                           (dispatch! [:view-edit post]))}}
+           (edit-icon)])]
+       [:div.page-content (render-markdown content)]]
+      [:div.post-card {:on {:click #(dispatch! [:select-post id])}}
+       [:div.card-header
+        [:h2 title]
+        (when can-edit?
+          [:button.edit-btn {:title "Edit"
+                             :on {:click (fn [e]
+                                           (.stopPropagation e)
+                                           (dispatch! [:view-edit post]))}}
+           (edit-icon)])]
+       [:div.post-meta "By " author " • " (format-date created-at)]
+       [:div.post-content (render-markdown content)]
+       (tag-list tags dispatch!)])))
 
 (defn post-list-view [{:keys [loading? error tag-filter] :as state} dispatch!]
   (let [posts (state/filtered-posts state)
@@ -176,13 +256,13 @@
         [:span.tag {:style {:cursor "pointer"}
                     :on {:click #(dispatch! [:filter-by-tag nil])}}
          tag-filter " ×"]])
-     (when error [:div.error error])
+     (when error (error-banner state dispatch!))
      (if loading?
        [:div.loading "Loading..."]
        [:div {:class (if page-mode? "page-posts" "posts")}
         (for [post posts]
           [:div {:replicant/key (:post/id post)}
-           (post-card post dispatch! page-mode?)])])]))
+           (post-card post dispatch! state page-mode?)])])]))
 
 (defn post-detail-view [state dispatch!]
   (let [post (state/selected-post state)
@@ -225,7 +305,7 @@
         "← Back to posts"]
        [:p "Post not found"]])))
 
-(defn post-form-view [{:keys [form error view]} dispatch!]
+(defn post-form-view [{:keys [form error view] :as state} dispatch!]
   (let [editing? (= view :edit)]
     [:div.post-form
      [:a.back-link {:href "#"
@@ -234,7 +314,7 @@
                                   (dispatch! [:view-back :list]))}}
       "← Cancel"]
      [:h2 (if editing? "Edit Post" "New Post")]
-     (when error [:div.error error])
+     (when error (error-banner state dispatch!))
      [:div.form-group
       [:label "Title"]
       [:input {:type "text" :value (:title form)
@@ -292,17 +372,18 @@
         [:button {:on {:click #(dispatch! [:restore-version version])}} "Restore This Version"]])]))
 
 (defn app-view [state dispatch!]
-  [:div
-   (user-header state dispatch!)
-   (nav-tabs state dispatch!)
-   (case (:view state)
-     :list (post-list-view state dispatch!)
-     :detail (post-detail-view state dispatch!)
-     :edit (post-form-view state dispatch!)
-     :new (post-form-view state dispatch!)
-     :history (post-history-view state dispatch!)
-     :history-detail (post-history-detail-view state dispatch!)
-     (post-list-view state dispatch!))])
+  [:div.app-container
+   (site-header state dispatch!)
+   [:main.main-content
+    (case (:view state)
+      :list (post-list-view state dispatch!)
+      :detail (post-detail-view state dispatch!)
+      :edit (post-form-view state dispatch!)
+      :new (post-form-view state dispatch!)
+      :history (post-history-view state dispatch!)
+      :history-detail (post-history-detail-view state dispatch!)
+      (post-list-view state dispatch!))]
+   (site-footer)])
 
 ;;=============================================================================
 ;; Tests
@@ -315,12 +396,15 @@
   (strip-frontmatter "Just content") ;=> "Just content"
   (strip-frontmatter nil) ;=> ""
   ;; post-card normal mode
-  (first (post-card {:post/id 1 :post/title "Test" :post/author "Me" :post/content "Hello"} identity)) ;=> :div.post-card
+  (first (post-card {:post/id 1 :post/title "Test" :post/author "Me" :post/content "Hello"} identity {})) ;=> :div.post-card
   ;; post-card page mode
-  (first (post-card {:post/id 1 :post/title "Test" :post/content "Hello"} identity true)) ;=> :div.page-card
+  (first (post-card {:post/id 1 :post/title "Test" :post/content "Hello"} identity {} true)) ;=> :div.page-card
   (tag-list []) ;=> nil
   (tag-list [] identity) ;=> nil
   (first (tag-list ["a" "b"])) ;=> :div.tags
   (first (tag-list ["a" "b"] identity)) ;=> :div.tags
-  (first (nav-tabs {:tag-filter nil :pages #{"Home"}} identity)) ;=> :nav.nav-tabs
-  (first (app-view {:view :list :posts [] :loading? false :user nil :pages #{}} identity))) ;=> :div)
+  (first (app-view {:view :list :posts [] :loading? false :user nil :pages #{}} identity)) ;=> :div.app-container
+  ;; error-banner renders when error present
+  (first (error-banner {:error {:message "Test" :retryable? true}} identity)) ;=> :div.error-banner
+  ;; error-banner returns nil when no error
+  (error-banner {:error nil} identity)) ;=> nil

@@ -84,6 +84,28 @@
           (resp/content-type "application/json")))))
 
 ;;=============================================================================
+;; Error Handling
+;;=============================================================================
+
+(defn- wrap-error-handler
+  "Outermost middleware to catch all unhandled exceptions.
+   Returns JSON error for /api routes, HTML for others."
+  [handler]
+  (fn [request]
+    (try
+      (handler request)
+      (catch Exception e
+        (log/error "Unhandled exception:" (ex-message e) "\n" (with-out-str (.printStackTrace e)))
+        (let [api-route? (clojure.string/starts-with? (or (:uri request) "") "/api")]
+          (if api-route?
+            (-> (resp/response "{\"error\":\"Internal server error\"}")
+                (resp/status 500)
+                (resp/content-type "application/json"))
+            (-> (resp/response "<html><body><h1>500 - Server Error</h1><p>An unexpected error occurred.</p></body></html>")
+                (resp/status 500)
+                (resp/content-type "text/html"))))))))
+
+;;=============================================================================
 ;; Ring App
 ;;=============================================================================
 
@@ -133,7 +155,8 @@
        (oauth/wrap-google-auth {:client-id google-client-id
                                 :client-secret google-client-secret
                                 :base-url base-url})
-       (wrap-session {:store (memory-store)}))))
+       (wrap-session {:store (memory-store)})
+       wrap-error-handler)))
 
 ;;=============================================================================
 ;; Server Lifecycle
@@ -275,4 +298,11 @@
   ;=> ["New" "A"]
 
   ;; Cleanup
-  (db/release-conn! test-conn))
+  (db/release-conn! test-conn)
+
+  ;; Test wrap-error-handler returns 500 on exception
+  (def error-handler (wrap-error-handler (fn [_] (throw (Exception. "test error")))))
+  (:status (error-handler {:uri "/api/test"})) ;=> 500
+  (:status (error-handler {:uri "/page"})) ;=> 500
+  (get-in (error-handler {:uri "/api/test"}) [:headers "Content-Type"]) ;=> "application/json"
+  (get-in (error-handler {:uri "/page"}) [:headers "Content-Type"])) ;=> "text/html"

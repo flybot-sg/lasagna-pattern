@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(clj-nrepl-eval:*)",
+      "Bash(clj:*)"
+    ]
+  }
+}

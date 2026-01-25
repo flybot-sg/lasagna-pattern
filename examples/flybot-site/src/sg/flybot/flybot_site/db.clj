@@ -151,42 +151,62 @@
 (defrecord PostsDataSource [conn]
   coll/DataSource
   (fetch [_ query]
-    (log/log-db-op :fetch :post (:post/id query))
-    (normalize-entity (find-by conn query)))
+    (try
+      (log/log-db-op :fetch :post (:post/id query))
+      (normalize-entity (find-by conn query))
+      (catch Exception e
+        (log/error "DB fetch failed:" {:query query :error (ex-message e)})
+        (throw e))))
 
   (list-all [_]
-    (log/log-db-op :list-all :post nil)
-    (->> (d/q '[:find [(pull ?e [*]) ...] :where [?e :post/id _]] @conn)
-         (map normalize-entity)
-         (sort-by :post/created-at #(compare %2 %1))))
+    (try
+      (log/log-db-op :list-all :post nil)
+      (->> (d/q '[:find [(pull ?e [*]) ...] :where [?e :post/id _]] @conn)
+           (map normalize-entity)
+           (sort-by :post/created-at #(compare %2 %1)))
+      (catch Exception e
+        (log/error "DB list-all failed:" {:error (ex-message e)})
+        (throw e))))
 
   (create! [_ data]
-    (let [ts (now)
-          entity (merge (prepare-for-db (extract-frontmatter data))
-                        {:post/id (next-id conn)
-                         :post/created-at ts
-                         :post/updated-at ts})]
-      (d/transact conn [entity])
-      (log/log-db-create :post entity)
-      (normalize-entity entity)))
+    (try
+      (let [ts (now)
+            entity (merge (prepare-for-db (extract-frontmatter data))
+                          {:post/id (next-id conn)
+                           :post/created-at ts
+                           :post/updated-at ts})]
+        (d/transact conn [entity])
+        (log/log-db-create :post entity)
+        (normalize-entity entity))
+      (catch Exception e
+        (log/error "DB create failed:" {:data data :error (ex-message e)})
+        (throw e))))
 
   (update! [this query data]
-    (when-let [post (coll/fetch this query)]
-      (let [updates (merge (prepare-for-db (extract-frontmatter data))
-                           {:post/id (:post/id post)
-                            :post/updated-at (now)})]
-        (d/transact conn [updates])
-        (log/log-db-update :post (:post/id post))
-        (coll/fetch this {:post/id (:post/id post)}))))
+    (try
+      (when-let [post (coll/fetch this query)]
+        (let [updates (merge (prepare-for-db (extract-frontmatter data))
+                             {:post/id (:post/id post)
+                              :post/updated-at (now)})]
+          (d/transact conn [updates])
+          (log/log-db-update :post (:post/id post))
+          (coll/fetch this {:post/id (:post/id post)})))
+      (catch Exception e
+        (log/error "DB update failed:" {:query query :data data :error (ex-message e)})
+        (throw e))))
 
   (delete! [this query]
-    (if-let [post (coll/fetch this query)]
-      (let [eid (d/q '[:find ?e . :in $ ?id :where [?e :post/id ?id]]
-                     @conn (:post/id post))]
-        (d/transact conn [[:db/retractEntity eid]])
-        (log/log-db-delete :post (:post/id post))
-        true)
-      false)))
+    (try
+      (if-let [post (coll/fetch this query)]
+        (let [eid (d/q '[:find ?e . :in $ ?id :where [?e :post/id ?id]]
+                       @conn (:post/id post))]
+          (d/transact conn [[:db/retractEntity eid]])
+          (log/log-db-delete :post (:post/id post))
+          true)
+        false)
+      (catch Exception e
+        (log/error "DB delete failed:" {:query query :error (ex-message e)})
+        (throw e)))))
 
 ;;=============================================================================
 ;; History Query

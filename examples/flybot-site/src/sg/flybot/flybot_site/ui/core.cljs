@@ -41,6 +41,7 @@
    :navigate        state/navigate
    :filter-by-tag   state/filter-by-tag
    :error           state/set-error
+   :clear-error     (fn [s _] (state/clear-error s))
    ;; User/Auth
    :fetch-me        (fn [s _] (state/fetch-me s))
    :me-fetched      state/me-fetched
@@ -121,14 +122,29 @@
     (dispatch! [:navigate parsed])
     (history/replace-state! @app-state)))
 
+;; Theme toggle - pure DOM/localStorage, triggers re-render for icon update
+(defn ^:export toggle-theme! []
+  (let [body (.-body js/document)
+        current (.getAttribute body "data-theme")
+        new-theme (if (= current "dark") "light" "dark")]
+    (.setAttribute body "data-theme" new-theme)
+    (js/localStorage.setItem "theme" new-theme)
+    (render!)))
+
+(defn- init-theme! []
+  (let [saved (js/localStorage.getItem "theme")]
+    (when (= saved "dark")
+      (.setAttribute (.-body js/document) "data-theme" "dark"))))
+
 (defn ^:export init! []
-  (log/info "Blog app initializing...")
+  (log/info "Flybot site initializing...")
   (reset! root-el (js/document.getElementById "app"))
   (history/init-history! on-popstate)
+  (init-theme!)
   (init-from-url!)
   (dispatch! :fetch-posts)
   (dispatch! :fetch-me)
   (render!)
-  (log/info "Blog app initialized"))
+  (log/info "Flybot site initialized"))
 
 (init!)

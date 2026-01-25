@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/opt/homebrew/bin/clojure:*)"
+    ]
+  }
+}

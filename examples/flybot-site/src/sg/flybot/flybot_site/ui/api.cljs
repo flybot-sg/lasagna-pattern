@@ -17,12 +17,20 @@
 (defn- decode [s]
   (t/read (transit-reader) s))
 
+(defn- error->string
+  "Convert error to string for classification."
+  [err]
+  (cond
+    (instance? js/Error err) (.-message err)
+    (string? err) err
+    :else (str err)))
+
 (defn pull!
   "Execute a pull query against the API.
 
    pattern - Pull pattern like '{:posts ?posts}
    on-success - fn of response data
-   on-error - fn of error"
+   on-error - fn of error string"
   [pattern on-success on-error]
   (log/log-api-request pattern)
   (-> (js/fetch api-url
@@ -39,8 +47,9 @@
                  (log/log-api-response response)
                  (on-success response))))
       (.catch (fn [err]
-                (log/log-api-error err pattern)
-                (on-error err)))))
+                (let [msg (error->string err)]
+                  (log/log-api-error msg pattern)
+                  (on-error msg))))))
 
 (defn upload-image!
   "Upload image blob to server. Returns promise resolving to image URL."
@@ -49,11 +58,14 @@
   (let [form-data (js/FormData.)]
     (.append form-data "image" blob (.-name blob))
     (-> (js/fetch "/api/upload" #js {:method "POST" :body form-data})
-        (.then #(.json %))
+        (.then (fn [resp]
+                 (if (.-ok resp)
+                   (.json resp)
+                   (throw (js/Error. (str "HTTP " (.-status resp)))))))
         (.then (fn [json]
-                 (let [url (.-url json)]
-                   (log/info "Image uploaded:" url)
-                   url)))
+                 (if-let [url (.-url json)]
+                   (do (log/info "Image uploaded:" url) url)
+                   (throw (js/Error. (or (.-error json) "Upload failed"))))))
         (.catch (fn [err]
-                  (log/error "Image upload failed:" err)
+                  (log/error "Image upload failed:" (error->string err))
                   (throw err))))))
