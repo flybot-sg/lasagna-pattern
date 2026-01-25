@@ -319,15 +319,128 @@
   "Seed database with sample data using markdown format."
   [conn]
   (let [ds (->PostsDataSource conn)]
-    (coll/create! ds {:post/title "Welcome to My Blog"
+    ;; Home page content
+    (coll/create! ds {:post/title "Welcome to Flybot"
+                      :post/content "---
+author: Flybot Team
+tags:
+  - Home
+---
+
+# Building the Future of Software
+
+At Flybot, we're passionate about creating elegant solutions using **functional programming** and **data-driven design**.
+
+## What We Do
+
+- **Custom Software Development** - Tailored solutions for your business needs
+- **Technical Consulting** - Expert guidance on architecture and best practices
+- **Training & Workshops** - Level up your team's Clojure skills
+
+*Innovation through simplicity.*"})
+
+    ;; Additional Home posts for slideshow
+    (coll/create! ds {:post/title "Latest News: Q1 2026 Update"
+                      :post/content "---
+author: Flybot Team
+tags:
+  - Home
+  - news
+---
+
+We're excited to announce several new client partnerships and the release of our open-source pull-pattern library!"})
+
+    (coll/create! ds {:post/title "Featured Project: Data Pipeline"
                       :post/content "---
 author: Alice
 tags:
-  - welcome
-  - meta
+  - Home
+  - projects
 ---
 
-This is my first post using the pull-based API!"})
+Check out our latest case study on building high-performance data pipelines with Clojure and Kafka."})
+
+    ;; About page content
+    (coll/create! ds {:post/title "About Flybot"
+                      :post/content "---
+author: Flybot Team
+tags:
+  - About
+---
+
+# Our Story
+
+Founded in Singapore, Flybot is a software consultancy specializing in **Clojure** and **functional programming**.
+
+## Our Philosophy
+
+We believe that **simple tools** create **powerful solutions**. Our approach combines:
+
+- **Data-oriented design** - Treating code as data transformation
+- **REPL-driven development** - Fast feedback loops for rapid iteration
+- **Immutable-first architecture** - Reliable, predictable systems
+
+## The Team
+
+Our engineers bring decades of combined experience from top tech companies, united by a shared love for elegant code and pragmatic solutions.
+
+> \"Simplicity is the ultimate sophistication.\" - Leonardo da Vinci"})
+
+    (coll/create! ds {:post/title "Our Tech Stack"
+                      :post/content "---
+author: Bob
+tags:
+  - About
+  - tech
+---
+
+We work primarily with Clojure/ClojureScript, Datomic, and modern cloud infrastructure. Our tooling philosophy emphasizes composability and data-driven configuration."})
+
+    ;; Apply page content
+    (coll/create! ds {:post/title "Join Our Team"
+                      :post/content "---
+author: Flybot Team
+tags:
+  - Apply
+---
+
+# We're Hiring!
+
+Looking for talented engineers who love functional programming? Join us!
+
+## Open Positions
+
+### Senior Clojure Engineer
+Build distributed systems and APIs using Clojure, Kafka, and PostgreSQL.
+
+### Full-Stack Developer
+Create beautiful UIs with ClojureScript and Replicant while building robust backends.
+
+### DevOps Engineer
+Design and maintain our cloud infrastructure on AWS/GCP.
+
+## What We Offer
+
+- 🏠 **Remote-first** culture
+- 📚 **Learning budget** for conferences and courses
+- 🌴 **Flexible PTO** policy
+- 💻 **Latest hardware** and tools
+
+## How to Apply
+
+Send your resume and a brief note about your favorite Clojure project to **careers@flybot.sg**"})
+
+    (coll/create! ds {:post/title "Internship Program"
+                      :post/content "---
+author: Alice
+tags:
+  - Apply
+  - internship
+---
+
+Our 3-month internship program is designed for students and early-career developers eager to learn functional programming. Interns work on real projects alongside senior engineers."})
+
+    ;; Regular blog posts
     (coll/create! ds {:post/title "Understanding Pull Patterns"
                       :post/content "---
 author: Alice
@@ -336,7 +449,8 @@ tags:
   - patterns
 ---
 
-Pull patterns let you declaratively specify what data you want..."})
+Pull patterns let you declaratively specify what data you want from nested data structures. Instead of writing imperative traversal code, you describe the shape of data you need and let the pattern engine do the work."})
+
     (coll/create! ds {:post/title "Building APIs with Lazy Data"
                       :post/content "---
 author: Bob
@@ -345,4 +459,14 @@ tags:
   - api
 ---
 
-The key insight is that your API is just a lazy data structure..."})))
+The key insight is that your API is just a lazy data structure. By implementing ILookup, you can create collections that fetch data on-demand, making your API both flexible and efficient."})
+
+    (coll/create! ds {:post/title "REPL-Driven Development Tips"
+                      :post/content "---
+author: Alice
+tags:
+  - clojure
+  - workflow
+---
+
+Rich comment blocks (^:rct/test) combine documentation, examples, and tests in one place. They're evaluated during development but ignored in production."})))

@@ -128,11 +128,11 @@
 
   ;; LIST: get all posts via seq
   (let [api (make-api conn)]
-    (count (seq (:posts api)))) ;=> 3
+    (count (seq (:posts api)))) ;=> 10
 
   ;; READ: lookup by id via ILookup
   (let [api (make-api conn)]
-    (:post/title (get (:posts api) {:post/id 1}))) ;=> "Welcome to My Blog"
+    (:post/title (get (:posts api) {:post/id 1}))) ;=> "Welcome to Flybot"
 
   ;; CREATE: mutate! with nil query (content has frontmatter)
   (let [api (make-api conn)
@@ -141,26 +141,26 @@
 
   ;; READ: verify created post and frontmatter extraction
   (let [api (make-api conn)
-        post (get (:posts api) {:post/id 4})]
+        post (get (:posts api) {:post/id 11})]
     [(:post/title post) (:post/author post) (:post/tags post)])
   ;=> ["New" "Test" ["demo"]]
 
   ;; UPDATE: mutate! with query and data
   (let [api (make-api conn)
-        updated (coll/mutate! (:posts api) {:post/id 4} {:post/title "Updated"})]
+        updated (coll/mutate! (:posts api) {:post/id 11} {:post/title "Updated"})]
     (:post/title updated)) ;=> "Updated"
 
   ;; DELETE: mutate! with query and nil
   (let [api (make-api conn)]
-    (coll/mutate! (:posts api) {:post/id 4} nil)) ;=> true
+    (coll/mutate! (:posts api) {:post/id 11} nil)) ;=> true
 
   ;; Verify deleted
   (let [api (make-api conn)]
-    (get (:posts api) {:post/id 4})) ;=> nil
+    (get (:posts api) {:post/id 11})) ;=> nil
 
   ;; Pattern matching still works for LIST
   (let [api (make-api conn)]
-    (count ((p/match-fn {:posts ?posts} ?posts {:schema schema}) api))) ;=> 3
+    (count ((p/match-fn {:posts ?posts} ?posts {:schema schema}) api))) ;=> 10
 
   ;; Cleanup
   (db/release-conn! conn))

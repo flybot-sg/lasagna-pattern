@@ -55,6 +55,18 @@
       body)))
 
 ;;=============================================================================
+;; Slideshow Icons
+;;=============================================================================
+
+(defn- chevron-left-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:polyline {:points "15 18 9 12 15 6"}]])
+
+(defn- chevron-right-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:polyline {:points "9 18 15 12 9 6"}]])
+
+;;=============================================================================
 ;; Error Components
 ;;=============================================================================
 
@@ -241,10 +253,47 @@
        [:div.post-content (render-markdown content)]
        (tag-list tags dispatch!)])))
 
+(defn slide-card
+  "Compact card for slideshow display."
+  [post dispatch!]
+  (let [{:post/keys [id title author created-at content]} post]
+    [:div.slide-card {:replicant/key id
+                      :on {:click #(dispatch! [:select-post id])}}
+     [:h4 title]
+     [:div.slide-preview (content-preview content 100)]
+     [:div.slide-meta "By " author " • " (format-date created-at)]]))
+
+(defn slideshow
+  "Horizontal slideshow of posts with navigation."
+  [posts dispatch!]
+  (when (seq posts)
+    [:div.slideshow-container
+     [:div.slideshow-header
+      [:h3 "More Posts"]
+      [:div.slideshow-nav
+       [:button.slideshow-btn {:title "Scroll left"
+                               :on {:click #?(:cljs #(when-let [track (.-previousElementSibling (.-currentTarget %))]
+                                                       (set! (.-scrollLeft track)
+                                                             (- (.-scrollLeft track) 300)))
+                                              :clj identity)}}
+        (chevron-left-icon)]
+       [:button.slideshow-btn {:title "Scroll right"
+                               :on {:click #?(:cljs #(when-let [track (.querySelector js/document ".slideshow-track")]
+                                                       (set! (.-scrollLeft track)
+                                                             (+ (.-scrollLeft track) 300)))
+                                              :clj identity)}}
+        (chevron-right-icon)]]]
+     [:div.slideshow-track
+      (for [post posts]
+        (slide-card post dispatch!))]]))
+
 (defn post-list-view [{:keys [loading? error tag-filter] :as state} dispatch!]
   (let [posts (state/filtered-posts state)
         can-edit? (state/can-edit? state)
-        page-mode? (state/page-mode? state)]
+        page-mode? (state/page-mode? state)
+        ;; In page mode: first post is hero, rest go to slideshow
+        hero-post (when page-mode? (first posts))
+        slideshow-posts (when page-mode? (rest posts))]
     [:div (when page-mode? {:class "page-view"})
      [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
       [:h1 (if page-mode? tag-filter "Blog Posts")]
@@ -259,10 +308,19 @@
      (when error (error-banner state dispatch!))
      (if loading?
        [:div.loading "Loading..."]
-       [:div {:class (if page-mode? "page-posts" "posts")}
-        (for [post posts]
-          [:div {:replicant/key (:post/id post)}
-           (post-card post dispatch! state page-mode?)])])]))
+       (if page-mode?
+         ;; Page mode: Hero card + slideshow
+         [:div
+          (when hero-post
+            [:div.page-hero
+             [:div {:replicant/key (:post/id hero-post)}
+              (post-card hero-post dispatch! state true)]])
+          (slideshow slideshow-posts dispatch!)]
+         ;; Normal mode: list of cards
+         [:div.posts
+          (for [post posts]
+            [:div {:replicant/key (:post/id post)}
+             (post-card post dispatch! state false)])]))]))
 
 (defn post-detail-view [state dispatch!]
   (let [post (state/selected-post state)
@@ -409,4 +467,10 @@
   ;; error-banner renders when error present
   (first (error-banner {:error {:message "Test" :retryable? true}} identity)) ;=> :div.error-banner
   ;; error-banner returns nil when no error
-  (error-banner {:error nil} identity)) ;=> nil
+  (error-banner {:error nil} identity) ;=> nil
+  ;; slide-card renders compact card
+  (first (slide-card {:post/id 1 :post/title "Test" :post/content "Hello" :post/author "Me"} identity)) ;=> :div.slide-card
+  ;; slideshow renders container
+  (first (slideshow [{:post/id 1 :post/title "Test"}] identity)) ;=> :div.slideshow-container
+  ;; slideshow returns nil for empty posts
+  (slideshow [] identity)) ;=> nil

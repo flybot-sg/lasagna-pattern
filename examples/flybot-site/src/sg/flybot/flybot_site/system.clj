@@ -57,7 +57,7 @@
 
        seed?
        (do (db/seed! conn)
-           (log/log-db-seeded 3)))
+           (log/log-db-seeded 10)))
      (when owner-emails
        (log/info "Role-based auth enabled for:" owner-emails))
      (life-cycle-map
@@ -102,6 +102,6 @@
   (let [api-fn (:api-fn sys)
         {:keys [data schema]} (api-fn {})]
     [(count (seq (:posts data))) (contains? schema :posts)])
-  ;=> [3 true]
+  ;=> [10 true]
 
   (halt! sys)) ;=> nil)

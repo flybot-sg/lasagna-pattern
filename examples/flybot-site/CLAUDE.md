@@ -78,7 +78,7 @@ Use logging for debugging API calls, database operations, and state changes.
 (log/log-startup 8080)
 (log/log-shutdown)
 (log/log-db-connected {:backend :mem :id "blog"})
-(log/log-db-seeded 3)
+(log/log-db-seeded 10)
 
 ;; Ring middleware (adds request timing)
 (-> handler (log/wrap-request-logging))

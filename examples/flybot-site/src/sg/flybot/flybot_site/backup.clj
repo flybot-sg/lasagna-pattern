@@ -113,18 +113,23 @@
   (def conn (db/create-conn!))
   (db/seed! conn)
 
+  ;; Clean up previous test files
+  (let [dir (io/file "/tmp/flybot-backup-test")]
+    (when (.exists dir)
+      (doseq [f (.listFiles dir)] (.delete f))))
+
   ;; Export
   (def result (export-all! conn "/tmp/flybot-backup-test"))
-  (:count result) ;=> 3
+  (:count result) ;=> 10
 
   ;; Check file content
-  (str/includes? (slurp "/tmp/flybot-backup-test/1-Welcome-to-My-Blog.md") "title: Welcome") ;=> true
+  (str/includes? (slurp "/tmp/flybot-backup-test/1-Welcome-to-Flybot.md") "title: Welcome") ;=> true
 
   ;; Import to fresh db
   (def conn2 (db/create-conn! {:store {:backend :mem :id "test2"}
                                :schema-flexibility :write
                                :keep-history? true}))
-  (:count (import-all! conn2 "/tmp/flybot-backup-test")) ;=> 3
+  (:count (import-all! conn2 "/tmp/flybot-backup-test")) ;=> 10
 
   ;; Cleanup
   (db/release-conn! conn)

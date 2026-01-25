@@ -221,7 +221,7 @@
 
        seed?
        (do (db/seed! @conn)
-           (log/log-db-seeded 3)))
+           (log/log-db-seeded 10)))
      (let [api-fn (make-api-fn @conn {:owner-emails owner-emails})
            app (make-app api-fn {:google-client-id google-client-id
                                  :google-client-secret google-client-secret
@@ -295,7 +295,7 @@
                     (mock/header "Accept" "application/transit+json")))) ;=> 200
 
   ;; LIST - response is {posts [...]} (works for all users)
-  (count (get (pull '{:posts ?posts}) 'posts)) ;=> 3
+  (count (get (pull '{:posts ?posts}) 'posts)) ;=> 10
 
   ;; CREATE - requires owner session
   (let [owner-session {:user-email "owner@test.com"}
