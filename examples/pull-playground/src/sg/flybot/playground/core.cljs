@@ -16,16 +16,19 @@
 
 (def ^:private handlers
   "Maps event keywords to state functions."
-  {:set-mode           (fn [s mode] (state/set-mode s mode))
-   :update-pattern     (fn [s text] (state/update-pattern s text))
-   :update-data        (fn [s text] (state/update-data s text))
-   :update-server-url  (fn [s url] (state/update-server-url s url))
-   :select-example     (fn [s example] (state/select-example s example))
-   :set-selected-example (fn [s idx] {:state (assoc s :selected-example idx)})
-   :execute            (fn [s _] (state/execute s))
-   :execution-success  (fn [s result] (state/execution-success s result))
-   :execution-error    (fn [s error] (state/execution-error s error))
-   :clear-result       (fn [s _] (state/clear-result s))})
+  {:set-mode              (fn [s mode] (state/set-mode s mode))
+   :update-pattern        (fn [s text] (state/update-pattern s text))
+   :update-data           (fn [s text] (state/update-data s text))
+   :update-server-url     (fn [s url] (state/update-server-url s url))
+   :select-example        (fn [s example] (state/select-example s example))
+   :set-selected-example  (fn [s idx] (state/set-selected-example s idx))
+   :execute               (fn [s _] (state/execute s))
+   :execution-success     (fn [s result] (state/execution-success s result))
+   :execution-error       (fn [s error] (state/execution-error s error))
+   :clear-result          (fn [s _] (state/clear-result s))
+   :fetch-schema          (fn [s _] (state/fetch-schema s))
+   :fetch-schema-success  (fn [s schema] (state/fetch-schema-success s schema))
+   :fetch-schema-error    (fn [s error] (state/fetch-schema-error s error))})
 
 (defn- apply-handler [state event]
   (let [[event-type & args] (if (vector? event) event [event])
@@ -50,9 +53,15 @@
              (fn [result] (dispatch! [:execution-success result]))
              (fn [error] (dispatch! [:execution-error error]))))
 
-(defn- execute-effects! [{:keys [local-exec remote-exec]}]
+(defn- fetch-schema! [{:keys [url]}]
+  (api/fetch-schema! url
+                     (fn [schema] (dispatch! [:fetch-schema-success schema]))
+                     (fn [error] (dispatch! [:fetch-schema-error error]))))
+
+(defn- execute-effects! [{:keys [local-exec remote-exec fetch-schema]}]
   (when local-exec (execute-local! local-exec))
-  (when remote-exec (execute-remote! remote-exec)))
+  (when remote-exec (execute-remote! remote-exec))
+  (when fetch-schema (fetch-schema! fetch-schema)))
 
 ;;=============================================================================
 ;; Dispatch

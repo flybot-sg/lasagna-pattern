@@ -23,6 +23,62 @@ Use `.cljc` by default for code shareable across Clojure and ClojureScript. Use 
    :cljs (random-uuid))
 ```
 
+### Macros in .cljc Files
+
+**Critical: A namespace cannot use its own macros during initial load in ClojureScript.**
+
+When a `.cljc` file defines a macro and tries to call it at the top level of the same file, ClojureScript will fail with "Can't take value of macro" warnings and runtime errors.
+
+```clojure
+;; BAD: macro defined and used in same namespace
+(ns mylib.impl)
+
+(defmacro register! [type spec]
+  `(swap! registry* assoc ~type ~spec))
+
+(register! :foo {...})  ; FAILS in ClojureScript!
+```
+
+**Solutions:**
+
+1. **Convert to function if possible** - If the macro only does runtime operations (like `swap!`), use a function instead:
+```clojure
+;; GOOD: function works in both Clojure and ClojureScript
+(defn register! [type spec]
+  (swap! registry* assoc type spec))
+
+(register! :foo {...})  ; Works!
+```
+
+2. **Move calls to separate namespace** - If macro semantics are needed:
+```clojure
+;; mylib/impl.cljc - defines macro
+(ns mylib.impl
+  #?(:cljs (:require-macros [mylib.impl])))
+
+(defmacro register! [type spec] ...)
+
+;; mylib/registry.cljc - uses macro (requires impl)
+(ns mylib.registry
+  (:require [mylib.impl :refer [register!]]))
+
+(register! :foo {...})  ; Works!
+```
+
+3. **Use `#?(:clj ...)` for JVM-only code** - Skip in ClojureScript if not needed:
+```clojure
+#?(:clj
+   (register! :foo {...}))  ; Only runs on JVM
+```
+
+**Self-referential macros pattern:**
+```clojure
+(ns mylib.util
+  #?(:cljs (:require-macros [mylib.util])))  ; Required for CLJS
+
+(defmacro my-macro [...] ...)
+```
+
 ### Data-Oriented Design
 - Prefer plain data (maps, vectors, sets) over custom types
 - Use keywords as keys: `{:name "Alice" :age 30}`

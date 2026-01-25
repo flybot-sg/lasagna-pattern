@@ -17,7 +17,10 @@
    :result nil            ; {:data ... :vars ...} or nil
    :error nil             ; Error message string or nil
    :loading? false
-   :selected-example nil}) ; Index of selected example
+   :selected-example nil  ; Index of selected example
+   :schema nil            ; Remote server schema (remote mode only)
+   :schema-loading? false
+   :schema-error nil})
 
 ;;=============================================================================
 ;; State Transitions (pure functions)
@@ -26,7 +29,8 @@
 (defn set-mode [state mode]
   {:state (-> state
               (assoc :mode mode)
-              (assoc :result nil :error nil))})
+              (assoc :result nil :error nil)
+              (assoc :schema nil :schema-error nil))})
 
 (defn update-pattern [state text]
   {:state (assoc state :pattern-text text)})
@@ -35,7 +39,13 @@
   {:state (assoc state :data-text text)})
 
 (defn update-server-url [state url]
+  ;; Just update URL - debounced fetch happens via :fetch-schema event
   {:state (assoc state :server-url url)})
+
+(defn fetch-schema [state]
+  ;; Trigger schema fetch for current URL (also sets loading state)
+  {:state (assoc state :schema nil :schema-error nil :schema-loading? true)
+   :fx {:fetch-schema {:url (:server-url state)}}})
 
 (defn select-example [state {:keys [pattern data]}]
   {:state (-> state
@@ -59,6 +69,15 @@
 
 (defn clear-result [state]
   {:state (assoc state :result nil :error nil)})
+
+(defn set-selected-example [state idx]
+  {:state (assoc state :selected-example idx)})
+
+(defn fetch-schema-success [state schema]
+  {:state (assoc state :schema-loading? false :schema schema :schema-error nil)})
+
+(defn fetch-schema-error [state error]
+  {:state (assoc state :schema-loading? false :schema nil :schema-error error)})
 
 ;;=============================================================================
 ;; Tests
@@ -93,5 +112,20 @@
 
   ;; execution-error stores error
   (let [{:keys [state]} (execution-error {:loading? true} "Parse error")]
-    [(:loading? state) (:error state)]))
-  ;=> [false "Parse error"])
+    [(:loading? state) (:error state)])
+  ;=> [false "Parse error"]
+
+  ;; fetch-schema returns fetch-schema effect
+  (let [{:keys [fx]} (fetch-schema {:server-url "http://test/api"})]
+    (:fetch-schema fx))
+  ;=> {:url "http://test/api"}
+
+  ;; fetch-schema-success stores schema
+  (let [{:keys [state]} (fetch-schema-success {:schema-loading? true} {:users [:name :email]})]
+    [(:schema-loading? state) (:schema state)])
+  ;=> [false {:users [:name :email]}]
+
+  ;; fetch-schema-error stores error
+  (let [{:keys [state]} (fetch-schema-error {:schema-loading? true} "Network error")]
+    [(:schema-loading? state) (:schema-error state)]))
+  ;=> [false "Network error"])

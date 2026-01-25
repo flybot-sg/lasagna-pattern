@@ -53,6 +53,25 @@
        [:span.show-light (moon-icon)]
        [:span.show-dark (sun-icon)]]]]))
 
+(defn- schema-display [state dispatch!]
+  (let [{:keys [schema schema-loading? schema-error]} state]
+    [:div.schema-section
+     [:div.schema-header
+      [:label "Server Schema"]
+      [:button.fetch-schema-btn {:on {:click #(dispatch! :fetch-schema)}
+                                 :disabled schema-loading?}
+       (if schema-loading? "Loading..." "Fetch")]]
+     [:div.schema-content
+      (cond
+        schema-error
+        [:div.schema-error schema-error]
+
+        schema
+        [:pre.schema-value (format-result schema)]
+
+        :else
+        [:div.schema-empty "Click Fetch to load schema"])]]))
+
 (defn editor-panel [state dispatch!]
   (let [{:keys [mode pattern-text data-text server-url loading?]} state]
     [:div.panel.editor-panel
@@ -70,18 +89,20 @@
          [:textarea {:value data-text
                      :placeholder "Enter EDN data to match against"
                      :on {:input #(dispatch! [:update-data (.. % -target -value)])}}]]
-        [:div.editor-section
-         [:label "Server URL"]
-         [:input {:type "text"
-                  :value server-url
-                  :placeholder "http://localhost:8081/api"
-                  :on {:input #(dispatch! [:update-server-url (.. % -target -value)])}}]])
+        [:div.remote-sections
+         [:div.editor-section
+          [:label "Server URL"]
+          [:input {:type "text"
+                   :value server-url
+                   :placeholder "http://localhost:8081/api"
+                   :on {:input #(dispatch! [:update-server-url (.. % -target -value)])}}]]
+         (schema-display state dispatch!)])
       [:button.execute-btn {:on {:click #(dispatch! :execute)}
                             :disabled loading?}
        (if loading? "Executing..." "Execute")]]]))
 
 (defn results-panel [state _dispatch!]
-  (let [{:keys [result error loading?]} state]
+  (let [{:keys [mode result error loading?]} state]
     [:div.panel.results-panel
      [:div.panel-header
       [:h2 "Results"]]
@@ -96,10 +117,13 @@
          [:div.result-value.error error]]
 
         result
-        [:<>
-         [:div.result-section
-          [:h3 "Matched Data"]
-          [:div.result-value.success (format-result (:data result))]]
+        [:div.result-sections
+         ;; Local mode shows both matched data and bindings
+         ;; Remote mode only shows bindings (per spec)
+         (when (and (= mode :local) (:data result))
+           [:div.result-section
+            [:h3 "Matched Data"]
+            [:div.result-value.success (format-result (:data result))]])
          [:div.result-section
           [:h3 "Variable Bindings"]
           [:div.result-value.success (format-result (:vars result))]]]

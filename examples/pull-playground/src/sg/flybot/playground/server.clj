@@ -36,6 +36,20 @@
    :config {:version "1.0.0"
             :features {:dark-mode true :notifications false}}})
 
+(def sample-schema
+  "Schema describing the sample data structure."
+  {:users [{:id 'integer?
+            :name 'string?
+            :email 'string?
+            :role 'keyword?}]
+   :posts [{:id 'integer?
+            :title 'string?
+            :author 'string?
+            :tags ['string?]}]
+   :config {:version 'string?
+            :features {:dark-mode 'boolean?
+                       :notifications 'boolean?}}})
+
 ;;=============================================================================
 ;; API Handler
 ;;=============================================================================
@@ -47,12 +61,15 @@
           result (matcher (impl/vmr sample-data))]
       (if (impl/failure? result)
         {:status 400
-         :body (transit-write {:error (str "Match failed: " (:reason result))})}
+         :body (transit-write {:errors [{:code :match-failure
+                                         :reason (:reason result)}]})}
         {:status 200
-         :body (transit-write (:val result))}))
+         ;; Per spec: success response returns variable bindings directly
+         :body (transit-write (:vars result))}))
     (catch Exception e
       {:status 400
-       :body (transit-write {:error (str "Error: " (.getMessage e))})})))
+       :body (transit-write {:errors [{:code :execution-error
+                                       :reason (.getMessage e)}]})})))
 
 (defn- api-handler [request]
   (case [(:request-method request) (:uri request)]
@@ -60,6 +77,11 @@
     (let [body (slurp (:body request))]
       (-> (handle-pull body)
           (assoc :headers {"Content-Type" "application/transit+json"})))
+
+    [:get "/api/_schema"]
+    {:status 200
+     :headers {"Content-Type" "application/transit+json"}
+     :body (transit-write sample-schema)}
 
     [:get "/health"]
     {:status 200

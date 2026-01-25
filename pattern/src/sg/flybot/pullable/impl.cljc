@@ -9,7 +9,8 @@
    [clojure.pprint :refer [cl-format]]
    [clojure.walk :as walk]
    [clojure.zip :as zip]
-   [sg.flybot.pullable.util :refer [vars->]]))
+   [sg.flybot.pullable.util :refer [vars->]])
+  #?(:cljs (:require-macros [sg.flybot.pullable.impl])))
 
 ;;=============================================================================
 ;; SECTION 1: Match Result Types
@@ -904,7 +905,7 @@
 
 (def ^:private matcher-specs* (atom {}))
 
-(defmacro defmatcher
+(defn defmatcher
   "Define a matcher type specification.
    type - keyword like :pred, :val, etc.
    args - human-readable argument format string
@@ -912,13 +913,16 @@
    make - a (fn [vars] ...) that creates the matcher from parsed vars
    opts - optional map with :subseq? true for subsequence matchers"
   ([type args parse make]
-   `(defmatcher ~type ~args ~parse ~make {}))
+   (swap! matcher-specs* assoc type
+          {:args args
+           :parse parse
+           :make make}))
   ([type args parse make opts]
-   `(swap! matcher-specs* assoc ~type
-           (merge {:args ~args
-                   :parse ~parse
-                   :make ~make}
-                  ~opts))))
+   (swap! matcher-specs* assoc type
+          (merge {:args args
+                  :parse parse
+                  :make make}
+                 opts))))
 
 (defmatcher :pred "(? :pred <fn>)"
   (mzone (mvar 'f wildcard))
@@ -2137,34 +2141,39 @@
        {:type (if (= 1 (count types)) (first types) :any)}))))
 
 ;; Literal: [:= value]
-(register-schema-rule!
- (match-fn [:= ?v] {:type (infer-value-type ?v)}))
+#?(:clj
+   (register-schema-rule!
+    (match-fn [:= ?v] {:type (infer-value-type ?v)})))
 
 ;; Dictionary map: [:map-of key-type value-type]
-(register-schema-rule!
- (match-fn [:map-of ?_k ?v]
-           {:type :map
-            :child-schema (constantly ?v)}))
+#?(:clj
+   (register-schema-rule!
+    (match-fn [:map-of ?_k ?v]
+              {:type :map
+               :child-schema (constantly ?v)})))
 
 ;; Union: [:or schema1 schema2 ...]
-(register-schema-rule!
- (match-fn [:or ?schemas*]
-           (let [types (set (map infer-schema-type ?schemas))]
-             {:type (if (= 1 (count types)) (first types) :any)})))
+#?(:clj
+   (register-schema-rule!
+    (match-fn [:or ?schemas*]
+              (let [types (set (map infer-schema-type ?schemas))]
+                {:type (if (= 1 (count types)) (first types) :any)}))))
 
 ;; Optional: [:optional inner-schema]
-(register-schema-rule!
- (match-fn [:optional ?s]
-           (let [info (get-schema-info ?s)]
-             {:type (:type info)
-              :child-schema (:child-schema info)
-              :valid-keys (:valid-keys info)})))
+#?(:clj
+   (register-schema-rule!
+    (match-fn [:optional ?s]
+              (let [info (get-schema-info ?s)]
+                {:type (:type info)
+                 :child-schema (:child-schema info)
+                 :valid-keys (:valid-keys info)}))))
 
 ;; Tuple: [:tuple type1 type2 ...] -> positional types
-(register-schema-rule!
- (match-fn [:tuple ?types*]
-           {:type :seq
-            :child-schema (fn [i] (nth ?types i :any))}))
+#?(:clj
+   (register-schema-rule!
+    (match-fn [:tuple ?types*]
+              {:type :seq
+               :child-schema (fn [i] (nth ?types i :any))})))
 
 ;; Homogeneous seq: [element-type] -> all elements same type
 ;; Must check vector? to avoid matching maps (which are seqable as kv pairs)

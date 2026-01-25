@@ -354,6 +354,93 @@ body {
   color: var(--text-muted);
 }
 
+/* Remote Mode Sections */
+.remote-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  flex: 1;
+  min-height: 0;
+}
+
+/* Schema Section (Remote mode) */
+.schema-section {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.schema-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.schema-header label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.fetch-schema-btn {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.fetch-schema-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.fetch-schema-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.schema-content {
+  flex: 1;
+  min-height: 100px;
+  max-height: 200px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-editor);
+}
+
+.schema-value {
+  margin: 0;
+  padding: 0.75rem;
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text);
+}
+
+.schema-empty {
+  padding: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: 0.875rem;
+}
+
+.schema-error {
+  padding: 0.75rem;
+  color: var(--error);
+  font-size: 0.875rem;
+}
+
 /* Dark mode icons */
 .show-light { display: inline; }
 .show-dark { display: none; }
