@@ -3,7 +3,9 @@
     "allow": [
       "Bash(clj-nrepl-eval:*)",
       "Bash(clj:*)",
-      "Bash(jj status:*)"
+      "Bash(jj status:*)",
+      "Bash(jj workspace add:*)",
+      "Bash(jj describe:*)"
     ]
   }
 }

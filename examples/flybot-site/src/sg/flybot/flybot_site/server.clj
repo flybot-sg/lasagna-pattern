@@ -9,6 +9,7 @@
   (:require
    [sg.flybot.flybot-site.api :as api]
    [sg.flybot.flybot-site.auth :as auth]
+   [sg.flybot.flybot-site.backup :as backup]
    [sg.flybot.flybot-site.db :as db]
    [sg.flybot.flybot-site.log :as log]
    [sg.flybot.flybot-site.oauth :as oauth]
@@ -188,7 +189,8 @@
 
    Options:
    - :port - HTTP port (default 8080, or BLOG_PORT env var)
-   - :seed? - Seed database with sample data (default true)
+   - :seed? - Seed database with sample data (default true, ignored if :backup-dir)
+   - :backup-dir - Directory to import posts from (optional, overrides :seed?)
    - :google-client-id - Google OAuth client ID (or GOOGLE_CLIENT_ID env var)
    - :google-client-secret - Google OAuth secret (or GOOGLE_CLIENT_SECRET env var)
    - :base-url - Application base URL (or BLOG_BASE_URL env var)
@@ -198,9 +200,10 @@
   ([]
    (start! {}))
   ([opts]
-   (let [{:keys [port seed? google-client-id google-client-secret base-url owner-emails allowed-email-pattern]
+   (let [{:keys [port seed? backup-dir google-client-id google-client-secret base-url owner-emails allowed-email-pattern]
           :or {port (parse-long (get-env "BLOG_PORT" "8080"))
                seed? true
+               backup-dir (get-env "BLOG_BACKUP_DIR")
                google-client-id (get-env "GOOGLE_CLIENT_ID")
                google-client-secret (get-env "GOOGLE_CLIENT_SECRET")
                base-url (get-env "BLOG_BASE_URL" "http://localhost:8080")
@@ -211,9 +214,14 @@
      (log/info "Starting blog server...")
      (reset! conn (db/create-conn!))
      (log/log-db-connected db/default-cfg)
-     (when seed?
-       (db/seed! @conn)
-       (log/log-db-seeded 3))
+     (cond
+       backup-dir
+       (let [result (backup/import-all! @conn backup-dir)]
+         (log/info "Imported" (:count result) "posts from" backup-dir))
+
+       seed?
+       (do (db/seed! @conn)
+           (log/log-db-seeded 3)))
      (let [api-fn (make-api-fn @conn {:owner-emails owner-emails})
            app (make-app api-fn {:google-client-id google-client-id
                                  :google-client-secret google-client-secret

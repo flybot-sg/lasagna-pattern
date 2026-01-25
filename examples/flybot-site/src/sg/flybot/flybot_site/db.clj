@@ -253,9 +253,11 @@
 ;;=============================================================================
 
 (defn post-history-lookup
-  "Create an ILookup for post history queries."
+  "Create an ILookup for post history queries.
+   Implements Wireable to serialize as nil (lazy lookup, not enumerable)."
   [conn]
-  (reify clojure.lang.ILookup
+  (reify
+    clojure.lang.ILookup
     (valAt [_ query]
       (when-let [post-id (:post/id query)]
         (log/debug "History lookup for post:" post-id)
@@ -263,7 +265,10 @@
           (log/debug "History result count:" (count result))
           result)))
     (valAt [this query not-found]
-      (or (.valAt this query) not-found))))
+      (or (.valAt this query) not-found))
+
+    coll/Wireable
+    (->wire [_] nil)))
 
 ;;=============================================================================
 ;; Collection Constructor

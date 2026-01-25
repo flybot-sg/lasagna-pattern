@@ -63,9 +63,9 @@
   "Read-only schema - list and lookup access only, no mutations.
 
    Key difference from `schema`:
-   - Uses [post-schema] instead of [:union ...] to disallow mutation syntax
+   - Allows value binding for :posts (to return collection as-is)
    - Used for anonymous users and non-owner authenticated users"
-  {:posts [post-schema]
+  {:posts :any
    :posts/history {post-query [version-schema]}})
 
 ;;=============================================================================

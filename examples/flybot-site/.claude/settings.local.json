@@ -22,7 +22,12 @@
       "Bash(/usr/bin/env java:*)",
       "Bash(git checkout:*)",
       "Bash(jj show:*)",
-      "Bash(jj split -r @ src/sg/flybot/flybot_site/auth.cljc src/sg/flybot/flybot_site/oauth.clj -m \"$\\(cat <<''EOF''\nFix test failures in auth and oauth modules\n\n- Wrap email-allowed? return value in boolean to ensure false instead of nil\n- Update auth test to match current implementation where anonymous users get :me with nil value\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")"
+      "Bash(jj split -r @ src/sg/flybot/flybot_site/auth.cljc src/sg/flybot/flybot_site/oauth.clj -m \"$\\(cat <<''EOF''\nFix test failures in auth and oauth modules\n\n- Wrap email-allowed? return value in boolean to ensure false instead of nil\n- Update auth test to match current implementation where anonymous users get :me with nil value\n\nCo-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(ls:*)",
+      "Bash(pkill:*)",
+      "Bash(pgrep:*)",
+      "Bash(BLOG_BACKUP_DIR=./backups clj -M:run:*)",
+      "Bash(npm run build:*)"
     ]
   }
 }

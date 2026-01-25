@@ -1,5 +1,6 @@
 (ns sg.flybot.pullable.util
-  "Pure utility functions and macros with no domain knowledge.")
+  "Pure utility functions and macros with no domain knowledge."
+  #?(:cljs (:require-macros [sg.flybot.pullable.util])))
 
 (defmacro vars->
   "Create a fn that destructures vars map.
