@@ -3,7 +3,12 @@
     "allow": [
       "Bash(clj-nrepl-eval:*)",
       "Bash(clj:*)",
-      "Bash(jj status:*)"
+      "Bash(jj status:*)",
+      "Bash(jj diff:*)",
+      "Bash(jj workspace update-stale:*)",
+      "Bash(jj describe:*)",
+      "Bash(jj log:*)",
+      "Bash(jj abandon:*)"
     ]
   }
 }

@@ -1,0 +1,361 @@
+/* Theme variables */
+:root {
+  --bg: #fafafa;
+  --bg-card: #ffffff;
+  --bg-editor: #f8f9fa;
+  --text: #1a1a2e;
+  --text-muted: #666;
+  --border: #e0e0e0;
+  --accent: #0066cc;
+  --accent-hover: #0052a3;
+  --success: #28a745;
+  --error: #dc3545;
+  --warning: #ffc107;
+  --code-bg: #f4f4f4;
+}
+
+[data-theme="dark"] {
+  --bg: #0d1117;
+  --bg-card: #161b22;
+  --bg-editor: #1c2128;
+  --text: #c9d1d9;
+  --text-muted: #8b949e;
+  --border: #30363d;
+  --accent: #58a6ff;
+  --accent-hover: #79b8ff;
+  --success: #3fb950;
+  --error: #f85149;
+  --warning: #d29922;
+  --code-bg: #1f2428;
+}
+
+/* Base */
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.6;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* Layout */
+.app-container {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Header */
+.site-header {
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  padding: 1rem 2rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.site-header h1 {
+  margin: 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+/* Mode Toggle */
+.mode-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.mode-toggle button {
+  background: var(--bg);
+  border: none;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  transition: all 0.2s;
+}
+
+.mode-toggle button:hover {
+  background: var(--bg-card);
+}
+
+.mode-toggle button.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* Theme Toggle */
+.theme-toggle {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.theme-toggle:hover {
+  border-color: var(--accent);
+}
+
+/* Main Layout - 3 columns */
+.main-content {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 1fr 1fr 280px;
+  gap: 1px;
+  background: var(--border);
+  min-height: 0;
+}
+
+@media (max-width: 1024px) {
+  .main-content {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+}
+
+/* Panels */
+.panel {
+  background: var(--bg-card);
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-shrink: 0;
+}
+
+.panel-header h2 {
+  margin: 0;
+  font-size: 0.875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.panel-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Editor Panel */
+.editor-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.editor-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.editor-section label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.editor-section textarea {
+  flex: 1;
+  min-height: 120px;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-editor);
+  color: var(--text);
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  resize: none;
+}
+
+.editor-section textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.editor-section input[type="text"] {
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-editor);
+  color: var(--text);
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.875rem;
+}
+
+.editor-section input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* Execute Button */
+.execute-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-top: 0.5rem;
+}
+
+.execute-btn:hover {
+  background: var(--accent-hover);
+}
+
+.execute-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Results Panel */
+.results-panel .panel-content {
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.875rem;
+}
+
+.result-section {
+  margin-bottom: 1.5rem;
+}
+
+.result-section h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0 0 0.5rem 0;
+}
+
+.result-value {
+  background: var(--code-bg);
+  padding: 0.75rem;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+}
+
+.result-value.success {
+  border-left: 3px solid var(--success);
+}
+
+.result-value.error {
+  border-left: 3px solid var(--error);
+  color: var(--error);
+}
+
+.result-value.empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Loading indicator */
+.loading {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* Examples Panel */
+.examples-panel {
+  border-left: 1px solid var(--border);
+}
+
+.example-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 1.5rem 0;
+}
+
+.example-list li {
+  padding: 0.5rem 0.75rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background 0.2s;
+}
+
+.example-list li:hover {
+  background: var(--bg);
+}
+
+.example-list li.active {
+  background: var(--accent);
+  color: white;
+}
+
+/* Syntax Reference */
+.syntax-reference {
+  margin-top: auto;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.syntax-reference h3 {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 0 0 0.75rem 0;
+}
+
+.syntax-list {
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.75rem;
+  line-height: 1.8;
+}
+
+.syntax-item {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.syntax-item code {
+  color: var(--accent);
+  min-width: 50px;
+}
+
+.syntax-item span {
+  color: var(--text-muted);
+}
+
+/* Dark mode icons */
+.show-light { display: inline; }
+.show-dark { display: none; }
+[data-theme="dark"] .show-light { display: none; }
+[data-theme="dark"] .show-dark { display: inline; }
