@@ -112,6 +112,30 @@ body {
   border-color: var(--accent);
 }
 
+/* Sidebar Toggle */
+.sidebar-toggle {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.sidebar-toggle.collapsed {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+
 /* Main Layout - 3 columns */
 .main-content {
   flex: 1;
@@ -120,6 +144,11 @@ body {
   gap: 1px;
   background: var(--border);
   min-height: 0;
+}
+
+/* Collapsed sidebar - 2 columns with more space */
+.main-content.sidebar-collapsed {
+  grid-template-columns: 1fr 1fr;
 }
 
 @media (max-width: 1024px) {
@@ -417,6 +446,11 @@ body {
   background: var(--bg-editor);
 }
 
+/* When sidebar is collapsed, allow schema to grow taller */
+.sidebar-collapsed .schema-content {
+  max-height: none;
+}
+
 .schema-value {
   margin: 0;
   padding: 0.75rem;
@@ -446,3 +480,226 @@ body {
 .show-dark { display: none; }
 [data-theme="dark"] .show-light { display: none; }
 [data-theme="dark"] .show-dark { display: inline; }
+
+/*=============================================================================
+ * EDN Editor Component
+ *============================================================================*/
+
+/* Editor container - overlay textarea with highlighting */
+.edn-editor {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-editor);
+  overflow: hidden;
+}
+
+.edn-editor:focus-within {
+  border-color: var(--accent);
+}
+
+/* Hidden textarea for input */
+.edn-editor-input {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0.75rem;
+  margin: 0;
+  border: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--text);
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  resize: none;
+  z-index: 2;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: auto;
+}
+
+.edn-editor-input:focus {
+  outline: none;
+}
+
+.edn-editor-input::placeholder {
+  color: var(--text-muted);
+}
+
+/* Syntax highlighting overlay */
+.edn-editor-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0.75rem;
+  pointer-events: none;
+  z-index: 1;
+  overflow: auto;
+}
+
+.edn-editor-code {
+  margin: 0;
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--text);
+}
+
+/* Placeholder in overlay */
+.edn-placeholder {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/*=============================================================================
+ * Syntax Highlighting Tokens
+ *============================================================================*/
+
+.token-keyword {
+  color: #0550ae;
+}
+
+.token-string {
+  color: #0a3069;
+}
+
+.token-number {
+  color: #0550ae;
+}
+
+.token-literal {
+  color: #cf222e;
+}
+
+.token-comment {
+  color: #6e7781;
+  font-style: italic;
+}
+
+.token-symbol {
+  color: var(--text);
+}
+
+.token-variable {
+  color: #8250df;
+  font-weight: 500;
+}
+
+/* Dark mode token colors */
+[data-theme="dark"] .token-keyword {
+  color: #79c0ff;
+}
+
+[data-theme="dark"] .token-string {
+  color: #a5d6ff;
+}
+
+[data-theme="dark"] .token-number {
+  color: #79c0ff;
+}
+
+[data-theme="dark"] .token-literal {
+  color: #ff7b72;
+}
+
+[data-theme="dark"] .token-comment {
+  color: #8b949e;
+}
+
+[data-theme="dark"] .token-variable {
+  color: #d2a8ff;
+}
+
+/*=============================================================================
+ * Rainbow Parentheses
+ *============================================================================*/
+
+.token-paren {
+  font-weight: 500;
+}
+
+/* Light mode rainbow colors */
+.rainbow-1 { color: #e91e63; }  /* Pink */
+.rainbow-2 { color: #9c27b0; }  /* Purple */
+.rainbow-3 { color: #2196f3; }  /* Blue */
+.rainbow-4 { color: #009688; }  /* Teal */
+.rainbow-5 { color: #ff9800; }  /* Orange */
+.rainbow-6 { color: #795548; }  /* Brown */
+
+/* Dark mode rainbow colors - brighter for visibility */
+[data-theme="dark"] .rainbow-1 { color: #f48fb1; }  /* Light Pink */
+[data-theme="dark"] .rainbow-2 { color: #ce93d8; }  /* Light Purple */
+[data-theme="dark"] .rainbow-3 { color: #90caf9; }  /* Light Blue */
+[data-theme="dark"] .rainbow-4 { color: #80cbc4; }  /* Light Teal */
+[data-theme="dark"] .rainbow-5 { color: #ffcc80; }  /* Light Orange */
+[data-theme="dark"] .rainbow-6 { color: #bcaaa4; }  /* Light Brown */
+
+/*=============================================================================
+ * Schema Viewer (read-only display)
+ *============================================================================*/
+
+.schema-viewer {
+  flex: 1;
+  min-height: 100px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-editor);
+  overflow: auto;
+}
+
+.schema-viewer .schema-code {
+  margin: 0;
+  padding: 0.75rem;
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.schema-viewer .schema-loading,
+.schema-viewer .schema-empty,
+.schema-viewer .schema-error {
+  padding: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.schema-viewer .schema-loading,
+.schema-viewer .schema-empty {
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.schema-viewer .schema-error {
+  color: var(--error);
+}
+
+/*=============================================================================
+ * EDN Display (read-only, non-editable)
+ *============================================================================*/
+
+.edn-display {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--code-bg);
+  overflow: auto;
+}
+
+.edn-display .edn-code {
+  margin: 0;
+  padding: 0.75rem;
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}

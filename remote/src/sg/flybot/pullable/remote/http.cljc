@@ -276,7 +276,6 @@
 
   (parse-mutation '{:posts {{:id 3} ?post}}))
   ;=> nil
-  
 
 ;;=============================================================================
 ;; Response Helpers
@@ -309,6 +308,27 @@
 
 (defn- success? [response]
   (not (contains? response :errors)))
+
+(def ^:private error-code->http-status
+  "Map error codes to HTTP status codes per spec."
+  {:invalid-request    400
+   :decode-error       400
+   :schema-violation   403
+   :binding-conflict   422
+   :match-failure      422
+   :invalid-collection 404
+   :not-found          404
+   :method-not-allowed 405
+   :execution-error    500})
+
+(defn- response->http-status
+  "Determine HTTP status code from response.
+   Success returns 200, errors return code based on error type."
+  [response]
+  (if (success? response)
+    200
+    (let [error-code (get-in response [:errors 0 :code])]
+      (get error-code->http-status error-code 400))))
 
 (defn- match-failure->error
   "Convert pattern MatchFailure to response error."
@@ -373,7 +393,7 @@
         (let [result (coll/mutate! coll query value)]
           (success {coll-key result} {(symbol (name coll-key)) result}))
         (failure (error :invalid-collection
-                        (str "Collection " coll-key " not found or not mutable")))))
+                        (str "Collection " coll-key " not found or unavailable")))))
     (catch #?(:clj Exception :cljs js/Error) e
       (failure (error :execution-error
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
@@ -434,7 +454,7 @@
                                        (str "Failed to decode: "
                                             #?(:clj (.getMessage e) :cljs (.-message e))))))))
         {:keys [body content-type]} (encode-response response res-fmt)]
-    (ring-response (if (success? response) 200 400) body content-type)))
+    (ring-response (response->http-status response) body content-type)))
 
 (defn- handle-schema [api-fn ring-request]
   (let [res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
@@ -505,4 +525,4 @@
 
   ;; Security: pattern depth validation
   (pattern-depth '{:a {:b {:c 1}}})) ;=> 3
-  
+

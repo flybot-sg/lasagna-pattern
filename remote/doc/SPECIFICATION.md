@@ -106,13 +106,13 @@ Where each `<error>` is:
 |------|-------------|-------------|
 | `:invalid-request` | 400 | Malformed request structure |
 | `:decode-error` | 400 | Failed to decode request body |
-| `:schema-violation` | 400 | Pattern requests disallowed key |
-| `:binding-conflict` | 400 | Same variable bound to different values |
-| `:match-failure` | 400 | Pattern failed to match data |
-| `:execution-error` | 400 | Server error during pattern execution |
-| `:invalid-collection` | 400 | Collection not found or not mutable |
+| `:schema-violation` | 403 | Pattern requests disallowed key |
+| `:binding-conflict` | 422 | Same variable bound to different values |
+| `:match-failure` | 422 | Pattern failed to match data |
+| `:invalid-collection` | 404 | Collection not found or unavailable |
 | `:not-found` | 404 | Resource/endpoint not found |
 | `:method-not-allowed` | 405 | Wrong HTTP method |
+| `:execution-error` | 500 | Server error during pattern execution |
 
 ## 3. HTTP Transport
 
@@ -140,9 +140,12 @@ The base path `/api` is configurable.
 | Status | Condition |
 |--------|-----------|
 | 200 | Successful operation |
-| 400 | Client error (invalid pattern, schema violation, etc.) |
-| 404 | Unknown endpoint or missing schema |
+| 400 | Malformed request (invalid syntax, decode error) |
+| 403 | Forbidden (schema violation, access denied) |
+| 404 | Not found (unknown endpoint, missing schema, invalid collection) |
 | 405 | Wrong HTTP method |
+| 422 | Unprocessable content (binding conflict, match failure) |
+| 500 | Server error (execution error) |
 
 ### 3.4 Content Negotiation
 
@@ -375,13 +378,21 @@ Schema elements carry documentation via Clojure metadata. Since keywords cannot 
 
 #### Metadata Keys
 
+**Root-level only:**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `:version` | string | Schema version for client compatibility and cache invalidation |
+
+**Any level:**
+
 | Key | Type | Description |
 |-----|------|-------------|
 | `:doc` | string | Human-readable description of the schema/field |
 | `:fields` | map | Field-level documentation (keys mirror schema keys) |
 | `:deprecated` | boolean/string | Mark as deprecated, optionally with migration note |
 | `:example` | any | Example value |
-| `:since` | string | Version when added |
+| `:since` | string | Version when field was added |
 
 #### Map Schema Documentation
 
@@ -429,7 +440,8 @@ For collections with ILookup support, document operations:
 For nested maps, the `:fields` map mirrors the nesting:
 
 ```clojure
-^{:doc "API root"
+^{:version "2.0.0"
+  :doc "API root"
   :fields {:user {:doc "Current user profile"
                   :fields {:name  {:doc "Display name"}
                            :email {:doc "Primary email"}}}
@@ -443,12 +455,15 @@ For nested maps, the `:fields` map mirrors the nesting:
 `GET /api/_schema` returns schema with documentation metadata:
 
 ```clojure
-^{:doc "User API"
+^{:version "1.2.0"
+  :doc "User API"
   :fields {:user {:doc "Current user profile"
                   :fields {:name {:doc "Display name"}
-                           :email {:doc "Primary email"}}}}}
+                           :email {:doc "Primary email" :since "1.1.0"}}}}}
 {:user {:name :string :email :string}}
 ```
+
+Clients can use `:version` for compatibility checking and cache invalidation.
 
 #### Wire Format Considerations
 

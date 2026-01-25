@@ -20,7 +20,8 @@
    :selected-example nil  ; Index of selected example
    :schema nil            ; Remote server schema (remote mode only)
    :schema-loading? false
-   :schema-error nil})
+   :schema-error nil
+   :sidebar-collapsed? false})  ; Hide examples panel (remote mode)
 
 ;;=============================================================================
 ;; State Transitions (pure functions)
@@ -79,6 +80,9 @@
 (defn fetch-schema-error [state error]
   {:state (assoc state :schema-loading? false :schema nil :schema-error error)})
 
+(defn toggle-sidebar [state]
+  {:state (update state :sidebar-collapsed? not)})
+
 ;;=============================================================================
 ;; Tests
 ;;=============================================================================
@@ -127,5 +131,14 @@
 
   ;; fetch-schema-error stores error
   (let [{:keys [state]} (fetch-schema-error {:schema-loading? true} "Network error")]
-    [(:schema-loading? state) (:schema-error state)]))
-  ;=> [false "Network error"])
+    [(:schema-loading? state) (:schema-error state)])
+  ;=> [false "Network error"]
+
+  ;; toggle-sidebar toggles collapsed state
+  (let [{:keys [state]} (toggle-sidebar {:sidebar-collapsed? false})]
+    (:sidebar-collapsed? state))
+  ;=> true
+
+  (let [{:keys [state]} (toggle-sidebar {:sidebar-collapsed? true})]
+    (:sidebar-collapsed? state)))
+  ;=> false)
