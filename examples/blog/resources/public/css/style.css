@@ -315,32 +315,57 @@ button.danger:hover {
   color: #2c3e50;
 }
 
-.logout-link {
-  color: #7f8c8d;
-  text-decoration: none;
-  font-size: 0.9rem;
-}
 
-.logout-link:hover {
-  color: #3498db;
-  text-decoration: underline;
-}
-
-.login-btn {
+/* Auth button - round icon button */
+.auth-btn {
   display: inline-flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 1rem;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   background: #fff;
-  border: 1px solid #ddd;
-  border-radius: 4px;
-  color: #333;
+  border: 2px solid #e0e0e0;
+  border-radius: 50%;
+  color: #555;
   text-decoration: none;
-  font-size: 0.9rem;
-  transition: background 0.2s, border-color 0.2s;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 
-.login-btn:hover {
-  background: #f5f5f5;
-  border-color: #ccc;
+.auth-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+}
+
+.auth-btn:active {
+  transform: scale(0.95);
+}
+
+.auth-btn.login {
+  border-color: #3498db;
+  color: #3498db;
+}
+
+.auth-btn.login:hover {
+  background: #3498db;
+  color: #fff;
+  border-color: #3498db;
+}
+
+.auth-btn.logout {
+  border-color: #e74c3c;
+  color: #e74c3c;
+}
+
+.auth-btn.logout:hover {
+  background: #e74c3c;
+  color: #fff;
+  border-color: #e74c3c;
+}
+
+.auth-btn svg {
+  width: 20px;
+  height: 20px;
 }

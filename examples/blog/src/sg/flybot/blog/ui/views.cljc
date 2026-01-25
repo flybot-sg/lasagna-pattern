@@ -87,12 +87,28 @@
 ;; Components
 ;;=============================================================================
 
+(defn- login-icon
+  "SVG login icon - arrow entering door"
+  []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2" :stroke-linecap "round" :stroke-linejoin "round"}
+   [:path {:d "M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"}]
+   [:polyline {:points "10 17 15 12 10 7"}]
+   [:line {:x1 "15" :y1 "12" :x2 "3" :y2 "12"}]])
+
+(defn- logout-icon
+  "SVG logout icon - arrow exiting door"
+  []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2" :stroke-linecap "round" :stroke-linejoin "round"}
+   [:path {:d "M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"}]
+   [:polyline {:points "16 17 21 12 16 7"}]
+   [:line {:x1 "21" :y1 "12" :x2 "9" :y2 "12"}]])
+
 (defn user-header
   "User header with avatar, name, and login/logout.
 
    Shows:
-   - 'Sign in with Google' link when not logged in
-   - User avatar, name, and 'Sign out' link when logged in"
+   - Round login icon button when not logged in
+   - User avatar, name, and round logout icon when logged in"
   [state dispatch!]
   (let [user (:user state)]
     [:div.user-header
@@ -101,13 +117,13 @@
         (when-let [picture (:picture user)]
           [:img.avatar {:src picture :alt (:name user)}])
         [:span.user-name (:name user)]
-        [:a.logout-link {:href "#"
-                         :on {:click (fn [e]
-                                       (.preventDefault e)
-                                       (dispatch! :logout))}}
-         "Sign out"]]
-       [:a.login-btn {:href "/oauth2/google"}
-        "Sign in with Google"])]))
+        [:button.auth-btn.logout {:title "Sign out"
+                                  :on {:click (fn [e]
+                                                (.preventDefault e)
+                                                (dispatch! :logout))}}
+         (logout-icon)]]
+       [:a.auth-btn.login {:href "/oauth2/google" :title "Sign in with Google"}
+        (login-icon)])]))
 
 (defn post-card [{:post/keys [id title author created-at content tags]} dispatch!]
   [:div.post-card {:on {:click #(dispatch! [:select-post id])}}
