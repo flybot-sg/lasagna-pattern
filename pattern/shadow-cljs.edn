@@ -1,7 +1,8 @@
 {:deps true
  :deps-aliases [:cljs]
+ :source-paths ["src" "test"]
  :builds
  {:test {:target :node-test
          :output-to "target/test.js"
-         :ns-regexp "sg\\.flybot\\.pullable\\..*"
+         :ns-regexp "-test$"
          :autorun true}}}

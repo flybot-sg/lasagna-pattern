@@ -24,8 +24,12 @@
    :task (let [target (first *command-line-args*)
                components (if target [target] -components)]
            (doseq [c components]
-             (println (str "\n=== Testing " c " ==="))
-             (clojure {:dir c} "-X:dev:test")))}
+             (println (str "\n=== Testing " c " (Clojure) ==="))
+             (clojure {:dir c} "-X:dev:test")
+             ;; Run ClojureScript tests if shadow-cljs.edn exists
+             (when (fs/exists? (fs/file c "shadow-cljs.edn"))
+               (println (str "\n=== Testing " c " (ClojureScript) ==="))
+               (clojure {:dir c} "-M:cljs" "-m" "shadow.cljs.devtools.cli" "compile" "test"))))}
 
   dev
   {:doc "Start REPL: bb dev <component>"
