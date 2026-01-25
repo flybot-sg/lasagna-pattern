@@ -43,7 +43,7 @@
    pattern-str - EDN string of the pattern
    data-str    - EDN string of the data
 
-   Returns {:data ... :vars ...} on success,
+   Returns bindings map (symbol -> value) on success,
    or {:error \"message\"} on failure."
   [pattern-str data-str]
   (try
@@ -56,20 +56,20 @@
         {:error (str "Match failed: " (:reason result)
                      (when (seq (:path result))
                        (str " at path " (:path result))))}
-        {:data (:val result)
-         :vars (:vars result)}))
+        ;; Return vars bindings directly (spec-compliant format)
+        (:vars result)))
     (catch :default e
       {:error (str "Error: " (.-message e))})))
 
 ^:rct/test
 (comment
-  ;; Basic binding works
+  ;; Basic binding works - returns vars directly
   (execute "{:name ?n}" "{:name \"Alice\"}")
-  ;=>> {:data {:name "Alice"} :vars {'n "Alice"}}
+  ;=>> {'n "Alice"}
 
-  ;; Multiple bindings
+  ;; Multiple bindings - returns vars directly
   (execute "{:a ?a :b ?b}" "{:a 1 :b 2 :c 3}")
-  ;=>> {:data {:a 1 :b 2} :vars {'a 1 'b 2}}
+  ;=>> {'a 1 'b 2}
 
   ;; Parse error returns error
   (:error (execute "{:name ?n" "{:name \"Alice\"}"))

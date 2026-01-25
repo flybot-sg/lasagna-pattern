@@ -96,13 +96,9 @@
          [:div.result-value.error error]]
 
         result
-        [:<>
-         [:div.result-section
-          [:h3 "Matched Data"]
-          [:div.result-value.success (format-result (:data result))]]
-         [:div.result-section
-          [:h3 "Variable Bindings"]
-          [:div.result-value.success (format-result (:vars result))]]]
+        [:div.result-section
+         [:h3 "Variable Bindings"]
+         [:div.result-value.success (format-result result)]]
 
         :else
         [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]))

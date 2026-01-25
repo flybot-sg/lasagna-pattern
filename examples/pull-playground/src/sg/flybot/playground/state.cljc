@@ -14,7 +14,7 @@
    :pattern-text ""       ; Pattern editor content
    :data-text ""          ; Data editor content (local mode)
    :server-url "http://localhost:8081/api"  ; Server URL (remote mode)
-   :result nil            ; {:data ... :vars ...} or nil
+   :result nil            ; bindings map (symbol -> value) or nil
    :error nil             ; Error message string or nil
    :loading? false
    :selected-example nil}) ; Index of selected example
@@ -86,10 +86,10 @@
     (:remote-exec fx))
   ;=> {:pattern "p" :url "http://x"}
 
-  ;; execution-success stores result
-  (let [{:keys [state]} (execution-success {:loading? true} {:data {:x 1} :vars {'x 1}})]
-    [(:loading? state) (:data (:result state))])
-  ;=> [false {:x 1}]
+  ;; execution-success stores result (bindings map)
+  (let [{:keys [state]} (execution-success {:loading? true} {'x 1})]
+    [(:loading? state) (:result state)])
+  ;=> [false {'x 1}]
 
   ;; execution-error stores error
   (let [{:keys [state]} (execution-error {:loading? true} "Parse error")]

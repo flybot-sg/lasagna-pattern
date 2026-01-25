@@ -15,12 +15,20 @@
 (defn- decode [s]
   (t/read (transit-reader) s))
 
+(defn- format-error
+  "Format an error response to a user-friendly string."
+  [errors]
+  (let [{:keys [code reason path]} (first errors)]
+    (str (name code) ": " reason
+         (when (seq path)
+           (str " at " (pr-str path))))))
+
 (defn pull!
   "Execute a pull query against a remote server.
 
    url        - Server API endpoint
    pattern-str - Pattern as EDN string
-   on-success - fn of {:data ... :vars ...}
+   on-success - fn of bindings map (symbol -> value)
    on-error   - fn of error string"
   [url pattern-str on-success on-error]
   (try
@@ -35,11 +43,12 @@
                      (.text resp)
                      (throw (js/Error. (str "HTTP " (.-status resp)))))))
           (.then (fn [text]
-                   (let [response (decode text)
-                         ;; Extract result from response (handles symbol keys)
-                         result-key (some #(when (symbol? %) %) (keys response))
-                         result (get response result-key response)]
-                     (on-success {:data result :vars {}}))))
+                   (let [response (decode text)]
+                     ;; Check for error response
+                     (if (:errors response)
+                       (on-error (format-error (:errors response)))
+                       ;; Success: response is directly the bindings map
+                       (on-success response)))))
           (.catch (fn [err]
                     (on-error (.-message err))))))
     (catch :default e
