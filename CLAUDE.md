@@ -25,7 +25,7 @@ Components are auto-discovered (any directory with `deps.edn`).
 | `pattern/` | Core pattern DSL for matching/transforming Clojure data | Active |
 | `collection/` | CRUD collection abstraction with DataSource protocol | Active |
 | `remote/` | Remote protocol (GraphQL-like) using pattern language | Active |
-| `examples/blog/` | Full-stack blog app demonstrating pattern + remote + collection | Example |
+| `examples/flybot-site/` | Flybot.sg site migration - internal company portal | Active |
 
 ### Adding a New Component
 
@@ -80,17 +80,17 @@ Core pattern DSL enabling declarative matching and transformation of Clojure dat
 
 **Deep dive:** See `pattern/doc/ARCHITECTURE.md` for internal design, matcher constructors, and extension points.
 
-## Example: blog
+## Flybot Site (examples/flybot-site)
 
-Full-stack blog demonstrating noun-only API design with pattern-based CRUD.
+Migration of flybot.sg company site. Internal portal with blog-based content for company updates, announcements, and knowledge sharing. Demonstrates noun-only API design with pattern-based CRUD.
 
-**Stack:** Clojure + ClojureScript, Datahike, http-kit, Replicant SPA
+**Stack:** Clojure + ClojureScript, Datahike, http-kit, Replicant SPA, Google OAuth
 
-**Source:** `examples/blog/src/sg/flybot/blog/`
+**Source:** `examples/flybot-site/src/sg/flybot/flybot_site/`
 
 **Run:**
 ```bash
-cd examples/blog
+cd examples/flybot-site
 clj -M:dev:cljs  # Compile ClojureScript
 clj -M:run       # Start server at localhost:8080
 ```
@@ -113,16 +113,16 @@ clj -M:run       # Start server at localhost:8080
 - Schema-driven output filtering
 - Frontmatter extraction from markdown content
 
-### Blog Logging
+### Portal Logging
 
-The blog example has a unified logging system for both frontend and backend.
+The portal has a unified logging system for both frontend and backend.
 
-**Backend:** `examples/blog/src/sg/flybot/blog/log.clj`
+**Backend:** `examples/flybot-site/src/sg/flybot/flybot_site/log.clj`
 - Uses Timbre (included via Datahike)
 - Levels: `:trace` `:debug` `:info` `:warn` `:error` `:fatal`
 
 ```clojure
-(require '[sg.flybot.blog.log :as log])
+(require '[sg.flybot.flybot-site.log :as log])
 
 ;; Basic logging
 (log/debug "value:" x)
@@ -147,14 +147,14 @@ The blog example has a unified logging system for both frontend and backend.
 (-> handler (log/wrap-request-logging))
 ```
 
-**Frontend:** `examples/blog/src/sg/flybot/blog/ui/log.cljc`
+**Frontend:** `examples/flybot-site/src/sg/flybot/flybot_site/ui/log.cljc`
 - Cross-platform (.cljc) for JVM testability
 - Browser: uses `console.debug/info/warn/error`
 - JVM: uses `println`
 - Levels: `:debug` `:info` `:warn` `:error` `:off`
 
 ```clojure
-(require '[sg.flybot.blog.ui.log :as log])
+(require '[sg.flybot.flybot-site.ui.log :as log])
 
 ;; Basic logging
 (log/debug "value:" x)

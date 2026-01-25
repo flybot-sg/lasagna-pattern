@@ -1,0 +1,26 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+        local/pattern {:local/root "../../pattern"}
+        local/remote {:local/root "../../remote"}
+        io.github.robertluo/fun-map {:mvn/version "0.5.124"}
+        http-kit/http-kit {:mvn/version "2.8.0"}
+        ring/ring-core {:mvn/version "1.12.2"}
+        io.replikativ/datahike {:mvn/version "0.6.1610"}
+        clj-commons/clj-yaml {:mvn/version "1.0.29"}
+        ring-oauth2/ring-oauth2 {:mvn/version "0.2.0"}
+        clj-http/clj-http {:mvn/version "3.13.0"}
+        cheshire/cheshire {:mvn/version "5.13.0"}}
+ :aliases
+ {:dev {:extra-paths ["dev" "test"]
+        :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
+                     io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
+                     ring/ring-mock {:mvn/version "0.4.0"}}}
+  :test {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
+         :exec-args {:dirs #{"src" "test"}}}
+  :kaocha {:extra-paths ["test"]
+           :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+           :main-opts ["-m" "kaocha.runner"]}
+  :run {:main-opts ["-m" "sg.flybot.flybot-site.server"]}
+  :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.28.22"}
+                      no.cjohansen/replicant {:mvn/version "2025.06.21"}
+                      com.cognitect/transit-cljs {:mvn/version "0.8.280"}}}}}
