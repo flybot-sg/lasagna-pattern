@@ -4,11 +4,15 @@
   #?(:clj
      (:require
       [clojure.test :refer [deftest is testing]]
-      [sg.flybot.pullable :as p :refer [match-fn rule apply-rules failure?]])
+      [sg.flybot.pullable :as p :refer [match-fn rule apply-rules failure? get-schema-info]]
+      [sg.flybot.pullable.malli]
+      [malli.core :as m])
      :cljs
      (:require
       [clojure.test :refer [deftest is testing]]
-      [sg.flybot.pullable :as p :refer [apply-rules failure?]]))
+      [sg.flybot.pullable :as p :refer [apply-rules failure? get-schema-info]]
+      [sg.flybot.pullable.malli]
+      [malli.core :as m]))
   #?(:cljs (:require-macros [sg.flybot.pullable :refer [match-fn rule]])))
 
 ;;=============================================================================
@@ -124,3 +128,19 @@
     (let [result ((match-fn {:a ?x} ?x) "not a map")]
       (is (failure? result))
       (is (string? (:reason result))))))
+
+;;=============================================================================
+;; Malli Schema Integration
+;;=============================================================================
+
+(deftest malli-schema-test
+  (testing "malli schema info extraction"
+    (let [schema (m/schema [:map [:name :string] [:age :int]])
+          info (get-schema-info schema)]
+      (is (= :map (:type info)))
+      (is (= #{:name :age} (:valid-keys info)))))
+
+  (testing "malli nested schema"
+    (let [schema (m/schema [:vector :string])
+          info (get-schema-info schema)]
+      (is (= :seq (:type info))))))

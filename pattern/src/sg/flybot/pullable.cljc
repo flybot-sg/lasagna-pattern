@@ -42,7 +42,7 @@
 (def register-schema-rule!
   "Register a rule for schema type inference and validation.
 
-   Rule is a function: (schema) -> {:type t, :child-schema fn, :valid-keys set} | MatchFailure
+   Rule is a function: (schema) -> {:type t, :child-schema fn, :valid-keys set} | nil
 
    Return map fields:
    - :type        - Schema type keyword (:map, :seq, :string, :number, etc.)
@@ -60,6 +60,21 @@
 
      ;; Usage: [:non-empty :number] validates sequences of numbers"
   impl/register-schema-rule!)
+
+(def get-schema-info
+  "Get type and child accessor from a schema using registered rules.
+
+   Returns a map with:
+   - :type        - Schema type keyword (:map, :seq, :string, :number, etc.)
+   - :child-schema - (optional) fn: (key-or-index) -> sub-schema for children
+   - :valid-keys   - (optional) set of allowed keys (for record schemas)
+
+   Example:
+     (get-schema-info {:name :string :age :number})
+     ;=> {:type :map,
+     ;    :child-schema fn,
+     ;    :valid-keys #{:name :age}}"
+  impl/get-schema-info)
 
 (defmacro match-fn
   "Create a pattern-matching function. Returns body result on match, MatchFailure on failure.
