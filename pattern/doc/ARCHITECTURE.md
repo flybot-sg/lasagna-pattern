@@ -42,7 +42,15 @@ clojure -M:dev       # Start REPL
 - `apply-rules` - Recursive tree transformation
 - `failure?` - Check for match failures
 - `register-var-option!` - Extend variable syntax (:when, :default)
-- `register-schema-rule!` - Extend schema vocabulary for seq types
+- `register-schema-rule!` - Extend schema type inference for custom formats
+- `get-schema-info` - Query schema type and structure
+
+### Schema System
+
+The schema system lives in two namespaces:
+
+- `sg.flybot.pullable.schema` - Core schema registry, validation, and filtering
+- `sg.flybot.pullable.malli` - Optional Malli integration (require to enable)
 
 ### Core Internal Design
 
@@ -119,38 +127,77 @@ Map keys in patterns are literal lookup keys (not sub-patterns). This enables in
 
 Schemas validate pattern structure at compile time via `:schema` option in `compile-pattern`.
 
+### Built-in Schema Rules
+
+The pattern library includes built-in rules for common schema formats:
+
 ```clojure
-;; Type keywords (structural validation)
+;; Type keywords (direct type assertion)
 :map :seq :string :number :keyword :symbol :boolean :any
 
-;; Literal/Enum/Union/Optional - type inferred
-[:= :active]              ; literal keyword
-[:= 42]                   ; literal number
-#{:active :inactive}      ; enum (set of allowed values)
-[:or :string :number]     ; union (one of several types)
-[:optional :string]       ; nullable (nil allowed)
+;; Record map (all keyword keys = restricted to those keys)
+{:name :string :age :number}
 
-;; Map schemas
-{:name :string :age :number}     ; record (all keyword keys = restricted)
-[:map-of :keyword :number]       ; dictionary (homogeneous k/v types)
-{:post/id :number}               ; indexed lookup key schema (non-restricting)
+;; Enum (set of allowed values - type inferred)
+#{:active :inactive}      ; keyword enum
+#{1 2 3}                  ; number enum
 
-;; Seq schemas
-[:string]                        ; homogeneous seq (all elements same type)
-[:tuple :number :string]         ; positional tuple
-
-;; Union (collection with multiple access patterns)
-[:union [post-schema] {query-schema post-schema}]
-;; Supports: (seq coll) -> [post...], (get coll query) -> post
-
-;; Example usage
-(compile-pattern '{:name ?n :status ?s}
-                 {:schema {:name :string :status [:= :active]}})
-(compile-pattern '{:x ?x :y ?y}
-                 {:schema [:map-of :keyword :number]})
+;; Homogeneous sequence (vector with single element type)
+[:string]                 ; seq of strings
+[{:id :number}]           ; seq of records
 ```
 
-Extend with `register-schema-rule!` using `match-fn` patterns.
+### Malli Integration
+
+For full schema expressiveness, use Malli schemas. Require `sg.flybot.pullable.malli` to enable:
+
+```clojure
+(require '[malli.core :as m])
+(require '[sg.flybot.pullable.malli])  ; registers Malli schema rule
+
+;; Now use Malli schemas with compile-pattern
+(compile-pattern '{:name ?n}
+                 {:schema (m/schema [:map [:name :string]])})
+
+;; Malli types map to pattern schema types:
+;; :string, :int, :double → :string, :number
+;; :map → :map, :vector → :seq
+;; :keyword, :symbol, :boolean → themselves
+;; :maybe, :or, :enum → smart inference
+
+;; Union types for collections with multiple access patterns
+(def post-schema (m/schema [:map [:id :int] [:title :string]]))
+(def api-schema
+  {:posts (m/schema [:or
+                     [:vector post-schema]           ; LIST: {:posts ?all}
+                     [:map-of {:id :int} post-schema]])}; GET: {:posts {{:id 3} ?p}}
+```
+
+### Wire Serialization
+
+Malli schemas implement the `Wireable` protocol (from `collection` component) so they serialize properly over Transit:
+
+```clojure
+(require '[sg.flybot.pullable.collection :as coll])
+
+;; Malli schemas convert to their form for wire transmission
+(coll/->wire (m/schema [:map [:name :string]]))
+;=> [:map [:name :string]]
+```
+
+### Custom Schema Rules
+
+Extend with `register-schema-rule!` for custom schema formats:
+
+```clojure
+;; Rule returns {:type, :child-schema, :valid-keys} or nil
+(register-schema-rule!
+  (fn [schema]
+    (when (and (vector? schema) (= :my-type (first schema)))
+      {:type :map
+       :child-schema (fn [k] (get (second schema) k))
+       :valid-keys (set (keys (second schema)))})))
+```
 
 ## Schema as Visibility Control
 

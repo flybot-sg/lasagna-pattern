@@ -250,13 +250,28 @@ Remote Pull supports CRUD through pattern syntax. The schema declares **nouns on
 
 ### 5.1 Schema Declaration
 
+Schemas are defined using Malli, the Clojure schema library. Enable Malli integration by requiring `sg.flybot.pullable.malli`:
+
 ```clojure
-{:posts [:union [post-schema] {post-query post-schema}]}
+(require '[malli.core :as m])
+(require '[sg.flybot.pullable.malli])
+
+;; Define entity schemas
+(def post-schema
+  (m/schema [:map
+             [:id :int]
+             [:title :string]
+             [:content :string]]))
+
+;; API schema uses plain maps at top level with Malli values
+{:posts (m/schema [:or
+                   [:vector post-schema]              ; LIST access
+                   [:map-of {:id :int} post-schema]])} ; indexed lookup
 ```
 
-The `:union` type declares the collection supports:
-- Sequential access: `[post-schema]`
-- Indexed lookup: `{post-query post-schema}`
+The `:or` type declares the collection supports multiple access patterns:
+- `[:vector post-schema]` - Sequential access (LIST)
+- `[:map-of query-schema post-schema]` - Indexed lookup (GET by query)
 
 ### 5.2 Operation Patterns
 
@@ -358,19 +373,22 @@ Each request executes against a fresh API instance created from the Ring request
 
 ### 7.2 Schema Format
 
-Schema uses pattern DSL types:
+Schemas use Malli format. When serialized over the wire (via `Wireable` protocol), Malli schemas convert to their EDN form:
 
-| Type | Meaning |
-|------|---------|
-| `:string` | String value |
-| `:number` | Numeric value |
-| `:keyword` | Keyword value |
-| `:boolean` | Boolean value |
-| `:any` | Any value |
-| `[schema]` | Sequence of schema |
-| `{k schema}` | Map with key k |
-| `[:union ...]` | Union of schemas |
-| `#{...}` | Enum (set of allowed values) |
+| Wire Format | Malli Type | Meaning |
+|-------------|------------|---------|
+| `:string` | `:string` | String value |
+| `:int`, `:double` | `:int`, `:double` | Numeric values |
+| `:keyword` | `:keyword` | Keyword value |
+| `:boolean` | `:boolean` | Boolean value |
+| `:any` | `:any` | Any value |
+| `[:vector schema]` | `:vector` | Sequence of schema |
+| `[:map [:k schema] ...]` | `:map` | Map with typed keys |
+| `[:or ...]` | `:or` | Union of schemas |
+| `[:enum ...]` | `:enum` | Enum (set of allowed values) |
+| `[:maybe schema]` | `:maybe` | Optional/nullable |
+
+Plain Clojure maps `{:k schema}` are also supported as shorthand for record types.
 
 ### 7.3 Schema Documentation
 
@@ -396,43 +414,54 @@ Schema elements carry documentation via Clojure metadata. Since keywords cannot 
 
 #### Map Schema Documentation
 
-Attach metadata to the map with a `:fields` map mirroring the schema structure:
+Attach metadata to Malli schemas. For map schemas, use a `:fields` map mirroring the schema structure:
 
 ```clojure
-^{:doc "User account information"
-  :fields {:id     {:doc "Unique identifier" :example 12345}
-           :name   {:doc "Display name"}
-           :email  {:doc "Primary email address"}
-           :role   {:doc "User role" :example :admin}
-           :legacy {:doc "Legacy role field" :deprecated "Use :role instead"}}}
-{:id     :number
- :name   :string
- :email  :string
- :role   #{:admin :editor :viewer}
- :legacy :string}
+(require '[malli.core :as m])
+
+(def user-schema
+  (m/schema
+    ^{:doc "User account information"
+      :fields {:id     {:doc "Unique identifier" :example 12345}
+               :name   {:doc "Display name"}
+               :email  {:doc "Primary email address"}
+               :role   {:doc "User role" :example :admin}
+               :legacy {:doc "Legacy role field" :deprecated "Use :role instead"}}}
+    [:map
+     [:id :int]
+     [:name :string]
+     [:email :string]
+     [:role [:enum :admin :editor :viewer]]
+     [:legacy {:optional true} :string]]))
 ```
 
 #### Sequence Schema Documentation
 
-Attach metadata to the vector:
+Attach metadata to the Malli vector schema:
 
 ```clojure
-^{:doc "Published blog posts, ordered by date descending"}
-[{:id :number :title :string :content :string}]
+(def posts-schema
+  (m/schema
+    ^{:doc "Published blog posts, ordered by date descending"}
+    [:vector [:map [:id :int] [:title :string] [:content :string]]]))
 ```
 
 #### Collection Schema Documentation
 
-For collections with ILookup support, document operations:
+For collections with ILookup support (supporting both LIST and GET), document operations:
 
 ```clojure
-^{:doc "Blog post collection"
-  :operations {:list   "Returns all posts"
-               :get    "Lookup by {:id n}"
-               :create "Provide {:title :content}"
-               :update "Partial updates supported"
-               :delete "Returns deleted post"}}
-[:union [post-schema] {post-query post-schema}]
+(def posts-collection-schema
+  (m/schema
+    ^{:doc "Blog post collection"
+      :operations {:list   "Returns all posts"
+                   :get    "Lookup by {:id n}"
+                   :create "Provide {:title :content}"
+                   :update "Partial updates supported"
+                   :delete "Returns deleted post"}}
+    [:or
+     [:vector post-schema]
+     [:map-of {:id :int} post-schema]]))
 ```
 
 #### Nested Schema Documentation
@@ -440,15 +469,18 @@ For collections with ILookup support, document operations:
 For nested maps, the `:fields` map mirrors the nesting:
 
 ```clojure
-^{:version "2.0.0"
-  :doc "API root"
-  :fields {:user {:doc "Current user profile"
-                  :fields {:name  {:doc "Display name"}
-                           :email {:doc "Primary email"}}}
-           :posts {:doc "Blog posts collection"}}}
-{:user  {:name :string :email :string}
- :posts [post-schema]}
+(def api-schema
+  ^{:version "2.0.0"
+    :doc "API root"
+    :fields {:user {:doc "Current user profile"
+                    :fields {:name  {:doc "Display name"}
+                             :email {:doc "Primary email"}}}
+             :posts {:doc "Blog posts collection"}}}
+  {:user  (m/schema [:map [:name :string] [:email :string]])
+   :posts posts-collection-schema})
 ```
+
+Note: API root schemas are plain Clojure maps (not Malli schemas) to allow middleware to `assoc` additional keys like `:me` for authentication.
 
 #### Introspection Response
 
