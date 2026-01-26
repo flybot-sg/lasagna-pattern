@@ -245,12 +245,19 @@ Collections support both sequential access and indexed lookup through ILookup in
 ```clojure
 ;; Schema declares union type for explicit capability
 {:posts (union [post-schema] {post-query post-schema})}
+
+;; Or with Malli schemas, use :ilookup property:
+[:map
+ [:posts [:vector {:ilookup true}
+          [:map [:id :int] [:title :string]]]]]
 ```
 
 | Pattern | Operation | Description |
 |---------|-----------|-------------|
 | `{:posts ?all}` | LIST | Bind whole collection |
 | `{:posts {{:id 3} ?post}}` | GET | ILookup with query key |
+
+**Note:** When using Malli schemas, the `:ilookup true` property on vector/sequential types explicitly enables indexed lookup patterns. Without this annotation, pattern compilation rejects map patterns on sequence schemas with a helpful error message.
 
 #### CRUD Operations via Pattern Syntax
 

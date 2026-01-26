@@ -455,38 +455,47 @@
           [:span.tooltip-label "Since: "] since])])))
 
 (defn schema-viewer
-  "Read-only schema viewer with syntax highlighting and hover documentation.
-   Shows tooltips when hovering over schema fields.
+  "Read-only schema viewer with syntax highlighting.
+   Toggles between schema and sample data views.
 
    Props:
-   - :value - EDN string of schema
-   - :schema - Original schema value (with metadata for docs)
+   - :schema - Malli schema value
+   - :sample-data - Generated sample data from schema
+   - :view-mode - :schema | :sample
+   - :on-mode-change - Callback (fn [mode]) when toggle clicked
    - :placeholder - Placeholder text
    - :class - CSS class
    - :loading? - Show loading state
    - :error - Error message"
-  [{:keys [value schema placeholder class loading? error]}]
-  (cond
-    loading?
-    [:div.schema-viewer {:class class}
-     [:div.schema-loading "Loading..."]]
+  [{:keys [schema sample-data view-mode on-mode-change placeholder class loading? error]}]
+  (let [view-mode (or view-mode :schema)]
+    (cond
+      loading?
+      [:div.schema-viewer {:class class}
+       [:div.schema-loading "Loading..."]]
 
-    error
-    [:div.schema-viewer {:class class}
-     [:div.schema-error error]]
+      error
+      [:div.schema-viewer {:class class}
+       [:div.schema-error error]]
 
-    (str/blank? value)
-    [:div.schema-viewer {:class class}
-     [:div.schema-empty (or placeholder "No schema loaded")]]
+      (nil? schema)
+      [:div.schema-viewer {:class class}
+       [:div.schema-empty (or placeholder "No schema loaded")]]
 
-    :else
-    [:div.schema-viewer {:class class
-                         :on {:mouseleave (fn [_] (hide-tooltip!))}}
-     [:pre.schema-code
-      (edn/highlight-edn value
-                         {:on-hover (fn [token]
-                                      (when-let [el (js/document.querySelector
-                                                     (str "[data-token=\"" token "\"]"))]
-                                        (show-tooltip! token el schema)))
-                          :on-leave hide-tooltip!})]
-     (tooltip-view)]))
+      :else
+      [:div.schema-viewer {:class class}
+       ;; View mode toggle
+       (when on-mode-change
+         [:div.schema-view-toggle
+          [:button {:class (when (= view-mode :schema) "active")
+                    :on {:click #(on-mode-change :schema)}}
+           "Schema"]
+          [:button {:class (when (= view-mode :sample) "active")
+                    :on {:click #(on-mode-change :sample)}}
+           "Sample"]])
+       ;; Content - both views use same rendering
+       [:pre.schema-code
+        (let [data (if (= view-mode :sample) sample-data schema)]
+          (if data
+            (edn/highlight-edn (edn/pretty-str data))
+            [:span.schema-empty "Generating sample..."]))]])))

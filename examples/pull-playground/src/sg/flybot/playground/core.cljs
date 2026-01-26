@@ -4,7 +4,9 @@
             [sg.flybot.playground.state :as state]
             [sg.flybot.playground.views :as views]
             [sg.flybot.playground.local :as local]
-            [sg.flybot.playground.api :as api]))
+            [sg.flybot.playground.api :as api]
+            [malli.core :as m]
+            [malli.generator :as mg]))
 
 (defonce app-state (atom state/initial-state))
 
@@ -29,6 +31,8 @@
    :fetch-schema          (fn [s _] (state/fetch-schema s))
    :fetch-schema-success  (fn [s schema] (state/fetch-schema-success s schema))
    :fetch-schema-error    (fn [s error] (state/fetch-schema-error s error))
+   :set-sample-data       (fn [s data] (state/set-sample-data s data))
+   :set-schema-view-mode  (fn [s mode] (state/set-schema-view-mode s mode))
    :toggle-sidebar        (fn [s _] (state/toggle-sidebar s))
    ;; Autocomplete
    :show-autocomplete     (fn [s data] (state/show-autocomplete s data))
@@ -59,9 +63,23 @@
              (fn [result] (dispatch! [:execution-success result]))
              (fn [error] (dispatch! [:execution-error error]))))
 
+(defn- generate-sample-data
+  "Generate sample data from schema. Returns nil on failure."
+  [schema]
+  (try
+    (mg/generate (m/schema schema) {:size 2 :seed 42})
+    (catch :default e
+      (js/console.warn "Failed to generate sample data:" (.-message e))
+      nil)))
+
 (defn- fetch-schema! [{:keys [url]}]
   (api/fetch-schema! url
-                     (fn [schema] (dispatch! [:fetch-schema-success schema]))
+                     (fn [schema]
+                       (dispatch! [:fetch-schema-success schema])
+                       ;; Generate sample data after render completes (avoid nested render)
+                       (js/setTimeout
+                        #(dispatch! [:set-sample-data (generate-sample-data schema)])
+                        0))
                      (fn [error] (dispatch! [:fetch-schema-error error]))))
 
 (defn- execute-effects! [{:keys [local-exec remote-exec fetch-schema]}]

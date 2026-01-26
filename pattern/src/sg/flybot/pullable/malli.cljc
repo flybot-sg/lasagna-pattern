@@ -25,19 +25,25 @@
 
 (defn- make-malli-rule
   "Create a schema rule for Malli schemas."
-  [m-schema? m-type m-children m-entries]
+  [m-schema? m-type m-children m-entries m-properties]
   (fn malli-rule [s]
     (when (m-schema? s)
-      (let [t (m-type s)]
+      (let [t (m-type s)
+            props (m-properties s)]
         (case t
-          :map (let [em (into {} (map (fn [[k _ c]] [k c]) (m-entries s)))]
+          ;; Map entries are [k schema] - extract key and schema (last element)
+          :map (let [em (into {} (map (fn [e] [(first e) (last e)]) (m-entries s)))]
                  {:type :map
                   :child-schema #(get em %)
                   :valid-keys (when (seq em) (set (keys em)))})
           :tuple {:type :seq :child-schema #(nth (m-children s) % nil)}
           (:vector :sequential :set :seqable :every)
           (let [cs (m-children s)]
-            {:type :seq :child-schema (when (seq cs) (constantly (first cs)))})
+            {:type :seq
+             :child-schema (when (seq cs) (constantly (first cs)))
+             :indexed-lookup? (:ilookup props)})
+          ;; Unwrap :malli.core/val wrapper (used for map entries with properties)
+          :malli.core/val (malli-rule (last (m-children s)))
           :maybe (when-let [inner (first (m-children s))] (malli-rule inner))
           :or {:type (let [ts (->> (m-children s) (keep #(some-> (malli-rule %) :type)) set)]
                        (if (= 1 (count ts)) (first ts) :any))}
@@ -59,7 +65,8 @@
            m-schema?
            @(requiring-resolve 'malli.core/type)
            @(requiring-resolve 'malli.core/children)
-           @(requiring-resolve 'malli.core/entries)))
+           @(requiring-resolve 'malli.core/entries)
+           @(requiring-resolve 'malli.core/properties)))
          ;; Extend Wireable for serialization if collection is available
          (when (try (require 'sg.flybot.pullable.collection) true (catch Exception _ false))
            (let [wireable-protocol @(requiring-resolve 'sg.flybot.pullable.collection/Wireable)]
@@ -72,4 +79,4 @@
 ;; that has both malli and collection as dependencies
 #?(:cljs
    (schema/register-schema-rule!
-    (make-malli-rule m/schema? m/type m/children m/entries)))
+    (make-malli-rule m/schema? m/type m/children m/entries m/properties)))

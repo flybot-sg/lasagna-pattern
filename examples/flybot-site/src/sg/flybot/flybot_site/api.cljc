@@ -28,27 +28,17 @@
 ;; Schema
 ;;=============================================================================
 
-(def post-fields
-  "Field documentation for post schema."
-  {:post/id         {:doc "Unique identifier" :example 1}
-   :post/title      {:doc "Post title"}
-   :post/content    {:doc "Markdown content with optional YAML frontmatter"}
-   :post/author     {:doc "Author name (extracted from frontmatter)"}
-   :post/tags       {:doc "List of tags (extracted from frontmatter)" :example ["clojure" "web"]}
-   :post/created-at {:doc "Creation timestamp"}
-   :post/updated-at {:doc "Last update timestamp"}})
-
 (def post-schema
-  "Schema for a single post."
+  "Schema for a single post. Uses inline Malli properties for documentation."
   (m/schema
-   [:map {:doc "Blog post" :fields post-fields}
-    [:post/id :int]
-    [:post/title :string]
-    [:post/content :string]
-    [:post/author :string]
-    [:post/tags [:vector :string]]
-    [:post/created-at :any]
-    [:post/updated-at :any]]))
+   [:map {:doc "Blog post"}
+    [:post/id {:doc "Unique identifier" :example 1} :int]
+    [:post/title {:doc "Post title"} :string]
+    [:post/content {:doc "Markdown content with optional YAML frontmatter"} :string]
+    [:post/author {:doc "Author name (extracted from frontmatter)"} :string]
+    [:post/tags {:doc "List of tags (extracted from frontmatter)" :example ["clojure" "web"]} [:vector :string]]
+    [:post/created-at {:doc "Creation timestamp"} :any]
+    [:post/updated-at {:doc "Last update timestamp"} :any]]))
 
 (def post-query
   "Query schema for post lookup (indexed fields)."
@@ -58,21 +48,18 @@
     [:map [:post/author :string]]]))
 
 (def version-schema
-  "Schema for a historical version of a post."
+  "Schema for a historical version of a post. Uses inline Malli properties."
   (m/schema
-   [:map {:doc "Historical version of a post"
-          :fields (merge post-fields
-                         {:version/tx        {:doc "Transaction ID"}
-                          :version/timestamp {:doc "When this version was created"}})}
-    [:post/id :int]
-    [:post/title :string]
-    [:post/content :string]
-    [:post/author :string]
-    [:post/tags [:vector :string]]
-    [:post/created-at :any]
-    [:post/updated-at :any]
-    [:version/tx :int]
-    [:version/timestamp :any]]))
+   [:map {:doc "Historical version of a post"}
+    [:post/id {:doc "Unique identifier" :example 1} :int]
+    [:post/title {:doc "Post title"} :string]
+    [:post/content {:doc "Markdown content with optional YAML frontmatter"} :string]
+    [:post/author {:doc "Author name (extracted from frontmatter)"} :string]
+    [:post/tags {:doc "List of tags (extracted from frontmatter)" :example ["clojure" "web"]} [:vector :string]]
+    [:post/created-at {:doc "Creation timestamp"} :any]
+    [:post/updated-at {:doc "Last update timestamp"} :any]
+    [:version/tx {:doc "Transaction ID"} :int]
+    [:version/timestamp {:doc "When this version was created"} :any]]))
 
 (def schema
   "API schema - noun-only, single source of truth.

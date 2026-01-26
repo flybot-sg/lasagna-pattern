@@ -2342,5 +2342,57 @@
 
   ;; Nested indexed lookup
   ((compile-pattern '{:data {{:id 1} ?x}}) (vmr {:data {{:id 1} 42}})) ;=>>
-  {:vars {'x 42}})
+  {:vars {'x 42}}
+
+  ;;-------------------------------------------------------------------
+  ;; Indexed lookup with :ilookup schema annotation (Malli)
+  ;;-------------------------------------------------------------------
+  ;; Collections that support ILookup (like database-backed collections) can
+  ;; be queried with map keys like {:id 1}. The :ilookup Malli property
+  ;; enables validation of indexed lookup patterns.
+  ;; Syntax: [:vector {:ilookup true} element-schema]
+
+  ;; Require malli for these tests
+  (require '[malli.core :as m])
+  (require '[sg.flybot.pullable.malli])
+
+  ;; Without :ilookup - indexed lookup pattern on seq schema fails
+  (try
+    (compile-pattern '{:users {{:id 1} ?u}}
+                     {:schema (m/schema [:map [:users [:vector [:map [:id :int] [:name :string]]]]])})
+    :should-have-thrown
+    (catch clojure.lang.ExceptionInfo e
+      (:pattern-type (ex-data e))))
+  ;=> :map
+
+  ;; With :ilookup true - indexed lookup pattern compiles
+  (compile-pattern '{:users {{:id 1} ?u}}
+                   {:schema (m/schema [:map [:users [:vector {:ilookup true}
+                                                     [:map [:id :int] [:name :string]]]]])})
+  ;=>> fn?
+
+  ;; Invalid field in indexed lookup value pattern - reports offending key
+  (try
+    (compile-pattern '{:users {{:id 1} {:invalid ?x}}}
+                     {:schema (m/schema [:map [:users [:vector {:ilookup true}
+                                                       [:map [:id :int] [:name :string]]]]])})
+    :should-have-thrown
+    (catch clojure.lang.ExceptionInfo e
+      (:key (ex-data e))))
+  ;=> :invalid
+
+  ;; Valid field in indexed lookup value pattern
+  (compile-pattern '{:users {{:id 1} {:name ?n}}}
+                   {:schema (m/schema [:map [:users [:vector {:ilookup true}
+                                                     [:map [:id :int] [:name :string]]]]])})
+  ;=>> fn?
+
+  ;; Deeply nested: indexed lookup inside indexed lookup
+  (compile-pattern '{:depts {{:id "eng"} {:members {{:id 1} ?member}}}}
+                   {:schema (m/schema [:map [:depts [:vector {:ilookup true}
+                                                     [:map
+                                                      [:id :string]
+                                                      [:members [:vector {:ilookup true}
+                                                                 [:map [:id :int] [:name :string]]]]]]]])}))
+  ;=>> fn?)
 

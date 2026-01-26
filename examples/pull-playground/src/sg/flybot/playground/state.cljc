@@ -21,6 +21,8 @@
    :schema nil            ; Remote server schema (remote mode only)
    :schema-loading? false
    :schema-error nil
+   :sample-data nil       ; Generated sample data from schema (remote mode)
+   :schema-view-mode :schema  ; :schema | :sample - toggle in schema viewer
    :sidebar-collapsed? false  ; Hide examples panel (remote mode)
    ;; Autocomplete state
    :autocomplete nil})    ; {:completions [...] :selected 0 :prefix ":" :x :y}
@@ -33,7 +35,8 @@
   {:state (-> state
               (assoc :mode mode)
               (assoc :result nil :error nil)
-              (assoc :schema nil :schema-error nil))})
+              (assoc :schema nil :schema-error nil :sample-data nil)
+              (assoc :schema-view-mode :schema))})
 
 (defn update-pattern [state text]
   {:state (assoc state :pattern-text text)})
@@ -77,10 +80,16 @@
   {:state (assoc state :selected-example idx)})
 
 (defn fetch-schema-success [state schema]
-  {:state (assoc state :schema-loading? false :schema schema :schema-error nil)})
+  {:state (assoc state :schema-loading? false :schema schema :schema-error nil :sample-data nil)})
 
 (defn fetch-schema-error [state error]
-  {:state (assoc state :schema-loading? false :schema nil :schema-error error)})
+  {:state (assoc state :schema-loading? false :schema nil :schema-error error :sample-data nil)})
+
+(defn set-sample-data [state sample-data]
+  {:state (assoc state :sample-data sample-data)})
+
+(defn set-schema-view-mode [state mode]
+  {:state (assoc state :schema-view-mode mode)})
 
 (defn toggle-sidebar [state]
   {:state (update state :sidebar-collapsed? not)})
@@ -145,15 +154,25 @@
     (:fetch-schema fx))
   ;=> {:url "http://test/api"}
 
-  ;; fetch-schema-success stores schema
-  (let [{:keys [state]} (fetch-schema-success {:schema-loading? true} {:users [:name :email]})]
-    [(:schema-loading? state) (:schema state)])
-  ;=> [false {:users [:name :email]}]
+  ;; fetch-schema-success stores schema and clears sample-data
+  (let [{:keys [state]} (fetch-schema-success {:schema-loading? true :sample-data {:old "data"}} {:users [:name :email]})]
+    [(:schema-loading? state) (:schema state) (:sample-data state)])
+  ;=> [false {:users [:name :email]} nil]
 
-  ;; fetch-schema-error stores error
-  (let [{:keys [state]} (fetch-schema-error {:schema-loading? true} "Network error")]
-    [(:schema-loading? state) (:schema-error state)])
-  ;=> [false "Network error"]
+  ;; fetch-schema-error stores error and clears sample-data
+  (let [{:keys [state]} (fetch-schema-error {:schema-loading? true :sample-data {:old "data"}} "Network error")]
+    [(:schema-loading? state) (:schema-error state) (:sample-data state)])
+  ;=> [false "Network error" nil]
+
+  ;; set-sample-data stores generated data
+  (let [{:keys [state]} (set-sample-data {} {:users [{:name "Alice"}]})]
+    (:sample-data state))
+  ;=> {:users [{:name "Alice"}]}
+
+  ;; set-schema-view-mode changes view mode
+  (let [{:keys [state]} (set-schema-view-mode {:schema-view-mode :schema} :sample)]
+    (:schema-view-mode state))
+  ;=> :sample
 
   ;; toggle-sidebar toggles collapsed state
   (let [{:keys [state]} (toggle-sidebar {:sidebar-collapsed? false})]

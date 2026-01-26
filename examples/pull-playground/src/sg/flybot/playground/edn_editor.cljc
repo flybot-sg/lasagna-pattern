@@ -168,45 +168,98 @@
   (when (and token-str (str/starts-with? token-str ":"))
     (keyword (subs token-str 1))))
 
-(defn- deep-lookup-field-doc
-  "Recursively search for field documentation in nested :fields maps."
-  [fields-docs field-key]
-  (when (map? fields-docs)
-    ;; First check direct match
-    (if-let [doc (get fields-docs field-key)]
-      (dissoc doc :fields)  ; Return doc without nested :fields
-      ;; Otherwise search nested :fields maps
-      (some (fn [[_ v]]
-              (when (and (map? v) (:fields v))
-                (deep-lookup-field-doc (:fields v) field-key)))
-            fields-docs))))
+(defn- malli-entry-props
+  "Extract properties from a Malli map entry.
+   Entry format: [:key schema] or [:key props schema]"
+  [entry]
+  (when (and (vector? entry) (>= (count entry) 2))
+    (let [[_key second-elem] entry]
+      (when (map? second-elem)
+        second-elem))))
+
+(defn- malli-entry-schema
+  "Extract the schema from a Malli map entry.
+   Entry format: [:key schema] or [:key props schema]"
+  [entry]
+  (when (and (vector? entry) (>= (count entry) 2))
+    (if (= (count entry) 2)
+      (second entry)
+      (last entry))))
+
+(defn- malli-map-entries
+  "Get entries from a Malli hiccup map schema form.
+   Returns entries after the type keyword and optional props map."
+  [schema-form]
+  (when (and (vector? schema-form) (= :map (first schema-form)))
+    (let [rest-elems (rest schema-form)]
+      ;; Skip properties map if present at the start
+      (if (map? (first rest-elems))
+        (rest rest-elems)
+        rest-elems))))
+
+(defn- unwrap-schema-form
+  "Unwrap collection types to get the inner schema form."
+  [schema-form]
+  (when (vector? schema-form)
+    (case (first schema-form)
+      (:vector :sequential :set :seqable) (second schema-form)
+      schema-form)))
+
+(defn- search-schema-for-field
+  "Recursively search a Malli hiccup schema for a field's properties."
+  [schema-form field-key]
+  (when (vector? schema-form)
+    (let [type-kw (first schema-form)]
+      (case type-kw
+        :map
+        (let [entries (malli-map-entries schema-form)]
+          ;; First check direct match in this map
+          (or (some (fn [entry]
+                      (when (and (vector? entry) (= (first entry) field-key))
+                        (or (malli-entry-props entry) {})))
+                    entries)
+              ;; Otherwise search nested schemas
+              (some (fn [entry]
+                      (when-let [child-schema (malli-entry-schema entry)]
+                        (search-schema-for-field child-schema field-key)))
+                    entries)))
+        ;; Collection types - unwrap and search inner schema
+        (:vector :sequential :set :seqable)
+        (when-let [inner (second schema-form)]
+          (search-schema-for-field inner field-key))
+        ;; Other types - no fields to search
+        nil))))
 
 (defn lookup-field-doc
-  "Look up documentation for a field in schema metadata.
+  "Look up documentation for a field in a Malli hiccup schema.
 
-   Schema structure (per SPECIFICATION.md section 7.3):
-   ^{:doc \"...\"
-     :version \"1.0.0\"
-     :fields {:field1 {:doc \"...\" :example ... :deprecated ...}
-              :nested {:doc \"...\"
-                       :fields {:inner {:doc \"...\"}}}}}
-   {:field1 :type
-    :nested {:inner :type}}
+   Malli hiccup format uses inline properties on each field entry:
+   [:map {:doc \"...\"}
+    [:field1 {:doc \"...\" :example ...} :type]
+    [:nested {:doc \"...\"}
+     [:map
+      [:inner {:doc \"...\"} :type]]]]
 
-   Searches recursively through nested :fields maps.
+   Searches recursively through nested map schemas.
    Returns map with :doc, :example, :deprecated, :since or nil."
   [schema field-key]
   (when (and schema field-key)
-    (let [;; Get metadata from schema
-          schema-meta (meta schema)
-          ;; Look up in :fields map (recursively)
-          fields-docs (:fields schema-meta)
-          field-doc (deep-lookup-field-doc fields-docs field-key)]
-      (when field-doc
-        (merge field-doc
-               ;; Also include the type from schema if available (top-level only)
-               (when-let [field-type (get schema field-key)]
-                 {:type field-type}))))))
+    (let [;; Get the schema form - vector form expected (sent over wire)
+          ;; In ClojureScript, schema is always the hiccup form
+          ;; In Clojure, try to extract form from Malli schema object
+          schema-form (if (vector? schema)
+                        schema
+                        #?(:clj (try
+                                  ((requiring-resolve 'malli.core/form) schema)
+                                  (catch Exception _ nil))
+                           :cljs nil))
+          field-props (when schema-form
+                        (search-schema-for-field schema-form field-key))]
+      (when (and field-props (or (:doc field-props)
+                                 (:example field-props)
+                                 (:deprecated field-props)
+                                 (:since field-props)))
+        field-props))))
 
 (defn edn-display
   "Read-only EDN display with syntax highlighting.
@@ -258,20 +311,34 @@
   (keyword-from-token ":foo") ;=> :foo
   (keyword-from-token "foo") ;=> nil
 
-  ;; lookup-field-doc finds top-level fields
-  (let [schema ^{:fields {:name {:doc "User name" :example "Alice"}}}
-        {:name :string}]
+  ;; lookup-field-doc finds top-level fields in Malli hiccup format
+  (let [schema [:map [:name {:doc "User name" :example "Alice"} :string]]]
     (:doc (lookup-field-doc schema :name)))
   ;=> "User name"
 
   ;; lookup-field-doc finds nested fields recursively
-  (let [schema ^{:fields {:user {:doc "User info"
-                                 :fields {:email {:doc "Email address"}}}}}
-        {:user {:email :string}}]
+  (let [schema [:map
+                [:user {:doc "User info"}
+                 [:map
+                  [:email {:doc "Email address"} :string]]]]]
     (:doc (lookup-field-doc schema :email)))
   ;=> "Email address"
 
+  ;; lookup-field-doc finds fields inside vectors
+  (let [schema [:map
+                [:users {:doc "User list"}
+                 [:vector
+                  [:map
+                   [:id {:doc "User ID" :example 1} :int]]]]]]
+    (:doc (lookup-field-doc schema :id)))
+  ;=> "User ID"
+
   ;; lookup-field-doc returns nil for unknown fields
-  (let [schema ^{:fields {:name {:doc "Name"}}} {:name :string}]
-    (lookup-field-doc schema :unknown)))
+  (let [schema [:map [:name {:doc "Name"} :string]]]
+    (lookup-field-doc schema :unknown))
+  ;=> nil
+
+  ;; lookup-field-doc returns nil when no doc properties
+  (let [schema [:map [:name :string]]]
+    (lookup-field-doc schema :name)))
   ;=> nil)

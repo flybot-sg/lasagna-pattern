@@ -104,6 +104,7 @@ Core pattern DSL enabling declarative matching and transformation of Clojure dat
 - Maps preserve unmatched keys (passthrough semantics)
 - ILookup returns only matched keys (can't enumerate all keys)
 - Non-keyword keys for indexed lookup: `{{:id 1} ?result}`
+- With Malli schemas: indexed lookup requires `:ilookup true` on collection (e.g., `[:vector {:ilookup true} ...]`)
 
 **Deep dive:** See `pattern/doc/ARCHITECTURE.md` for internal design, matcher constructors, and extension points.
 

@@ -32,43 +32,34 @@
             :features {:dark-mode true :notifications false}}})
 
 (def sample-schema
-  "Schema describing the sample data structure with documentation metadata.
-   Per spec section 7.3, uses :doc, :fields, :version, :example, :deprecated."
+  "Schema describing the sample data structure with inline Malli documentation.
+   Uses Malli's hiccup syntax with properties on each field entry."
   (m/schema
    [:map {:version "1.0.0"
-          :doc "Sample API for Pull Pattern Playground"
-          :fields {:users {:doc "User accounts"
-                           :fields {:id    {:doc "Unique identifier" :example 1}
-                                    :name  {:doc "Display name" :example "Alice"}
-                                    :email {:doc "Email address" :example "alice@example.com"}
-                                    :role  {:doc "User role" :example :admin}}}
-                   :posts {:doc "Blog posts"
-                           :operations {:list "Returns all posts"
-                                        :get  "Lookup by {:id n}"}
-                           :fields {:id     {:doc "Post identifier" :example 1}
-                                    :title  {:doc "Post title" :example "Hello World"}
-                                    :author {:doc "Author name" :example "Alice"}
-                                    :tags   {:doc "Post tags" :example ["intro" "welcome"]}}}
-                   :config {:doc "Application configuration"
-                            :fields {:version  {:doc "App version"}
-                                     :features {:doc "Feature flags"
-                                                :fields {:dark-mode     {:doc "Dark mode enabled"}
-                                                         :notifications {:doc "Notifications enabled"}}}}}}}
-    [:users [:vector [:map
-                      [:id :int]
-                      [:name :string]
-                      [:email :string]
-                      [:role :keyword]]]]
-    [:posts [:vector [:map
-                      [:id :int]
-                      [:title :string]
-                      [:author :string]
-                      [:tags [:vector :string]]]]]
-    [:config [:map
-              [:version :string]
-              [:features [:map
-                          [:dark-mode :boolean]
-                          [:notifications :boolean]]]]]]))
+          :doc "Sample API for Pull Pattern Playground"}
+    [:users {:doc "User accounts"}
+     [:vector {:ilookup true}
+      [:map
+       [:id {:doc "Unique identifier" :example 1} :int]
+       [:name {:doc "Display name" :example "Alice"} :string]
+       [:email {:doc "Email address" :example "alice@example.com"} :string]
+       [:role {:doc "User role" :example :admin} :keyword]]]]
+    [:posts {:doc "Blog posts"
+             :operations {:list "Returns all posts"
+                          :get  "Lookup by {:id n}"}}
+     [:vector {:ilookup true}
+      [:map
+       [:id {:doc "Post identifier" :example 1} :int]
+       [:title {:doc "Post title" :example "Hello World"} :string]
+       [:author {:doc "Author name" :example "Alice"} :string]
+       [:tags {:doc "Post tags" :example ["intro" "welcome"]} [:vector :string]]]]]
+    [:config {:doc "Application configuration"}
+     [:map
+      [:version {:doc "App version"} :string]
+      [:features {:doc "Feature flags"}
+       [:map
+        [:dark-mode {:doc "Dark mode enabled"} :boolean]
+        [:notifications {:doc "Notifications enabled"} :boolean]]]]]]))
 
 ;;=============================================================================
 ;; API Function

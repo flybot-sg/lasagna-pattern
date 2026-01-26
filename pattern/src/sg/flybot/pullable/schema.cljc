@@ -42,17 +42,10 @@
   "Internal pattern types for sequence matching - always valid"
   #{:one :repeat :optional :term :subseq})
 
-(defn valid-pattern-for-schema?
-  "Check if pattern type is valid for schema type."
-  [pattern-type schema-type]
-  (or (subseq-pattern-types pattern-type)
-      (case schema-type
-        :any true
-        :map (#{:map :var :any} pattern-type)
-        :seq (#{:seq :var :any} pattern-type)
-        (:number :string :keyword :symbol :boolean)
-        (#{:var :val :pred :any :regex} pattern-type)
-        true)))
+(defn- indexed-lookup-key?
+  "Check if key is an indexed lookup (non-keyword map key for ILookup access)."
+  [k]
+  (not (keyword? k)))
 
 (defn validate-pattern-schema!
   "Validate pattern against schema. Throws on violation.
@@ -60,19 +53,41 @@
   [ptn schema core-pattern?]
   (when (and schema (core-pattern? ptn))
     (let [ptn-type (second ptn)
-          {:keys [type child-schema valid-keys]} (get-schema-info schema)]
-      (when-not (valid-pattern-for-schema? ptn-type type)
-        (throw (ex-info (str "Schema violation: pattern :" ptn-type " vs schema :" type)
+          {:keys [type child-schema valid-keys indexed-lookup?]} (get-schema-info schema)
+          type-ok? (or (subseq-pattern-types ptn-type)
+                       (case type
+                         :any true
+                         :map (#{:map :var :any} ptn-type)
+                         ;; :map allowed on :seq only if schema has :ilookup annotation
+                         :seq (or (#{:seq :var :any} ptn-type)
+                                  (and (= ptn-type :map) indexed-lookup?))
+                         (:number :string :keyword :symbol :boolean)
+                         (#{:var :val :pred :any :regex} ptn-type)
+                         true))]
+      (when-not type-ok?
+        (throw (ex-info (str "Schema violation: pattern :" ptn-type " vs schema :" type
+                             (when (and (= ptn-type :map) (= type :seq))
+                               " (add :ilookup to schema for indexed lookup)"))
                         {:pattern-type ptn-type :schema-type type :schema schema})))
       (case ptn-type
-        :map (doseq [[k child] (partition 2 (drop 2 ptn))]
-               (when (and valid-keys (not (valid-keys k)))
-                 (throw (ex-info (str "Key " k " not in schema") {:key k :schema-keys valid-keys})))
-               (when child-schema
-                 (validate-pattern-schema! child (child-schema k) core-pattern?)))
-        :seq (when child-schema
-               (doseq [[i child] (map-indexed vector (drop 2 ptn))]
-                 (validate-pattern-schema! child (child-schema i) core-pattern?)))
+        :map
+        (doseq [[k child] (partition 2 (drop 2 ptn))]
+          (if (indexed-lookup-key? k)
+            ;; Indexed lookup: schema must be :seq with :ilookup, validate child against element schema
+            (when child-schema
+              (validate-pattern-schema! child (child-schema 0) core-pattern?))
+            ;; Keyword key: must be on :map schema
+            (do
+              (when (and valid-keys (not (valid-keys k)))
+                (throw (ex-info (str "Key " k " not in schema")
+                                {:key k :valid-keys valid-keys})))
+              (when child-schema
+                (validate-pattern-schema! child (child-schema k) core-pattern?)))))
+        :seq
+        (when child-schema
+          (doseq [[i child] (map-indexed vector (drop 2 ptn))]
+            (validate-pattern-schema! child (child-schema i) core-pattern?)))
+        ;; Other pattern types
         (doseq [child (drop 2 ptn)]
           (when (core-pattern? child)
             (validate-pattern-schema! child schema core-pattern?)))))))

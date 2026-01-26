@@ -392,116 +392,126 @@ Plain Clojure maps `{:k schema}` are also supported as shorthand for record type
 
 ### 7.3 Schema Documentation
 
-Schema elements carry documentation via Clojure metadata. Since keywords cannot have metadata, field-level documentation lives in a parallel `:fields` map within the schema's metadata.
+Schema documentation uses Malli's hiccup syntax with inline properties on each field entry. This is the idiomatic Malli approach where documentation lives alongside the schema definition.
 
-#### Metadata Keys
+#### Property Keys
 
-**Root-level only:**
+**Map-level properties:**
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `:version` | string | Schema version for client compatibility and cache invalidation |
+| `:doc` | string | Human-readable description of the schema |
 
-**Any level:**
+**Field-level properties:**
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `:doc` | string | Human-readable description of the schema/field |
-| `:fields` | map | Field-level documentation (keys mirror schema keys) |
+| `:doc` | string | Human-readable description of the field |
 | `:deprecated` | boolean/string | Mark as deprecated, optionally with migration note |
 | `:example` | any | Example value |
 | `:since` | string | Version when field was added |
+| `:optional` | boolean | Mark field as optional (Malli built-in) |
+
+**Collection-level properties (on `:vector`, `:sequential`, etc.):**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `:ilookup` | boolean | Enables indexed lookup patterns `{{:query} ?result}` |
+| `:operations` | map | Documents CRUD operations (for tooling/introspection) |
 
 #### Map Schema Documentation
 
-Attach metadata to Malli schemas. For map schemas, use a `:fields` map mirroring the schema structure:
+Use inline properties on each field entry in the Malli hiccup syntax:
 
 ```clojure
 (require '[malli.core :as m])
 
 (def user-schema
   (m/schema
-    ^{:doc "User account information"
-      :fields {:id     {:doc "Unique identifier" :example 12345}
-               :name   {:doc "Display name"}
-               :email  {:doc "Primary email address"}
-               :role   {:doc "User role" :example :admin}
-               :legacy {:doc "Legacy role field" :deprecated "Use :role instead"}}}
-    [:map
-     [:id :int]
-     [:name :string]
-     [:email :string]
-     [:role [:enum :admin :editor :viewer]]
-     [:legacy {:optional true} :string]]))
+    [:map {:doc "User account information"}
+     [:id {:doc "Unique identifier" :example 12345} :int]
+     [:name {:doc "Display name"} :string]
+     [:email {:doc "Primary email address"} :string]
+     [:role {:doc "User role" :example :admin} [:enum :admin :editor :viewer]]
+     [:legacy {:doc "Legacy role field" :deprecated "Use :role instead" :optional true} :string]]))
 ```
 
 #### Sequence Schema Documentation
 
-Attach metadata to the Malli vector schema:
+For vector schemas, put documentation on the map properties:
 
 ```clojure
 (def posts-schema
   (m/schema
-    ^{:doc "Published blog posts, ordered by date descending"}
-    [:vector [:map [:id :int] [:title :string] [:content :string]]]))
+    [:vector {:doc "Published blog posts, ordered by date descending"}
+     [:map
+      [:id {:doc "Post identifier"} :int]
+      [:title {:doc "Post title"} :string]
+      [:content {:doc "Post content"} :string]]]))
 ```
 
 #### Collection Schema Documentation
 
-For collections with ILookup support (supporting both LIST and GET), document operations:
+For collections with ILookup support (supporting both LIST and GET), use `:ilookup true` to enable indexed lookup pattern validation:
 
 ```clojure
 (def posts-collection-schema
   (m/schema
-    ^{:doc "Blog post collection"
-      :operations {:list   "Returns all posts"
-                   :get    "Lookup by {:id n}"
-                   :create "Provide {:title :content}"
-                   :update "Partial updates supported"
-                   :delete "Returns deleted post"}}
-    [:or
-     [:vector post-schema]
-     [:map-of {:id :int} post-schema]]))
+    [:vector {:ilookup true
+              :doc "Blog post collection"
+              :operations {:list   "Returns all posts"
+                           :get    "Lookup by {:id n}"
+                           :create "Provide {:title :content}"
+                           :update "Partial updates supported"
+                           :delete "Returns deleted post"}}
+     post-schema]))
 ```
+
+The `:ilookup` property tells the pattern compiler that this collection supports indexed lookup patterns like `{{:id 1} ?post}`. Without this annotation, such patterns will be rejected at compile time with a helpful error message.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `:ilookup` | boolean | Enables indexed lookup patterns `{{:query} ?result}` |
+| `:operations` | map | Documents CRUD operations (for tooling/introspection) |
 
 #### Nested Schema Documentation
 
-For nested maps, the `:fields` map mirrors the nesting:
+For nested maps, documentation is inline at each level:
 
 ```clojure
 (def api-schema
-  ^{:version "2.0.0"
-    :doc "API root"
-    :fields {:user {:doc "Current user profile"
-                    :fields {:name  {:doc "Display name"}
-                             :email {:doc "Primary email"}}}
-             :posts {:doc "Blog posts collection"}}}
-  {:user  (m/schema [:map [:name :string] [:email :string]])
-   :posts posts-collection-schema})
+  (m/schema
+    [:map {:version "2.0.0" :doc "API root"}
+     [:user {:doc "Current user profile"}
+      [:map
+       [:name {:doc "Display name"} :string]
+       [:email {:doc "Primary email"} :string]]]
+     [:posts {:doc "Blog posts collection"}
+      posts-collection-schema]]))
 ```
 
-Note: API root schemas are plain Clojure maps (not Malli schemas) to allow middleware to `assoc` additional keys like `:me` for authentication.
+Note: API root schemas can also be plain Clojure maps (not Malli schemas) to allow middleware to `assoc` additional keys like `:me` for authentication. In that case, use Clojure metadata for root-level properties.
 
 #### Introspection Response
 
-`GET /api/_schema` returns schema with documentation metadata:
+`GET /api/_schema` returns schema with inline documentation:
 
 ```clojure
-^{:version "1.2.0"
-  :doc "User API"
-  :fields {:user {:doc "Current user profile"
-                  :fields {:name {:doc "Display name"}
-                           :email {:doc "Primary email" :since "1.1.0"}}}}}
-{:user {:name :string :email :string}}
+[:map {:version "1.2.0" :doc "User API"}
+ [:user {:doc "Current user profile"}
+  [:map
+   [:name {:doc "Display name"} :string]
+   [:email {:doc "Primary email" :since "1.1.0"} :string]]]]
 ```
 
 Clients can use `:version` for compatibility checking and cache invalidation.
 
 #### Wire Format Considerations
 
-Transit preserves Clojure metadata automatically. For EDN responses, metadata uses standard `^{...}` syntax.
+The hiccup schema format serializes naturally to Transit and EDN. Documentation properties are inline with each field entry.
 
-Clients that don't support metadata can ignore it - the structural schema remains valid.
+Clients that don't need documentation can ignore the properties maps - the structural schema remains valid.
 
 ## 8. Request Flow
 

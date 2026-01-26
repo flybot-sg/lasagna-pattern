@@ -935,3 +935,40 @@ body {
   white-space: pre-wrap;
   word-wrap: break-word;
 }
+
+/*=============================================================================
+ * Schema View Mode Toggle
+ *============================================================================*/
+
+.schema-view-toggle {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 0.5rem;
+  width: fit-content;
+}
+
+.schema-view-toggle button {
+  background: var(--bg);
+  border: none;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  transition: all 0.15s;
+}
+
+.schema-view-toggle button:hover {
+  background: var(--bg-card);
+}
+
+.schema-view-toggle button.active {
+  background: var(--accent);
+  color: white;
+}
+

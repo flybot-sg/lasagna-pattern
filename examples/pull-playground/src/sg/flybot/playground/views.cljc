@@ -62,7 +62,7 @@
        [:span.show-dark (sun-icon)]]]]))
 
 (defn- schema-display [state dispatch!]
-  (let [{:keys [schema schema-loading? schema-error]} state]
+  (let [{:keys [schema schema-loading? schema-error sample-data schema-view-mode]} state]
     [:div.schema-section
      [:div.schema-header
       [:label "Server Schema"]
@@ -70,8 +70,10 @@
                                  :disabled schema-loading?}
        (if schema-loading? "Loading..." "Fetch")]]
      #?(:cljs (edn-i/schema-viewer
-               {:value (when schema (format-result-pretty schema))
-                :schema schema  ; Pass original schema for metadata lookup
+               {:schema schema
+                :sample-data sample-data
+                :view-mode schema-view-mode
+                :on-mode-change #(dispatch! [:set-schema-view-mode %])
                 :loading? schema-loading?
                 :error schema-error
                 :placeholder "Click Fetch to load schema"})

@@ -123,6 +123,8 @@ Map patterns support both standard Clojure maps and any `ILookup` implementation
 
 Map keys in patterns are literal lookup keys (not sub-patterns). This enables indexed access patterns for collections.
 
+**Schema validation for indexed lookup:** When using schemas, indexed lookup patterns (non-keyword keys like `{:id 1}`) on sequence types require the `:ilookup` annotation in the schema. This explicitly declares that the collection supports ILookup access. Without this annotation, schema validation rejects the pattern with a helpful error message.
+
 ## Schema Syntax Reference
 
 Schemas validate pattern structure at compile time via `:schema` option in `compile-pattern`.
@@ -164,14 +166,32 @@ For full schema expressiveness, use Malli schemas. Require `sg.flybot.pullable.m
 ;; :map → :map, :vector → :seq
 ;; :keyword, :symbol, :boolean → themselves
 ;; :maybe, :or, :enum → smart inference
-
-;; Union types for collections with multiple access patterns
-(def post-schema (m/schema [:map [:id :int] [:title :string]]))
-(def api-schema
-  {:posts (m/schema [:or
-                     [:vector post-schema]           ; LIST: {:posts ?all}
-                     [:map-of {:id :int} post-schema]])}; GET: {:posts {{:id 3} ?p}}
 ```
+
+#### Indexed Lookup with `:ilookup`
+
+Collections that support ILookup access (indexed lookup by query key) must declare this capability with the `:ilookup` property:
+
+```clojure
+;; Schema with indexed lookup enabled
+(def api-schema
+  (m/schema
+    [:map
+     [:users [:vector {:ilookup true}  ; ← enables indexed lookup patterns
+              [:map [:id :int] [:name :string]]]]]))
+
+;; Now both patterns are valid:
+{:users ?all}              ; LIST - always valid
+{:users {{:id 1} ?user}}   ; GET - requires :ilookup true
+
+;; Without :ilookup, the indexed lookup pattern is rejected at compile time:
+;; "Schema violation: pattern :map vs schema :seq (add :ilookup to schema for indexed lookup)"
+```
+
+This explicit annotation:
+1. **Documents intent** - Schema declares which collections support query-based access
+2. **Prevents errors** - Catches invalid patterns at compile time, not runtime
+3. **Clarifies semantics** - Not all sequences support ILookup; annotation makes this explicit
 
 ### Wire Serialization
 
