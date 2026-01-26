@@ -5,79 +5,10 @@ description: Guide to plan/design/coding in Clojure. Use when working with Cloju
 
 # Clojure
 
-## Design Principles
+## Core Principles
 
-### REPL-First, Not Grep
-**DO NOT use grep, Glob, or text search to explore Clojure code.** Always connect to a REPL first and use namespace introspection (`all-ns`, `dir`, `doc`, `source`). See "nREPL Workflow" section for commands.
-
-### Requirements as Examples
-Judge whether a requirement describes a specific scenario or a broader pattern:
-- Most requirements are **examples of common scenarios** - design for the general case
-- Some are truly **one-off edge cases** - implement narrowly
-- If unsure, ask: "Is this a specific case, or should I design for similar scenarios?"
-
-### Prefer .cljc Over .clj/.cljs
-Use `.cljc` by default for code shareable across Clojure and ClojureScript. Use reader conditionals for platform differences:
-```clojure
-#?(:clj  (java.util.UUID/randomUUID)
-   :cljs (random-uuid))
-```
-
-### Macros in .cljc Files
-
-**Critical: A namespace cannot use its own macros during initial load in ClojureScript.**
-
-When a `.cljc` file defines a macro and tries to call it at the top level of the same file, ClojureScript will fail with "Can't take value of macro" warnings and runtime errors.
-
-```clojure
-;; BAD: macro defined and used in same namespace
-(ns mylib.impl)
-
-(defmacro register! [type spec]
-  `(swap! registry* assoc ~type ~spec))
-
-(register! :foo {...})  ; FAILS in ClojureScript!
-```
-
-**Solutions:**
-
-1. **Convert to function if possible** - If the macro only does runtime operations (like `swap!`), use a function instead:
-```clojure
-;; GOOD: function works in both Clojure and ClojureScript
-(defn register! [type spec]
-  (swap! registry* assoc type spec))
-
-(register! :foo {...})  ; Works!
-```
-
-2. **Move calls to separate namespace** - If macro semantics are needed:
-```clojure
-;; mylib/impl.cljc - defines macro
-(ns mylib.impl
-  #?(:cljs (:require-macros [mylib.impl])))
-
-(defmacro register! [type spec] ...)
-
-;; mylib/registry.cljc - uses macro (requires impl)
-(ns mylib.registry
-  (:require [mylib.impl :refer [register!]]))
-
-(register! :foo {...})  ; Works!
-```
-
-3. **Use `#?(:clj ...)` for JVM-only code** - Skip in ClojureScript if not needed:
-```clojure
-#?(:clj
-   (register! :foo {...}))  ; Only runs on JVM
-```
-
-**Self-referential macros pattern:**
-```clojure
-(ns mylib.util
-  #?(:cljs (:require-macros [mylib.util])))  ; Required for CLJS
-
-(defmacro my-macro [...] ...)
-```
+### REPL-First Exploration
+**DO NOT use grep, Glob, or text search to explore Clojure code.** Connect to a REPL and use namespace introspection. See "nREPL Workflow" section.
 
 ### Data-Oriented Design
 - Prefer plain data (maps, vectors, sets) over custom types
@@ -90,104 +21,56 @@ When a `.cljc` file defines a macro and tries to call it at the top level of the
 - Compose small functions into larger workflows
 
 ### Reuse Before Writing
-Before creating a new function, search for existing code that:
-- Does the same thing
-- Does something similar that could be generalized
-- Lives in a parent namespace or util
+Before creating a new function, search for existing code that does the same thing or something similar that could be generalized.
+
+### Requirements as Examples
+Most requirements are **examples of common scenarios** - design for the general case. Some are truly **one-off edge cases** - implement narrowly. If unsure, ask.
 
 ## nREPL Workflow
 
 Use **clj-nrepl-eval** for REPL-driven development.
 
-### CRITICAL: REPL-First Exploration
-
-**DO NOT use grep, Glob, or file search to explore Clojure code.** Instead, use REPL introspection.
-
-**First step for ANY Clojure task:** Check for a running REPL or start one:
-
+### Setup
 ```bash
 # Check for running REPLs
 clj-nrepl-eval --discover-ports
 
-# If no REPL, start one (in project directory)
+# Start REPL if needed
 clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "RELEASE"}}}' -M -m nrepl.cmdline
+
+# Load introspection tools (required for doc, source, dir)
+clj-nrepl-eval -p <port> "(require '[clojure.repl :refer [doc source dir]])"
 ```
 
-**Then explore via REPL, not grep:**
-
+### Explore Code
 ```bash
-# List all namespaces to understand project structure
-clj-nrepl-eval -p <port> "(map ns-name (all-ns))"
-
-# Check namespace docstring/metadata for purpose
-clj-nrepl-eval -p <port> "(-> 'myapp.core find-ns meta)"
-
-# List all public vars in a namespace
-clj-nrepl-eval -p <port> "(dir myapp.core)"
-
-# Get function documentation
-clj-nrepl-eval -p <port> "(doc myapp.core/some-fn)"
-
-# View source code
-clj-nrepl-eval -p <port> "(source myapp.core/some-fn)"
+clj-nrepl-eval -p <port> "(map ns-name (all-ns))"     # List namespaces
+clj-nrepl-eval -p <port> "(dir myapp.core)"           # List vars
+clj-nrepl-eval -p <port> "(doc myapp.core/some-fn)"   # Function docs
+clj-nrepl-eval -p <port> "(source myapp.core/some-fn)" # View source
 ```
 
-This is how Clojure developers work. The REPL provides accurate, live information about loaded code.
-
-**Discover the environment:**
+### Understand Data
 ```bash
-clj-nrepl-eval --discover-ports              # Find running REPLs
-clj-nrepl-eval -p <port> "(all-ns)"          # List namespaces
-clj-nrepl-eval -p <port> "(dir myapp.core)"  # List vars in namespace
-clj-nrepl-eval -p <port> "(doc myapp.core/process-data)"  # Function docs
-clj-nrepl-eval -p <port> "(source myapp.core/process-data)"  # View source
+clj-nrepl-eval -p <port> "(keys some-map)"            # Map keys
+clj-nrepl-eval -p <port> "(type result)"              # Check type
+clj-nrepl-eval -p <port> "(first large-coll)"         # Sample data
 ```
-
-**Understand data shapes:**
-```bash
-clj-nrepl-eval -p <port> "(keys some-map)"           # Map keys
-clj-nrepl-eval -p <port> "(type result)"             # Check type
-clj-nrepl-eval -p <port> "(first large-collection)"  # Sample data
-clj-nrepl-eval -p <port> "(meta #'some-var)"         # Var metadata
-```
-
-**Test assumptions interactively:**
-```bash
-clj-nrepl-eval -p <port> "(some-fn test-input)"      # Try function
-clj-nrepl-eval -p <port> "(-> data transform1 transform2)"  # Build pipelines
-```
-
-**When to explore:**
-- Before writing any new function—understand inputs and expected outputs
-- When adding a new dependency—try the library's API interactively before integrating
-- When understanding existing code—eval functions, inspect data flow, trace execution
-- When debugging—inspect actual values, not assumed ones
-- When refactoring—verify behavior before and after changes
 
 ### Development Cycle
-1. Start REPL:
-   ```bash
-   clj -Sdeps '{:deps {nrepl/nrepl {:mvn/version "RELEASE"}}}' -M -m nrepl.cmdline
-   ```
-2. Edit code in source files
-3. Reload and test:
-   ```bash
-   clj-nrepl-eval -p <port> "(require '[myapp.core :as core] :reload)"
-   clj-nrepl-eval -p <port> "(core/my-function arg)"
-   ```
-4. Iterate: edit, reload, eval, refine
+1. Edit code in source files
+2. Reload: `(require '[myapp.core :as core] :reload)`
+3. Test: `(core/my-function arg)`
+4. Iterate
 
 ### Delimiter Repair
-Fix unbalanced parens with [clojure-mcp-light](https://github.com/bhauman/clojure-mcp-light):
-```bash
-clj-paren-repair <file.clj>
-```
+Fix unbalanced parens: `clj-paren-repair <file.clj>`
 
 ## Idiomatic Patterns
 
 ### Threading Macros
 ```clojure
-(-> person :address :city str/upper-case)           ; object-first
+(-> person :address :city str/upper-case)            ; object-first
 (->> orders (filter :paid?) (map :total) (reduce +)) ; collection-last
 (some-> user :profile :avatar :url)                  ; nil-safe
 ```
@@ -217,86 +100,109 @@ clj-paren-repair <file.clj>
   (load! [this id]))
 ```
 
+## Cross-Platform (.cljc)
+
+### Prefer .cljc Over .clj/.cljs
+Use `.cljc` by default. Use reader conditionals for platform differences:
+```clojure
+#?(:clj  (java.util.UUID/randomUUID)
+   :cljs (random-uuid))
+```
+
+### Macros in .cljc Files
+**A namespace cannot use its own macros during initial load in ClojureScript.**
+
+```clojure
+;; BAD: macro used in same namespace
+(defmacro register! [type spec] `(swap! registry* assoc ~type ~spec))
+(register! :foo {...})  ; FAILS in ClojureScript!
+
+;; GOOD: convert to function if only doing runtime ops
+(defn register! [type spec] (swap! registry* assoc type spec))
+
+;; OR: move calls to separate namespace that requires this one
+```
+
+**Self-referential macros pattern:**
+```clojure
+(ns mylib.util
+  #?(:cljs (:require-macros [mylib.util])))  ; Required for CLJS
+(defmacro my-macro [...] ...)
+```
+
 ## API Design
 
 ### Minimal Public Surface
-Expose the fewest functions necessary. More public functions = more promises to keep:
-- Create a public API namespace (e.g., `mylib.core`) with stable guarantees
-- Keep implementation in internal namespaces (e.g., `mylib.internal.*`)
-- Users CAN access internals but those MAY change between versions
-
-```clojure
-;; mylib.core - public API, stable
-(ns mylib.core
-  (:require [mylib.internal.impl :as impl]))
-
-(def my-fn impl/my-fn)  ; expose only what users need
-```
+- Public API namespace (e.g., `mylib.core`) with stable guarantees
+- Implementation in internal namespaces (e.g., `mylib.internal.*`)
+- Users CAN access internals but those MAY change
 
 ### Backward-Compatible Extensions
-When adding optional arguments to macros/functions, use multi-arity to avoid breaking existing callers:
-
+Use multi-arity for optional arguments:
 ```clojure
 (defmacro my-macro
   ([required-arg] `(my-macro ~required-arg {}))
-  ([required-arg opts]
-   ;; implementation uses opts
-   ...))
-
-;; Existing code still works:
-(my-macro pattern)
-;; New code can use options:
-(my-macro pattern {:schema user-schema})
+  ([required-arg opts] ...))
 ```
 
 ### Options Pass-Through
-Public wrappers should forward options to internal implementations, so users get features without calling internals:
+Public wrappers forward options to internal implementations.
 
+## Testing
+
+### Unit Tests: RCT (inline)
+Place `^:rct/test` block **immediately after** the function:
 ```clojure
-;; Public API - passes options through to internal
-(defmacro match-fn
-  ([pattern body] `(internal/match-fn ~pattern ~body))
-  ([pattern body opts] `(internal/match-fn ~pattern ~body ~opts)))
+(defn add [a b]
+  (+ a b))
+
+^:rct/test
+(comment
+  (add 5 3) ;=> 8
+  (add 0 0) ;=> 0)
 ```
 
-## Code Smells
+**Syntax:** `;=>` equality, `;=>>` predicate/matcho, `;throws=>>` exceptions
 
-### Exhaustive Set Checks
-Avoid checking membership against fixed sets - breaks when options expand:
-
+### Integration Tests: test/ namespace
 ```clojure
-;; Bad: brittle
-(when (#{:option1 :option2} option) ...)
+(ns myapp.integration-test
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]))
 
-;; Better: check exclusions or use multimethods
-(when-not (#{:deprecated :disabled} option) ...)
+(use-fixtures :each (fn [f] (db/with-test-conn f)))
+
+(deftest api-integration-test
+  (testing "end-to-end flow"
+    (is (= expected (myapp.api/handler request)))))
 ```
 
-## Project Structure
-
-### deps.edn
-```clojure
-{:paths ["src" "resources"]
- :deps {org.clojure/clojure {:mvn/version "1.11.1"}
-        io.github.robertluo/rich-comment-tests {:mvn/version "1.1.2"}}
- :aliases
- {:dev {:extra-paths ["dev"]}
-  :test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}}}}
-```
-
-### Running Tests
+### Run Tests
 ```bash
-clj -M:test -m kaocha.runner
+bb test              # All components
+bb test <component>  # Specific component
 ```
 
-### Namespace Conventions
+## Code Style
+
+- **Naming:** kebab-case, predicates end with `?`, side-effects end with `!`
+- **Threading:** prefer `->` `->>` `cond->` `cond->>`
+- **Conditionals:** use `when-let`, `if-let`
+- **Docstrings:** every public var has a concise docstring
+
+## Namespace Dependencies
+
+A namespace can only require:
+1. Its **children** (e.g., `foo.bar` → `foo.bar.baz`)
+2. **External libraries** (e.g., `clojure.walk`)
+3. **Exception:** one `util` namespace with pure functions only
+
 ```clojure
-(ns myapp.core
-  (:require
-   [clojure.string :as str]
-   [myapp.db :as db])
-  (:import
-   [java.time Instant]))
+;; ALLOWED
+foo.bar   → foo.bar.baz    ; child
+foo.bar   → clojure.walk   ; external
+
+;; NOT ALLOWED
+foo.bar.a → foo.bar.b      ; sibling (causes cycles)
 ```
 
 ## Error Handling
@@ -310,96 +216,39 @@ clj -M:test -m kaocha.runner
     (handle-error (:field (ex-data e)))))
 ```
 
-## Testing
+## Post-Task Review
 
-### Unit Tests: RCT (inline in source)
+**After completing any non-trivial coding task, review for simplification:**
 
-Use rich-comment-tests for unit tests. Place `^:rct/test` block **immediately after** the function it tests:
+1. **Delete** - unused vars, dead branches, unnecessary nil checks
+2. **Inline** - single-use helpers that obscure rather than clarify
+3. **Flatten** - nested maps → flat maps, custom types → plain data
+4. **Combine** - multiple passes → single pass, separate conditions → `cond`
+5. **Remove abstractions** - don't generalize for hypothetical futures
 
-```clojure
-(defn add [a b]
-  (+ a b))
-
-^:rct/test
-(comment
-  ;; success case
-  (add 5 3) ;=> 8
-  ;; edge case: zero
-  (add 0 0) ;=> 0)
-```
-
-**Syntax:** ;=> for equality, ;=>> for predicate/matcho, ;throws=>> for exceptions
-
-**Guidelines:** cover all branches, comment each assertion, one test per branch
-
-### Integrate RCT with clojure.test
-
-Wrap RCT runner in a deftest so Kaocha runs both RCT and traditional tests:
-
-```clojure
-;; test/myapp/rct_test.clj
-(ns myapp.rct-test
-  (:require [clojure.test :refer [deftest]]
-            [com.mjdowney.rich-comment-tests.test-runner :as rct]))
-
-(deftest rct-tests
-  (rct/run-tests-in-file-tree! :dirs #{"src"}))
-```
-
-### System/Integration Tests: separate namespace
-
-Keep integration tests in `test/` using standard clojure.test:
-
-```clojure
-;; test/myapp/integration_test.clj
-(ns myapp.integration-test
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
-            [myapp.db :as db]))
-
-(use-fixtures :each (fn [f] (db/with-test-conn f)))
-
-(deftest api-integration-test
-  (testing "end-to-end flow"
-    (is (= expected (myapp.api/handler request)))))
-```
-
-**Separation:** RCT for pure function unit tests inline; `test/` namespace for stateful integration tests
+Ask: "If I were reading this for the first time, what would confuse me?"
 
 ## Capture Findings
 
-When discovering gotchas or non-obvious behavior, add a `NOTE:` comment near the relevant code:
-
+Add `NOTE:` comments for non-obvious behavior:
 ```clojure
 ;; NOTE: api-pull returns symbol keys, not keywords
 (get response 'all)
 ```
 
-## Code Style
+## Self-Improvement
 
-- **Naming:** kebab-case, predicates end with ?, side-effect functions end with !
-- **Threading:** prefer threading macros (-> ->> cond-> cond->>)
-- **Conditionals:** use when-let, if-let
-- **Docstrings:** every public var has a concise docstring
-- **Purity:** pure functions; isolate effects at edges
+**Update this skill when you discover useful Clojure knowledge.**
 
-## Namespace Dependencies
+Add new learnings for: gotchas, useful patterns, library idioms, performance tips, common mistakes.
 
-A namespace can only require:
-1. Its **children** (e.g., `foo.bar` → `foo.bar.baz`)
-2. **External libraries** (e.g., `clojure.walk`)
-3. **Exception:** one `util` namespace with pure functions only
+**How:** Add to appropriate section, or to "Learned Patterns" below.
 
-```clojure
-;; ALLOWED
-foo.bar       → foo.bar.baz    ; child
-foo.bar       → clojure.walk   ; external
-foo.bar       → project.util   ; util exception
+**Location:** `$CLAUDE_PROJECT_DIR/.claude/skills/clojure/SKILL.md`
 
-;; NOT ALLOWED
-foo.bar.a     → foo.bar.b      ; sibling
-```
+## Learned Patterns
 
-This prevents circular dependencies and enforces hierarchical structure.
+<!-- Add new discoveries below this line -->
 
 ## Subskills
 

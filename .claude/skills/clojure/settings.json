@@ -19,15 +19,6 @@
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/clojure-guardian.sh"
           }
         ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/jj-guardian.sh"
-          }
-        ]
       }
     ]
   }
