@@ -88,6 +88,31 @@ cd ~/project
 # Continue working...
 ```
 
+### Workspaces for Parallel Subagents
+
+**Clojure's immutability makes parallel implementation safe.** When spawning subagents to implement independent features:
+
+```bash
+# Create workspaces for each subagent
+jj workspace add /tmp/pull2-feature-a
+jj workspace add /tmp/pull2-feature-b
+
+# Each subagent works in its workspace, then commits:
+# (in /tmp/pull2-feature-a)
+jj describe -m "Implement feature A"
+jj bookmark set main -r @
+
+# After all subagents complete, cleanup from main workspace:
+cd /Users/tianluo/workspace/pull2
+jj workspace forget feature-a feature-b
+rm -rf /tmp/pull2-feature-a /tmp/pull2-feature-b
+```
+
+**Key benefits:**
+- No merge conflicts from parallel edits (immutable data)
+- Each agent has isolated working directory
+- Changes merge cleanly via jj's automatic conflict handling
+
 ## Common Workflows
 
 ### Make Changes

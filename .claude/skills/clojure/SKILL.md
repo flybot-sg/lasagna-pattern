@@ -26,6 +26,38 @@ Before creating a new function, search for existing code that does the same thin
 ### Requirements as Examples
 Most requirements are **examples of common scenarios** - design for the general case. Some are truly **one-off edge cases** - implement narrowly. If unsure, ask.
 
+## Parallel Implementation with Subagents
+
+Clojure's immutability and pure functions make parallel work **safe by design** - no shared mutable state means agents can't corrupt each other's work. Leverage this with jj workspaces for parallel feature implementation.
+
+### When to Parallelize
+During planning, identify **independent subtasks** that can be implemented concurrently:
+- Functions with no shared dependencies
+- Separate namespaces or modules
+- Tests and implementation (write in parallel)
+- Frontend and backend changes
+
+### Workflow
+1. **Plan phase**: Break task into independent features
+2. **Spawn subagents**: Each in its own jj workspace
+   ```bash
+   jj workspace add feature-a /tmp/pull2-feature-a
+   jj workspace add feature-b /tmp/pull2-feature-b
+   ```
+3. **Implement in parallel**: Each agent works in isolation
+4. **Merge**: Bring workspaces back together
+   ```bash
+   jj workspace forget feature-a feature-b
+   ```
+
+### Planning Checklist
+When planning a multi-part task, ask:
+- [ ] Can this be split into 2-3 independent pieces?
+- [ ] Do the pieces touch different files/namespaces?
+- [ ] Is each piece well-defined enough to delegate?
+
+If yes to all → spawn parallel subagents with jj workspaces.
+
 ## nREPL Workflow
 
 Use **clj-nrepl-eval** for REPL-driven development.
