@@ -1,30 +1,12 @@
 (ns sg.flybot.playground.server
   "Demo server with sample data for testing remote mode.
-   Implements Remote Pull Protocol v0.2 specification."
+   Uses standard Remote Pull Protocol v0.2 handler."
   (:require [org.httpkit.server :as http]
             [ring.middleware.cors :refer [wrap-cors]]
             [ring.middleware.params :refer [wrap-params]]
-            [cognitect.transit :as t]
-            [clojure.string :as str]
-            [sg.flybot.pullable.impl :as impl]
+            [sg.flybot.pullable.remote :as remote]
             [sg.flybot.pullable.malli]
-            [malli.core :as m])
-  (:import [java.io ByteArrayInputStream ByteArrayOutputStream]))
-
-;;=============================================================================
-;; Transit Encoding/Decoding
-;;=============================================================================
-
-(defn- transit-read [s]
-  (let [in (ByteArrayInputStream. (.getBytes s "UTF-8"))
-        reader (t/reader in :json)]
-    (t/read reader)))
-
-(defn- transit-write [data]
-  (let [out (ByteArrayOutputStream.)
-        writer (t/writer out :json)]
-    (t/write writer data)
-    (.toString out "UTF-8")))
+            [malli.core :as m]))
 
 ;;=============================================================================
 ;; Sample Data
@@ -80,95 +62,38 @@
                           [:notifications :boolean]]]]]]))
 
 ;;=============================================================================
-;; API Handler
+;; API Function
 ;;=============================================================================
 
-(defn- handle-pull [body]
-  (try
-    (let [{:keys [pattern]} (transit-read body)
-          matcher (impl/compile-pattern pattern {:schema sample-schema})
-          result (matcher (impl/vmr sample-data))]
-      (if (impl/failure? result)
-        ;; Per spec: match-failure → 422 Unprocessable Content
-        {:status 422
-         :body (transit-write {:errors [{:code :match-failure
-                                         :reason (:reason result)
-                                         :path (:path result)}]})}
-        {:status 200
-         ;; Per spec: success response returns variable bindings directly
-         :body (transit-write (:vars result))}))
-    (catch Exception e
-      (let [msg (.getMessage e)]
-        (if (or (re-find #"decode" (str/lower-case (or msg "")))
-                (re-find #"parse" (str/lower-case (or msg ""))))
-          ;; Per spec: decode-error → 400
-          {:status 400
-           :body (transit-write {:errors [{:code :decode-error
-                                           :reason msg}]})}
-          ;; Per spec: execution-error → 500
-          {:status 500
-           :body (transit-write {:errors [{:code :execution-error
-                                           :reason msg}]})})))))
+(defn api-fn
+  "API function for Remote Pull Protocol.
+   Returns data and schema for pattern matching."
+  [_ring-request]
+  {:data   sample-data
+   :schema sample-schema})
 
-(defn- api-handler [request]
-  (let [method (:request-method request)
-        uri (:uri request)]
-    (cond
-      ;; POST /api - pattern execution
-      (and (= method :post) (= uri "/api"))
-      (let [body (slurp (:body request))]
-        (-> (handle-pull body)
-            (assoc :headers {"Content-Type" "application/transit+json"})))
-
-      ;; GET /api/_schema - introspection
-      ;; NOTE: Transit doesn't preserve metadata by default.
-      ;; Per spec 7.3, schema documentation lives in metadata.
-      ;; Production servers should use custom Transit write handlers
-      ;; to serialize metadata. This demo returns the schema structure only.
-      (and (= method :get) (= uri "/api/_schema"))
-      {:status 200
-       :headers {"Content-Type" "application/transit+json"}
-       :body (transit-write sample-schema)}
-
-      ;; GET /health - health check
-      (and (= method :get) (= uri "/health"))
-      {:status 200
-       :headers {"Content-Type" "text/plain"}
-       :body "OK"}
-
-      ;; Wrong method on /api - per spec: 405 with Allow header
-      (= uri "/api")
-      {:status 405
-       :headers {"Content-Type" "application/transit+json"
-                 "Allow" "POST"}
-       :body (transit-write {:errors [{:code :method-not-allowed
-                                       :reason (str "Method " (name method) " not allowed on /api")}]})}
-
-      ;; Wrong method on /api/_schema - per spec: 405 with Allow header
-      (= uri "/api/_schema")
-      {:status 405
-       :headers {"Content-Type" "application/transit+json"
-                 "Allow" "GET"}
-       :body (transit-write {:errors [{:code :method-not-allowed
-                                       :reason (str "Method " (name method) " not allowed on /api/_schema")}]})}
-
-      ;; Not found - per spec: 404
-      :else
-      {:status 404
-       :headers {"Content-Type" "application/transit+json"}
-       :body (transit-write {:errors [{:code :not-found
-                                       :reason (str "Endpoint " uri " not found")}]})})))
+(defn- health-handler
+  "Health check endpoint."
+  [request]
+  (when (and (= :get (:request-method request))
+             (= "/health" (:uri request)))
+    {:status 200
+     :headers {"Content-Type" "text/plain"}
+     :body "OK"}))
 
 ;;=============================================================================
 ;; Middleware
 ;;=============================================================================
 
 (def app
-  (-> api-handler
-      wrap-params
-      (wrap-cors :access-control-allow-origin [#".*"]
-                 :access-control-allow-methods [:get :post :options]
-                 :access-control-allow-headers ["Content-Type" "Accept"])))
+  (let [pull-handler (remote/make-handler api-fn)]
+    (-> (fn [request]
+          (or (health-handler request)
+              (pull-handler request)))
+        wrap-params
+        (wrap-cors :access-control-allow-origin [#".*"]
+                   :access-control-allow-methods [:get :post :options]
+                   :access-control-allow-headers ["Content-Type" "Accept"]))))
 
 ;;=============================================================================
 ;; Server

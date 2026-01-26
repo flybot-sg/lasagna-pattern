@@ -17,7 +17,7 @@ cmd=$(echo "$input" | jq -r '.tool_input.command // empty' 2>/dev/null || true)
 # Block git commands
 if [[ "$cmd" =~ ^git\  ]]; then
     cat << 'EOF'
-{"decision":"block","reason":"BLOCKED: Use jj, not git. Equivalents: jj status, jj diff, jj log, jj show, jj new (commit), jj describe -m (msg), jj git push"}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Use jj, not git. Equivalents: jj status, jj diff, jj log, jj show, jj new (commit), jj describe -m (msg), jj git push"}}
 EOF
     exit 0
 fi

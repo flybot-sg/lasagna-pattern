@@ -41,7 +41,7 @@ fi
 if [[ "$tool_name" == "Edit" || "$tool_name" == "Write" ]]; then
     [[ -f "$FLAG_FILE" ]] && exit 0
     cat << 'EOF'
-{"decision":"block","reason":"BLOCKED: Run /clojure first. This loads Clojure coding guidelines and REPL workflow."}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"Run /clojure first. This loads Clojure coding guidelines and REPL workflow."}}
 EOF
     exit 0
 fi

@@ -2,6 +2,12 @@
 
 A monorepo for pull-based pattern matching and data transformation tools in Clojure/ClojureScript.
 
+## Required Skills
+
+**Always use these skills when working on this project:**
+- `/clojure` - For all Clojure/ClojureScript development (planning, design, coding, idioms)
+- `/jj` - For all version control operations (this project uses Jujutsu instead of git)
+
 ## Build System
 
 All builds run from root via Babashka:
