@@ -184,8 +184,8 @@ bb test <component>  # Specific component
 
 ## Code Style
 
-- **Naming:** kebab-case, predicates end with `?`, side-effects end with `!`
-- **Threading:** prefer `->` `->>` `cond->` `cond->>`
+- **Naming:** kebab-case, predicates end with ?, side-effects end with !
+- **Threading:** prefer -> ->> cond-> cond->>
 - **Conditionals:** use `when-let`, `if-let`
 - **Docstrings:** every public var has a concise docstring
 

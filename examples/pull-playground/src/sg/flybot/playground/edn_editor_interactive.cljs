@@ -7,7 +7,8 @@
    - Parinfer integration for auto-balancing"
   (:require [sg.flybot.playground.edn-editor :as edn]
             [parinferish.core :as paren]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [malli.core :as m]))
 
 ;;=============================================================================
 ;; Parinfer Processing
@@ -73,31 +74,79 @@
         0))))
 
 ;;=============================================================================
-;; Autocomplete Helpers
+;; Autocomplete Helpers - Malli Schema Support
 ;;=============================================================================
 
+(def ^:private schema-cache (atom {}))
+
+(defn- ->malli-schema
+  "Convert schema form to Malli schema. Memoized to avoid repeated parsing."
+  [schema-form]
+  (if-let [cached (get @schema-cache schema-form)]
+    cached
+    (try
+      (let [schema (m/schema schema-form)]
+        (swap! schema-cache assoc schema-form schema)
+        schema)
+      (catch :default _ nil))))
+
+(defn- malli-map-keys
+  "Get all keyword keys from a Malli map schema."
+  [schema]
+  (when (and schema (= :map (m/type schema)))
+    (->> (m/entries schema)
+         (map first)
+         (filter keyword?)
+         set)))
+
+(defn- malli-get-child
+  "Get the child schema for a key in a Malli map schema.
+   Malli entries can be [key schema] or [key props schema]."
+  [schema key]
+  (when (and schema (= :map (m/type schema)))
+    (some (fn [entry]
+            (when (= (first entry) key)
+              (last entry)))  ; schema is always last element
+          (m/entries schema))))
+
+(defn- unwrap-schema
+  "Unwrap Malli schema wrappers and collection types to get inner map schema.
+   Handles :malli.core/val wrappers and :vector/:sequential collections."
+  [schema]
+  (when schema
+    (let [t (m/type schema)]
+      (case t
+        ;; Malli wraps entry values in :malli.core/val
+        :malli.core/val
+        (recur (first (m/children schema)))
+        ;; Collection types - unwrap to inner schema
+        (:vector :sequential :set :seqable)
+        (recur (first (m/children schema)))
+        ;; Return as-is for maps and other types
+        schema))))
+
 (defn- get-schema-at-path
-  "Navigate schema to get the sub-schema at given path.
-   Unwraps vectors (collections) to find the inner map schema."
-  [schema path]
-  (reduce
-   (fn [s key]
-     (when (map? s)
-       (let [v (get s key)]
-         (if (vector? v)
-           (first (filter map? v))  ; unwrap collection schema
-           v))))
-   schema
-   path))
+  "Navigate Malli schema to get the sub-schema at given path."
+  [schema-form path]
+  (when-let [schema (->malli-schema schema-form)]
+    (reduce
+     (fn [s key]
+       (when s
+         (some-> (malli-get-child s key)
+                 unwrap-schema)))
+     schema
+     path)))
 
 (defn- get-keys-at-path
   "Get available keyword keys at a path in the schema."
-  [schema path]
-  (let [sub-schema (get-schema-at-path schema path)]
-    (when (map? sub-schema)
-      (->> (keys sub-schema)
-           (filter keyword?)
-           set))))
+  [schema-form path]
+  (if (empty? path)
+    ;; Root level - get keys from the root schema
+    (when-let [schema (->malli-schema schema-form)]
+      (malli-map-keys schema))
+    ;; Nested path - navigate to the sub-schema
+    (when-let [sub-schema (get-schema-at-path schema-form path)]
+      (malli-map-keys sub-schema))))
 
 (defn- extract-context-path
   "Extract the current nesting path from text before cursor.
@@ -183,9 +232,7 @@
   (let [text (.-value textarea)
         cursor-pos (.-selectionStart textarea)]
     (when-let [{:keys [prefix start-pos]} (get-current-keyword-prefix text cursor-pos)]
-      (let [;; Get current path in the pattern structure
-            path (extract-context-path text start-pos)
-            ;; Get keys available at this path in the schema
+      (let [path (extract-context-path text start-pos)
             schema-keys (get-keys-at-path schema path)
             completions (when schema-keys
                           (vec (filter-completions schema-keys prefix)))]
@@ -247,13 +294,15 @@
    - :on-autocomplete - Callback (fn [autocomplete-data]) to show autocomplete
    - :on-autocomplete-hide - Callback to hide autocomplete
    - :on-autocomplete-select - Callback (fn [idx]) when item selected
-   - :on-autocomplete-move - Callback (fn [direction]) for arrow keys (+1/-1)"
+   - :on-autocomplete-move - Callback (fn [direction]) for arrow keys (+1/-1)
+   - :editor-id - Optional stable editor ID (for autocomplete coordination)"
   [{:keys [value on-change placeholder class parinfer-mode read-only? schema
            autocomplete on-autocomplete on-autocomplete-hide
-           on-autocomplete-select on-autocomplete-move]
+           on-autocomplete-select on-autocomplete-move editor-id]
     :or {parinfer-mode :indent}}]
-  (let [editor-id (str "edn-editor-" (random-uuid))]
-    [:div.edn-editor {:class class}
+  (let [editor-id (or editor-id (str "edn-editor-" (random-uuid)))]
+    [:div.edn-editor {:class class
+                      :data-editor-id editor-id}
      ;; Hidden textarea for actual editing
      [:textarea.edn-editor-input
       {:id editor-id
@@ -330,26 +379,37 @@
       [:pre.edn-editor-code
        (if (str/blank? value)
          [:span.edn-placeholder placeholder]
-         (edn/highlight-edn value))]]
-     ;; Autocomplete dropdown
-     (when autocomplete
-       (autocomplete-dropdown
-        {:autocomplete autocomplete
-         :on-select (fn [idx]
-                      (let [textarea (js/document.querySelector (str "#" editor-id))
-                            updated-ac (assoc autocomplete :selected idx)
-                            {:keys [text cursor-pos]} (apply-completion
-                                                       (.-value textarea)
-                                                       (.-selectionStart textarea)
-                                                       updated-ac)]
-                        (set! (.-value textarea) text)
-                        (set-cursor-position! textarea cursor-pos)
-                        (.focus textarea)
-                        (on-change text)
-                        (when on-autocomplete-hide (on-autocomplete-hide))))
-         :on-hover (fn [idx]
-                     (when on-autocomplete-select
-                       (on-autocomplete-select idx)))}))]))
+         (edn/highlight-edn value))]]]))
+
+(defn editor-autocomplete
+  "Render autocomplete dropdown for an editor. Call this OUTSIDE the edn-editor
+   container to avoid overflow clipping issues.
+
+   Props:
+   - :editor-id - The editor ID to target
+   - :autocomplete - Current autocomplete state
+   - :on-change - Callback when text changes
+   - :on-autocomplete-hide - Callback to hide autocomplete
+   - :on-autocomplete-select - Callback to update selected index"
+  [{:keys [editor-id autocomplete on-change on-autocomplete-hide on-autocomplete-select]}]
+  (when autocomplete
+    (autocomplete-dropdown
+     {:autocomplete autocomplete
+      :on-select (fn [idx]
+                   (let [textarea (js/document.querySelector (str "#" editor-id))
+                         updated-ac (assoc autocomplete :selected idx)
+                         {:keys [text cursor-pos]} (apply-completion
+                                                    (.-value textarea)
+                                                    (.-selectionStart textarea)
+                                                    updated-ac)]
+                     (set! (.-value textarea) text)
+                     (set-cursor-position! textarea cursor-pos)
+                     (.focus textarea)
+                     (when on-change (on-change text))
+                     (when on-autocomplete-hide (on-autocomplete-hide))))
+      :on-hover (fn [idx]
+                  (when on-autocomplete-select
+                    (on-autocomplete-select idx)))})))
 
 ;;=============================================================================
 ;; Schema Viewer with Hover Documentation

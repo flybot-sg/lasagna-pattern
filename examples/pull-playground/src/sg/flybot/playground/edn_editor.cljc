@@ -105,19 +105,20 @@
 ;;=============================================================================
 
 (defn- token-class
-  "Get CSS class for a token based on its type and depth."
+  "Get CSS class for a token based on its type and depth.
+   Returns a vector of class names for Replicant compatibility."
   [{:keys [type depth]}]
   (case type
-    :paren (str "token-paren " (get rainbow-colors (mod depth (count rainbow-colors))))
-    :comment "token-comment"
-    :string "token-string"
-    :keyword "token-keyword"
-    :variable "token-variable"
-    :number "token-number"
-    :literal "token-literal"
-    :symbol "token-symbol"
-    :whitespace "token-whitespace"
-    "token-plain"))
+    :paren ["token-paren" (get rainbow-colors (mod depth (count rainbow-colors)))]
+    :comment ["token-comment"]
+    :string ["token-string"]
+    :keyword ["token-keyword"]
+    :variable ["token-variable"]
+    :number ["token-number"]
+    :literal ["token-literal"]
+    :symbol ["token-symbol"]
+    :whitespace ["token-whitespace"]
+    ["token-plain"]))
 
 (defn highlight-edn
   "Render EDN text with syntax highlighting as hiccup.

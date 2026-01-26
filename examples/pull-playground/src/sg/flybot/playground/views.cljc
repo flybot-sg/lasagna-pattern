@@ -81,15 +81,16 @@
                 schema [:pre.schema-value (format-result-pretty schema)]
                 :else [:div.schema-empty "Click Fetch to load schema"])])]))
 
-(defn editor-panel [state dispatch!]
-  (let [{:keys [mode pattern-text data-text server-url loading? schema autocomplete]} state]
-    [:div.panel.editor-panel
+(defn data-panel
+  "Left panel: Data (local) or Schema (remote)"
+  [state dispatch!]
+  (let [{:keys [mode data-text server-url]} state]
+    [:div.panel.data-panel
      [:div.panel-header
-      [:h2 "Editor"]]
+      [:h2 (if (= mode :local) "Data" "Schema")]]
      [:div.panel-content
       (if (= mode :local)
         [:div.editor-section
-         [:label "Data (EDN)"]
          #?(:cljs (edn-i/edn-editor
                    {:value data-text
                     :placeholder "Enter EDN data to match against"
@@ -98,23 +99,38 @@
             :clj [:textarea {:value data-text
                              :placeholder "Enter EDN data to match against"}])]
         [:div.remote-sections
-         [:div.editor-section
+         [:div.editor-section.url-section
           [:label "Server URL"]
           [:input {:type "text"
                    :value server-url
                    :placeholder "http://localhost:8081/api"
                    :on {:input #(dispatch! [:update-server-url (.. % -target -value)])}}]]
-         (schema-display state dispatch!)])
-      [:div.editor-section
+         (schema-display state dispatch!)])]]))
+
+(def ^:private pattern-editor-id "pattern-editor")
+
+(defn pattern-results-panel
+  "Right panel: Pattern editor + Results stacked vertically"
+  [state dispatch!]
+  (let [{:keys [mode pattern-text loading? schema autocomplete result error]} state]
+    [:div.panel.pattern-results-panel
+     ;; Pattern section
+     [:div.pattern-section
+      [:div.section-header
        [:label "Pattern"]
+       [:button.execute-btn {:on {:click #(dispatch! :execute)}
+                             :disabled loading?}
+        (if loading? "Executing..." "Execute")]]
+      [:div.pattern-editor
        #?(:cljs (edn-i/edn-editor
                  {:value pattern-text
                   :placeholder "Enter a pull pattern, e.g. {:name ?n}"
                   :on-change #(dispatch! [:update-pattern %])
                   :parinfer-mode :indent
+                  :editor-id pattern-editor-id
                   ;; Pass schema for autocomplete in remote mode
                   :schema (when (= mode :remote) schema)
-                  ;; Autocomplete state and callbacks
+                  ;; Autocomplete state and callbacks (dropdown rendered separately below)
                   :autocomplete (when (= mode :remote) autocomplete)
                   :on-autocomplete #(dispatch! [:show-autocomplete %])
                   :on-autocomplete-hide #(dispatch! :hide-autocomplete)
@@ -122,33 +138,33 @@
                   :on-autocomplete-move #(dispatch! [:move-autocomplete %])})
           :clj [:textarea {:value pattern-text
                            :placeholder "Enter a pull pattern, e.g. {:name ?n}"}])]
-      [:button.execute-btn {:on {:click #(dispatch! :execute)}
-                            :disabled loading?}
-       (if loading? "Executing..." "Execute")]]]))
+      ;; Autocomplete dropdown - rendered outside editor to avoid overflow clipping
+      #?(:cljs (when (and (= mode :remote) autocomplete)
+                 (edn-i/editor-autocomplete
+                  {:editor-id pattern-editor-id
+                   :autocomplete autocomplete
+                   :on-change #(dispatch! [:update-pattern %])
+                   :on-autocomplete-hide #(dispatch! :hide-autocomplete)
+                   :on-autocomplete-select #(dispatch! [:select-autocomplete %])}))
+         :clj nil)]
+     ;; Results section
+     [:div.results-section
+      [:div.section-header
+       [:label "Results"]]
+      [:div.results-content
+       (cond
+         loading?
+         [:div.loading "Executing pattern..."]
 
-(defn results-panel [state _dispatch!]
-  (let [{:keys [result error loading?]} state]
-    [:div.panel.results-panel
-     [:div.panel-header
-      [:h2 "Results"]]
-     [:div.panel-content
-      (cond
-        loading?
-        [:div.loading "Executing pattern..."]
+         error
+         [:div.result-value.error error]
 
-        error
-        [:div.result-section
-         [:h3 "Error"]
-         [:div.result-value.error error]]
-
-        result
-        [:div.result-section
-         [:h3 "Variable Bindings"]
+         result
          [:div.result-value.success
-          (edn/highlight-edn (format-result-pretty result))]]
+          (edn/highlight-edn (format-result-pretty result))]
 
-        :else
-        [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]))
+         :else
+         [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]]))
 
 (defn examples-panel [state dispatch!]
   (let [selected (:selected-example state)]
@@ -176,9 +192,9 @@
   (let [{:keys [mode]} state]
     [:div.app-container
      (site-header state dispatch!)
-     [:div.main-content {:class (when (= mode :remote) "sidebar-collapsed")}
-      (editor-panel state dispatch!)
-      (results-panel state dispatch!)
+     [:div.main-content {:class (when (= mode :local) "with-sidebar")}
+      (data-panel state dispatch!)
+      (pattern-results-panel state dispatch!)
       (when (= mode :local)
         (examples-panel state dispatch!))]]))
 
