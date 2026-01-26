@@ -20,6 +20,8 @@
   (:require
    [sg.flybot.flybot-site.db :as db]
    [sg.flybot.pullable.collection :as coll]
+   [sg.flybot.pullable.malli]
+   [malli.core :as m]
    [robertluo.fun-map :refer [fnk life-cycle-map]]))
 
 ;;=============================================================================
@@ -38,38 +40,46 @@
 
 (def post-schema
   "Schema for a single post."
-  (with-meta
-    {:post/id :number
-     :post/title :string
-     :post/content :string
-     :post/author :string
-     :post/tags [:string]
-     :post/created-at :any
-     :post/updated-at :any}
-    {:doc "Blog post" :fields post-fields}))
+  (m/schema
+   [:map {:doc "Blog post" :fields post-fields}
+    [:post/id :int]
+    [:post/title :string]
+    [:post/content :string]
+    [:post/author :string]
+    [:post/tags [:vector :string]]
+    [:post/created-at :any]
+    [:post/updated-at :any]]))
 
 (def post-query
   "Query schema for post lookup (indexed fields)."
-  [:or
-   {:post/id :number}
-   {:post/author :string}])
+  (m/schema
+   [:or
+    [:map [:post/id :int]]
+    [:map [:post/author :string]]]))
 
 (def version-schema
   "Schema for a historical version of a post."
-  (with-meta
-    (merge post-schema
-           {:version/tx :number
-            :version/timestamp :any})
-    {:doc "Historical version of a post"
-     :fields (merge post-fields
-                    {:version/tx        {:doc "Transaction ID"}
-                     :version/timestamp {:doc "When this version was created"}})}))
+  (m/schema
+   [:map {:doc "Historical version of a post"
+          :fields (merge post-fields
+                         {:version/tx        {:doc "Transaction ID"}
+                          :version/timestamp {:doc "When this version was created"}})}
+    [:post/id :int]
+    [:post/title :string]
+    [:post/content :string]
+    [:post/author :string]
+    [:post/tags [:vector :string]]
+    [:post/created-at :any]
+    [:post/updated-at :any]
+    [:version/tx :int]
+    [:version/timestamp :any]]))
 
 (def schema
-  "API schema - noun-only, single source of truth."
+  "API schema - noun-only, single source of truth.
+   Top-level is a plain map so auth module can assoc :me key."
   (with-meta
-    {:posts [:union [post-schema] {post-query post-schema}]
-     :posts/history {post-query [version-schema]}}
+    {:posts (m/schema [:or [:vector post-schema] [:map-of post-query post-schema]])
+     :posts/history (m/schema [:map-of post-query [:vector version-schema]])}
     {:doc "Flybot Blog API"
      :fields {:posts         {:doc "Blog posts collection"}
               :posts/history {:doc "Post version history"}}
@@ -80,10 +90,11 @@
                           :delete "Returns true on success"}}}))
 
 (def viewer-schema
-  "Read-only schema for anonymous and non-owner users."
+  "Read-only schema for anonymous and non-owner users.
+   Top-level is a plain map so auth module can assoc :me key."
   (with-meta
     {:posts :any
-     :posts/history {post-query [version-schema]}}
+     :posts/history (m/schema [:map-of post-query [:vector version-schema]])}
     {:doc "Flybot Blog API (read-only)"
      :fields {:posts         {:doc "Blog posts (read-only)"}
               :posts/history {:doc "Post version history"}}}))

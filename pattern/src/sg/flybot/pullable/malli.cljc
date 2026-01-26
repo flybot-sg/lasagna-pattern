@@ -48,16 +48,28 @@
 
 ;; CLJ: runtime detection (optional dependency)
 #?(:clj
-   (let [available? (try (require 'malli.core) true (catch Exception _ false))]
-     (when available?
-       (schema/register-schema-rule!
-        (make-malli-rule
-         @(requiring-resolve 'malli.core/schema?)
-         @(requiring-resolve 'malli.core/type)
-         @(requiring-resolve 'malli.core/children)
-         @(requiring-resolve 'malli.core/entries))))))
+   (let [malli-available? (try (require 'malli.core) true (catch Exception _ false))]
+     (when malli-available?
+       (let [m-schema? @(requiring-resolve 'malli.core/schema?)
+             m-form @(requiring-resolve 'malli.core/form)
+             schema-class (Class/forName "malli.core.Schema")]
+         ;; Register schema rule for pattern matching
+         (schema/register-schema-rule!
+          (make-malli-rule
+           m-schema?
+           @(requiring-resolve 'malli.core/type)
+           @(requiring-resolve 'malli.core/children)
+           @(requiring-resolve 'malli.core/entries)))
+         ;; Extend Wireable for serialization if collection is available
+         (when (try (require 'sg.flybot.pullable.collection) true (catch Exception _ false))
+           (let [wireable-protocol @(requiring-resolve 'sg.flybot.pullable.collection/Wireable)]
+             (extend schema-class
+               wireable-protocol
+               {:->wire (fn [this] (m-form this))})))))))
 
 ;; CLJS: malli required at compile time via ns :require
+;; Note: Wireable extension for CLJS should be done in the consuming project
+;; that has both malli and collection as dependencies
 #?(:cljs
    (schema/register-schema-rule!
     (make-malli-rule m/schema? m/type m/children m/entries)))

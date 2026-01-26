@@ -6,7 +6,9 @@
             [ring.middleware.params :refer [wrap-params]]
             [cognitect.transit :as t]
             [clojure.string :as str]
-            [sg.flybot.pullable.impl :as impl])
+            [sg.flybot.pullable.impl :as impl]
+            [sg.flybot.pullable.malli]
+            [malli.core :as m])
   (:import [java.io ByteArrayInputStream ByteArrayOutputStream]))
 
 ;;=============================================================================
@@ -41,36 +43,41 @@
 (def sample-schema
   "Schema describing the sample data structure with documentation metadata.
    Per spec section 7.3, uses :doc, :fields, :version, :example, :deprecated."
-  ^{:version "1.0.0"
-    :doc "Sample API for Pull Pattern Playground"
-    :fields {:users {:doc "User accounts"
-                     :fields {:id    {:doc "Unique identifier" :example 1}
-                              :name  {:doc "Display name" :example "Alice"}
-                              :email {:doc "Email address" :example "alice@example.com"}
-                              :role  {:doc "User role" :example :admin}}}
-             :posts {:doc "Blog posts"
-                     :operations {:list "Returns all posts"
-                                  :get  "Lookup by {:id n}"}
-                     :fields {:id     {:doc "Post identifier" :example 1}
-                              :title  {:doc "Post title" :example "Hello World"}
-                              :author {:doc "Author name" :example "Alice"}
-                              :tags   {:doc "Post tags" :example ["intro" "welcome"]}}}
-             :config {:doc "Application configuration"
-                      :fields {:version  {:doc "App version"}
-                               :features {:doc "Feature flags"
-                                          :fields {:dark-mode     {:doc "Dark mode enabled"}
-                                                   :notifications {:doc "Notifications enabled"}}}}}}}
-  {:users [{:id :number
-            :name :string
-            :email :string
-            :role :keyword}]
-   :posts [{:id :number
-            :title :string
-            :author :string
-            :tags [:string]}]
-   :config {:version :string
-            :features {:dark-mode :boolean
-                       :notifications :boolean}}})
+  (m/schema
+   [:map {:version "1.0.0"
+          :doc "Sample API for Pull Pattern Playground"
+          :fields {:users {:doc "User accounts"
+                           :fields {:id    {:doc "Unique identifier" :example 1}
+                                    :name  {:doc "Display name" :example "Alice"}
+                                    :email {:doc "Email address" :example "alice@example.com"}
+                                    :role  {:doc "User role" :example :admin}}}
+                   :posts {:doc "Blog posts"
+                           :operations {:list "Returns all posts"
+                                        :get  "Lookup by {:id n}"}
+                           :fields {:id     {:doc "Post identifier" :example 1}
+                                    :title  {:doc "Post title" :example "Hello World"}
+                                    :author {:doc "Author name" :example "Alice"}
+                                    :tags   {:doc "Post tags" :example ["intro" "welcome"]}}}
+                   :config {:doc "Application configuration"
+                            :fields {:version  {:doc "App version"}
+                                     :features {:doc "Feature flags"
+                                                :fields {:dark-mode     {:doc "Dark mode enabled"}
+                                                         :notifications {:doc "Notifications enabled"}}}}}}}
+    [:users [:vector [:map
+                      [:id :int]
+                      [:name :string]
+                      [:email :string]
+                      [:role :keyword]]]]
+    [:posts [:vector [:map
+                      [:id :int]
+                      [:title :string]
+                      [:author :string]
+                      [:tags [:vector :string]]]]]
+    [:config [:map
+              [:version :string]
+              [:features [:map
+                          [:dark-mode :boolean]
+                          [:notifications :boolean]]]]]]))
 
 ;;=============================================================================
 ;; API Handler
@@ -79,7 +86,7 @@
 (defn- handle-pull [body]
   (try
     (let [{:keys [pattern]} (transit-read body)
-          matcher (impl/compile-pattern pattern)
+          matcher (impl/compile-pattern pattern {:schema sample-schema})
           result (matcher (impl/vmr sample-data))]
       (if (impl/failure? result)
         ;; Per spec: match-failure → 422 Unprocessable Content

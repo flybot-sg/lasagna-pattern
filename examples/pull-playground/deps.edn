@@ -6,7 +6,8 @@
         ring/ring-core {:mvn/version "1.12.2"}
         ring-cors/ring-cors {:mvn/version "0.1.13"}
         com.cognitect/transit-clj {:mvn/version "1.0.333"}
-        parinferish/parinferish {:mvn/version "0.8.0"}}
+        parinferish/parinferish {:mvn/version "0.8.0"}
+        metosin/malli {:mvn/version "0.16.4"}}
  :aliases
  {:dev {:extra-paths ["dev"]
         :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}

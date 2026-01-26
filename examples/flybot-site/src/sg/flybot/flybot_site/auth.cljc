@@ -25,7 +25,8 @@
    2. This module selects schema based on email"
   (:require
    [sg.flybot.flybot-site.api :as api]
-   [sg.flybot.flybot-site.db :as db]))
+   [sg.flybot.flybot-site.db :as db]
+   [malli.core :as m]))
 
 ;;=============================================================================
 ;; Role-Based API
@@ -38,10 +39,12 @@
 
 (def ^:private me-schema
   "Schema for the :me endpoint."
-  {:email :string
-   :name :string
-   :picture :string
-   :role :keyword})
+  (m/schema
+   [:map
+    [:email :string]
+    [:name :string]
+    [:picture :string]
+    [:role :keyword]]))
 
 (defn make-api
   "Create API function with role-based schema selection.
@@ -104,14 +107,14 @@
      (= (:posts schema) :any)])  ;; viewer-schema uses :any for posts
   ;=> [true :viewer true]
 
-  ;; Owner → full schema with :me
+  ;; Owner → full schema with :me (Malli schema for :posts)
   (let [{:keys [data schema]} (api-fn {:session {:user-email "owner@example.com"
                                                  :user-name "Owner"
                                                  :user-picture "http://example.com/owner.jpg"}})]
     [(contains? schema :me)
      (:role (:me data))
      (:picture (:me data))
-     (= (:posts schema) [:union [api/post-schema] {api/post-query api/post-schema}])])
+     (malli.core/schema? (:posts schema))])
   ;=> [true :owner "http://example.com/owner.jpg" true]
 
   ;; All users can read posts

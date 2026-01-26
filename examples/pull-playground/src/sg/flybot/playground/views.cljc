@@ -4,6 +4,7 @@
    Views emit events by calling (dispatch! :event) or (dispatch! [:event arg])."
   (:require [sg.flybot.playground.examples :as examples]
             [sg.flybot.playground.edn-editor :as edn]
+            [clojure.string :as str]
             #?(:cljs [sg.flybot.playground.edn-editor-interactive :as edn-i])))
 
 ;;=============================================================================
@@ -11,11 +12,16 @@
 ;;=============================================================================
 
 (defn- format-result
-  "Format a Clojure value for display"
+  "Format a Clojure value for display (single line)"
   [v]
   (if (nil? v)
     "nil"
     (pr-str v)))
+
+(defn- format-result-pretty
+  "Format a Clojure value with pretty-printing"
+  [v]
+  (str/trim (edn/pretty-str v)))
 
 ;;=============================================================================
 ;; Components
@@ -37,13 +43,8 @@
   [:svg {:width "16" :height "16" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
    [:path {:d "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"}]])
 
-(defn- sidebar-icon []
-  [:svg {:width "16" :height "16" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
-   [:rect {:x "3" :y "3" :width "18" :height "18" :rx "2"}]
-   [:line {:x1 "15" :y1 "3" :x2 "15" :y2 "21"}]])
-
 (defn site-header [state dispatch!]
-  (let [{:keys [mode sidebar-collapsed?]} state]
+  (let [{:keys [mode]} state]
     [:header.site-header
      [:h1 "Pull Pattern Playground"]
      [:div.header-right
@@ -54,11 +55,6 @@
        [:button {:class (when (= mode :remote) "active")
                  :on {:click #(dispatch! [:set-mode :remote])}}
         "Remote"]]
-      (when (= mode :remote)
-        [:button.sidebar-toggle {:title (if sidebar-collapsed? "Show sidebar" "Hide sidebar")
-                                 :class (when sidebar-collapsed? "collapsed")
-                                 :on {:click #(dispatch! :toggle-sidebar)}}
-         (sidebar-icon)])
       [:button.theme-toggle {:title "Toggle theme"
                              :on {:click #?(:clj identity
                                             :cljs #(js/sg.flybot.playground.core.toggle_theme_BANG_))}}
@@ -74,31 +70,23 @@
                                  :disabled schema-loading?}
        (if schema-loading? "Loading..." "Fetch")]]
      #?(:cljs (edn-i/schema-viewer
-               {:value (when schema (format-result schema))
+               {:value (when schema (format-result-pretty schema))
+                :schema schema  ; Pass original schema for metadata lookup
                 :loading? schema-loading?
                 :error schema-error
                 :placeholder "Click Fetch to load schema"})
         :clj [:div.schema-content
               (cond
                 schema-error [:div.schema-error schema-error]
-                schema [:pre.schema-value (format-result schema)]
+                schema [:pre.schema-value (format-result-pretty schema)]
                 :else [:div.schema-empty "Click Fetch to load schema"])])]))
 
 (defn editor-panel [state dispatch!]
-  (let [{:keys [mode pattern-text data-text server-url loading?]} state]
+  (let [{:keys [mode pattern-text data-text server-url loading? schema autocomplete]} state]
     [:div.panel.editor-panel
      [:div.panel-header
       [:h2 "Editor"]]
      [:div.panel-content
-      [:div.editor-section
-       [:label "Pattern"]
-       #?(:cljs (edn-i/edn-editor
-                 {:value pattern-text
-                  :placeholder "Enter a pull pattern, e.g. {:name ?n}"
-                  :on-change #(dispatch! [:update-pattern %])
-                  :parinfer-mode :indent})
-          :clj [:textarea {:value pattern-text
-                           :placeholder "Enter a pull pattern, e.g. {:name ?n}"}])]
       (if (= mode :local)
         [:div.editor-section
          [:label "Data (EDN)"]
@@ -117,6 +105,23 @@
                    :placeholder "http://localhost:8081/api"
                    :on {:input #(dispatch! [:update-server-url (.. % -target -value)])}}]]
          (schema-display state dispatch!)])
+      [:div.editor-section
+       [:label "Pattern"]
+       #?(:cljs (edn-i/edn-editor
+                 {:value pattern-text
+                  :placeholder "Enter a pull pattern, e.g. {:name ?n}"
+                  :on-change #(dispatch! [:update-pattern %])
+                  :parinfer-mode :indent
+                  ;; Pass schema for autocomplete in remote mode
+                  :schema (when (= mode :remote) schema)
+                  ;; Autocomplete state and callbacks
+                  :autocomplete (when (= mode :remote) autocomplete)
+                  :on-autocomplete #(dispatch! [:show-autocomplete %])
+                  :on-autocomplete-hide #(dispatch! :hide-autocomplete)
+                  :on-autocomplete-select #(dispatch! [:select-autocomplete %])
+                  :on-autocomplete-move #(dispatch! [:move-autocomplete %])})
+          :clj [:textarea {:value pattern-text
+                           :placeholder "Enter a pull pattern, e.g. {:name ?n}"}])]
       [:button.execute-btn {:on {:click #(dispatch! :execute)}
                             :disabled loading?}
        (if loading? "Executing..." "Execute")]]]))
@@ -140,7 +145,7 @@
         [:div.result-section
          [:h3 "Variable Bindings"]
          [:div.result-value.success
-          (edn/highlight-edn (format-result result))]]
+          (edn/highlight-edn (format-result-pretty result))]]
 
         :else
         [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]))
@@ -168,14 +173,13 @@
            [:span description]])]]]]))
 
 (defn app-view [state dispatch!]
-  (let [{:keys [mode sidebar-collapsed?]} state
-        hide-sidebar? (and (= mode :remote) sidebar-collapsed?)]
+  (let [{:keys [mode]} state]
     [:div.app-container
      (site-header state dispatch!)
-     [:div.main-content {:class (when hide-sidebar? "sidebar-collapsed")}
+     [:div.main-content {:class (when (= mode :remote) "sidebar-collapsed")}
       (editor-panel state dispatch!)
       (results-panel state dispatch!)
-      (when-not hide-sidebar?
+      (when (= mode :local)
         (examples-panel state dispatch!))]]))
 
 ;;=============================================================================

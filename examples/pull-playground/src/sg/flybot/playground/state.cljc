@@ -21,7 +21,9 @@
    :schema nil            ; Remote server schema (remote mode only)
    :schema-loading? false
    :schema-error nil
-   :sidebar-collapsed? false})  ; Hide examples panel (remote mode)
+   :sidebar-collapsed? false  ; Hide examples panel (remote mode)
+   ;; Autocomplete state
+   :autocomplete nil})    ; {:completions [...] :selected 0 :prefix ":" :x :y}
 
 ;;=============================================================================
 ;; State Transitions (pure functions)
@@ -82,6 +84,25 @@
 
 (defn toggle-sidebar [state]
   {:state (update state :sidebar-collapsed? not)})
+
+;;=============================================================================
+;; Autocomplete
+;;=============================================================================
+
+(defn show-autocomplete [state autocomplete-data]
+  {:state (assoc state :autocomplete autocomplete-data)})
+
+(defn hide-autocomplete [state]
+  {:state (assoc state :autocomplete nil)})
+
+(defn select-autocomplete [state idx]
+  {:state (assoc-in state [:autocomplete :selected] idx)})
+
+(defn move-autocomplete-selection [state direction]
+  (let [{:keys [completions selected]} (:autocomplete state)
+        n (count completions)
+        new-idx (mod (+ selected direction) n)]
+    {:state (assoc-in state [:autocomplete :selected] new-idx)}))
 
 ;;=============================================================================
 ;; Tests

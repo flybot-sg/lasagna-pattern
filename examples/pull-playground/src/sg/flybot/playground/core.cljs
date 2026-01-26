@@ -29,7 +29,12 @@
    :fetch-schema          (fn [s _] (state/fetch-schema s))
    :fetch-schema-success  (fn [s schema] (state/fetch-schema-success s schema))
    :fetch-schema-error    (fn [s error] (state/fetch-schema-error s error))
-   :toggle-sidebar        (fn [s _] (state/toggle-sidebar s))})
+   :toggle-sidebar        (fn [s _] (state/toggle-sidebar s))
+   ;; Autocomplete
+   :show-autocomplete     (fn [s data] (state/show-autocomplete s data))
+   :hide-autocomplete     (fn [s _] (state/hide-autocomplete s))
+   :select-autocomplete   (fn [s idx] (state/select-autocomplete s idx))
+   :move-autocomplete     (fn [s dir] (state/move-autocomplete-selection s dir))})
 
 (defn- apply-handler [state event]
   (let [[event-type & args] (if (vector? event) event [event])

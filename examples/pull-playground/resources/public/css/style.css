@@ -500,7 +500,7 @@ body {
   border-color: var(--accent);
 }
 
-/* Hidden textarea for input */
+/* Hidden textarea for input - text is transparent, overlay shows through */
 .edn-editor-input {
   position: absolute;
   top: 0;
@@ -510,8 +510,10 @@ body {
   padding: 0.75rem;
   margin: 0;
   border: none;
-  background: transparent;
+  background: none !important;
+  background-color: transparent !important;
   color: transparent;
+  -webkit-text-fill-color: transparent;
   caret-color: var(--text);
   font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
   font-size: 0.875rem;
@@ -681,6 +683,133 @@ body {
 
 .schema-viewer .schema-error {
   color: var(--error);
+}
+
+/* Schema tokens are hoverable */
+.schema-viewer .token-keyword {
+  cursor: help;
+  border-radius: 2px;
+  transition: background-color 0.15s;
+}
+
+.schema-viewer .token-keyword:hover {
+  background-color: var(--accent);
+  color: white;
+}
+
+[data-theme="dark"] .schema-viewer .token-keyword:hover {
+  background-color: var(--accent);
+}
+
+/*=============================================================================
+ * Schema Tooltip
+ *============================================================================*/
+
+.schema-tooltip {
+  position: fixed;
+  z-index: 1000;
+  max-width: 320px;
+  padding: 0.75rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+[data-theme="dark"] .schema-tooltip {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.tooltip-header {
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-weight: 600;
+  color: var(--accent);
+  margin-bottom: 0.25rem;
+}
+
+.tooltip-type {
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.tooltip-doc {
+  color: var(--text);
+  margin-bottom: 0.5rem;
+}
+
+.tooltip-example {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-bottom: 0.25rem;
+}
+
+.tooltip-example code {
+  background: var(--code-bg);
+  padding: 0.125rem 0.25rem;
+  border-radius: 3px;
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+}
+
+.tooltip-deprecated {
+  color: var(--warning);
+  font-size: 0.75rem;
+  margin-top: 0.5rem;
+  padding: 0.25rem 0.5rem;
+  background: rgba(255, 193, 7, 0.1);
+  border-radius: 4px;
+}
+
+.tooltip-since {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.tooltip-label {
+  font-weight: 500;
+}
+
+/*=============================================================================
+ * Autocomplete Dropdown
+ *============================================================================*/
+
+.autocomplete-dropdown {
+  position: fixed;
+  z-index: 1000;
+  min-width: 150px;
+  max-width: 300px;
+  max-height: 200px;
+  overflow-y: auto;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;
+  font-size: 0.8125rem;
+}
+
+[data-theme="dark"] .autocomplete-dropdown {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.autocomplete-item {
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  color: var(--accent);
+  transition: background-color 0.1s;
+}
+
+.autocomplete-item:hover,
+.autocomplete-item.selected {
+  background: var(--bg);
+}
+
+.autocomplete-item.selected {
+  background: var(--accent);
+  color: white;
 }
 
 /*=============================================================================

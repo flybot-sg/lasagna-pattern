@@ -9,7 +9,8 @@
         clj-commons/clj-yaml {:mvn/version "1.0.29"}
         ring-oauth2/ring-oauth2 {:mvn/version "0.2.0"}
         clj-http/clj-http {:mvn/version "3.13.0"}
-        cheshire/cheshire {:mvn/version "5.13.0"}}
+        cheshire/cheshire {:mvn/version "5.13.0"}
+        metosin/malli {:mvn/version "0.16.4"}}
  :aliases
  {:dev {:extra-paths ["dev" "test"]
         :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
