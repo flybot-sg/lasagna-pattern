@@ -40,7 +40,7 @@
    {:name "Indexed Lookup"
     :description "Look up by key pattern (ILookup)"
     :pattern "{:users {{:id 2} ?user}}"
-    :data "{:users [{:id 1 :name \"A\"} {:id 2 :name \"B\"} {:id 3 :name \"C\"}]}"}])
+    :data "{:users {{:id 1} {:name \"A\"} {:id 2} {:name \"B\"} {:id 3} {:name \"C\"}}}"}])
 
 (def syntax-reference
   [{:syntax "?x" :description "Bind value to x"}

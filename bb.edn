@@ -4,13 +4,24 @@
              [clojure.string :as str]]
 
   ;; Discover components: directories with deps.edn (excluding hidden dirs)
+  ;; Scans root level and examples/ subdirectory
   -components
-  {:task (vec (for [dir (fs/list-dir ".")
-                    :let [dir-name (str (fs/file-name dir))]
-                    :when (and (fs/directory? dir)
-                               (not (str/starts-with? dir-name "."))
-                               (fs/exists? (fs/file dir "deps.edn")))]
-                dir-name))}
+  {:task (vec (concat
+               ;; Root level components
+               (for [dir (fs/list-dir ".")
+                     :let [dir-name (str (fs/file-name dir))]
+                     :when (and (fs/directory? dir)
+                                (not (str/starts-with? dir-name "."))
+                                (not= dir-name "examples")
+                                (fs/exists? (fs/file dir "deps.edn")))]
+                 dir-name)
+               ;; Examples subdirectory
+               (when (fs/exists? "examples")
+                 (for [dir (fs/list-dir "examples")
+                       :let [path (str "examples/" (fs/file-name dir))]
+                       :when (and (fs/directory? dir)
+                                  (fs/exists? (fs/file path "deps.edn")))]
+                   path))))}
 
   list
   {:doc "List all components"
@@ -26,10 +37,13 @@
            (doseq [c components]
              (println (str "\n=== Testing " c " (Clojure) ==="))
              (clojure {:dir c} "-X:dev:test")
-             ;; Run ClojureScript tests if shadow-cljs.edn exists
-             (when (fs/exists? (fs/file c "shadow-cljs.edn"))
-               (println (str "\n=== Testing " c " (ClojureScript) ==="))
-               (clojure {:dir c} "-M:cljs" "-m" "shadow.cljs.devtools.cli" "compile" "test"))))}
+             ;; Run ClojureScript tests if shadow-cljs.edn has a :test build
+             (let [shadow-file (fs/file c "shadow-cljs.edn")]
+               (when (fs/exists? shadow-file)
+                 (let [shadow-config (read-string (slurp shadow-file))]
+                   (when (get-in shadow-config [:builds :test])
+                     (println (str "\n=== Testing " c " (ClojureScript) ==="))
+                     (clojure {:dir c} "-M:cljs" "-m" "shadow.cljs.devtools.cli" "compile" "test")))))))}
 
   dev
   {:doc "Start REPL: bb dev <component>"

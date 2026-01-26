@@ -8,6 +8,27 @@ A monorepo for pull-based pattern matching and data transformation tools in Cloj
 - `/clojure` - For all Clojure/ClojureScript development (planning, design, coding, idioms)
 - `/jj` - For all version control operations (this project uses Jujutsu instead of git)
 
+## Workspace Workflow
+
+**Always use jj workspaces for coding tasks:**
+
+1. **Before coding** - Create isolated workspace:
+   ```bash
+   jj workspace add <task-name> /tmp/pull2-<task-name>
+   cd /tmp/pull2-<task-name>
+   ```
+
+2. **Do the work** - Edit files, run tests in the workspace
+
+3. **After finishing** - Commit, merge to main, cleanup:
+   ```bash
+   jj describe -m "Commit message"
+   jj bookmark set main -r @
+   cd /Users/tianluo/workspace/pull2
+   jj workspace forget <task-name>
+   rm -rf /tmp/pull2-<task-name>
+   ```
+
 ## Build System
 
 All builds run from root via Babashka:

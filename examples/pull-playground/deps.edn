@@ -1,6 +1,7 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.12.0"}
         local/pattern {:local/root "../../pattern"}
+        local/collection {:local/root "../../collection"}
         local/remote {:local/root "../../remote"}
         http-kit/http-kit {:mvn/version "2.8.0"}
         ring/ring-core {:mvn/version "1.12.2"}

@@ -5,6 +5,7 @@
             [ring.middleware.cors :refer [wrap-cors]]
             [ring.middleware.params :refer [wrap-params]]
             [sg.flybot.pullable.remote :as remote]
+            [sg.flybot.pullable.collection :as coll]
             [sg.flybot.pullable.malli]
             [malli.core :as m]))
 
@@ -12,13 +13,21 @@
 ;; Sample Data
 ;;=============================================================================
 
+(def users-source
+  (coll/atom-source
+   {:initial [{:id 1 :name "Alice" :email "alice@example.com" :role :admin}
+              {:id 2 :name "Bob" :email "bob@example.com" :role :user}
+              {:id 3 :name "Carol" :email "carol@example.com" :role :user}]}))
+
+(def posts-source
+  (coll/atom-source
+   {:initial [{:id 1 :title "Hello World" :author "Alice" :tags ["intro" "welcome"]}
+              {:id 2 :title "Pattern Matching" :author "Bob" :tags ["tutorial" "patterns"]}
+              {:id 3 :title "Advanced Topics" :author "Alice" :tags ["advanced"]}]}))
+
 (def sample-data
-  {:users [{:id 1 :name "Alice" :email "alice@example.com" :role :admin}
-           {:id 2 :name "Bob" :email "bob@example.com" :role :user}
-           {:id 3 :name "Carol" :email "carol@example.com" :role :user}]
-   :posts [{:id 1 :title "Hello World" :author "Alice" :tags ["intro" "welcome"]}
-           {:id 2 :title "Pattern Matching" :author "Bob" :tags ["tutorial" "patterns"]}
-           {:id 3 :title "Advanced Topics" :author "Alice" :tags ["advanced"]}]
+  {:users  (coll/collection users-source)
+   :posts  (coll/collection posts-source)
    :config {:version "1.0.0"
             :features {:dark-mode true :notifications false}}})
 
