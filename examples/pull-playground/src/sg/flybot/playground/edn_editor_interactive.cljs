@@ -276,6 +276,49 @@
         (str kw)])]))
 
 ;;=============================================================================
+;; Schema Hover Tooltips
+;;=============================================================================
+
+(defonce tooltip-state (atom nil))
+
+(defn- show-tooltip! [token element schema]
+  (when-let [kw (edn/keyword-from-token token)]
+    (when-let [doc-info (edn/lookup-field-doc schema kw)]
+      (let [rect (.getBoundingClientRect element)]
+        (reset! tooltip-state
+                {:token token
+                 :doc doc-info
+                 :x (.-left rect)
+                 :y (+ (.-bottom rect) 4)})))))
+
+(defn- hide-tooltip! []
+  (reset! tooltip-state nil))
+
+(defn- tooltip-view []
+  (when-let [{:keys [token doc x y]} @tooltip-state]
+    (let [{:keys [doc example deprecated type since]} doc]
+      [:div.schema-tooltip
+       {:style {:left (str x "px")
+                :top (str y "px")}}
+       [:div.tooltip-header token]
+       (when type
+         [:div.tooltip-type (pr-str type)])
+       (when doc
+         [:div.tooltip-doc doc])
+       (when example
+         [:div.tooltip-example
+          [:span.tooltip-label "Example: "]
+          [:code (pr-str example)]])
+       (when deprecated
+         [:div.tooltip-deprecated
+          (if (string? deprecated)
+            (str "⚠️ Deprecated: " deprecated)
+            "⚠️ Deprecated")])
+       (when since
+         [:div.tooltip-since
+          [:span.tooltip-label "Since: "] since])])))
+
+;;=============================================================================
 ;; Editor Component
 ;;=============================================================================
 
@@ -421,47 +464,8 @@
                     (on-autocomplete-select idx)))})))
 
 ;;=============================================================================
-;; Schema Viewer with Hover Documentation
+;; Schema Viewer
 ;;=============================================================================
-
-(defonce tooltip-state (atom nil))
-
-(defn- show-tooltip! [token element schema]
-  (when-let [kw (edn/keyword-from-token token)]
-    (when-let [doc-info (edn/lookup-field-doc schema kw)]
-      (let [rect (.getBoundingClientRect element)]
-        (reset! tooltip-state
-                {:token token
-                 :doc doc-info
-                 :x (.-left rect)
-                 :y (+ (.-bottom rect) 4)})))))
-
-(defn- hide-tooltip! []
-  (reset! tooltip-state nil))
-
-(defn- tooltip-view []
-  (when-let [{:keys [token doc x y]} @tooltip-state]
-    (let [{:keys [doc example deprecated type since]} doc]
-      [:div.schema-tooltip
-       {:style {:left (str x "px")
-                :top (str y "px")}}
-       [:div.tooltip-header token]
-       (when type
-         [:div.tooltip-type (pr-str type)])
-       (when doc
-         [:div.tooltip-doc doc])
-       (when example
-         [:div.tooltip-example
-          [:span.tooltip-label "Example: "]
-          [:code (pr-str example)]])
-       (when deprecated
-         [:div.tooltip-deprecated
-          (if (string? deprecated)
-            (str "⚠️ Deprecated: " deprecated)
-            "⚠️ Deprecated")])
-       (when since
-         [:div.tooltip-since
-          [:span.tooltip-label "Since: "] since])])))
 
 (defn schema-viewer
   "Read-only schema viewer with syntax highlighting.

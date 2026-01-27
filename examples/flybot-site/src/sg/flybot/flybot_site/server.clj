@@ -85,6 +85,29 @@
           (resp/content-type "application/json")))))
 
 ;;=============================================================================
+;; CORS
+;;=============================================================================
+
+(defn- wrap-cors
+  "Add CORS headers for local development.
+   Allows all origins and common HTTP methods."
+  [handler]
+  (fn [request]
+    (let [origin (get-in request [:headers "origin"] "*")]
+      (if (= :options (:request-method request))
+        ;; Preflight request
+        {:status 204
+         :headers {"Access-Control-Allow-Origin" origin
+                   "Access-Control-Allow-Methods" "GET, POST, PUT, DELETE, OPTIONS"
+                   "Access-Control-Allow-Headers" "Content-Type, Accept, Authorization"
+                   "Access-Control-Allow-Credentials" "true"
+                   "Access-Control-Max-Age" "86400"}}
+        ;; Normal request - add CORS headers to response
+        (-> (handler request)
+            (assoc-in [:headers "Access-Control-Allow-Origin"] origin)
+            (assoc-in [:headers "Access-Control-Allow-Credentials"] "true"))))))
+
+;;=============================================================================
 ;; Error Handling
 ;;=============================================================================
 
@@ -157,7 +180,35 @@
                                 :client-secret google-client-secret
                                 :base-url base-url})
        (wrap-session {:store (memory-store)})
+       wrap-cors
        wrap-error-handler)))
+
+;;=============================================================================
+;; Port Selection
+;;=============================================================================
+
+(defn- try-start-server
+  "Try to start http-kit on port. Returns [stop-fn port] on success, nil on failure."
+  [app port]
+  (try
+    [(http-kit/run-server app {:port port}) port]
+    (catch java.net.BindException _
+      nil)))
+
+(defn- start-server-with-retry
+  "Start server, trying ports from start-port up to start-port + max-attempts.
+   Returns [stop-fn actual-port] or throws if all ports fail."
+  [app start-port max-attempts]
+  (loop [port start-port
+         attempts 0]
+    (if (>= attempts max-attempts)
+      (throw (ex-info "Could not find available port"
+                      {:start-port start-port :attempts max-attempts}))
+      (if-let [result (try-start-server app port)]
+        result
+        (do
+          (log/debug "Port" port "in use, trying" (inc port))
+          (recur (inc port) (inc attempts)))))))
 
 ;;=============================================================================
 ;; Server Lifecycle
@@ -226,19 +277,22 @@
            app (make-app api-fn {:google-client-id google-client-id
                                  :google-client-secret google-client-secret
                                  :base-url base-url
-                                 :allowed-email-pattern allowed-email-pattern})]
-       (reset! server (http-kit/run-server app {:port port})))
-     (log/log-startup port)
-     (println (str "Blog server started on port " port))
-     (println (str "  POST http://localhost:" port "/api - Pull endpoint"))
-     (println (str "  GET  http://localhost:" port "/api/_schema - Schema"))
-     (when google-client-id
-       (println (str "  GET  http://localhost:" port "/oauth2/google - Google sign-in")))
-     (when allowed-email-pattern
-       (println (str "  Allowed emails: " allowed-email-pattern)))
-     (when (seq owner-emails)
-       (println (str "  Owners: " (str/join ", " owner-emails))))
-     {:port port})))
+                                 :allowed-email-pattern allowed-email-pattern})
+           [stop-fn actual-port] (start-server-with-retry app port 10)]
+       (reset! server stop-fn)
+       (when (not= port actual-port)
+         (log/info "Requested port" port "was in use, using" actual-port))
+       (log/log-startup actual-port)
+       (println (str "Blog server started on port " actual-port))
+       (println (str "  POST http://localhost:" actual-port "/api - Pull endpoint"))
+       (println (str "  GET  http://localhost:" actual-port "/api/_schema - Schema"))
+       (when google-client-id
+         (println (str "  GET  http://localhost:" actual-port "/oauth2/google - Google sign-in")))
+       (when allowed-email-pattern
+         (println (str "  Allowed emails: " allowed-email-pattern)))
+       (when (seq owner-emails)
+         (println (str "  Owners: " (str/join ", " owner-emails))))
+       {:port actual-port}))))
 
 (defn stop!
   "Stop the blog server."

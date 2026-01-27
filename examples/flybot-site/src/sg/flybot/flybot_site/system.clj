@@ -29,6 +29,33 @@
    [robertluo.fun-map :refer [fnk life-cycle-map closeable halt!]]))
 
 ;;=============================================================================
+;; Port Selection
+;;=============================================================================
+
+(defn- try-start-server
+  "Try to start http-kit on port. Returns [stop-fn port] on success, nil on failure."
+  [app port]
+  (try
+    [(http-kit/run-server app {:port port}) port]
+    (catch java.net.BindException _
+      nil)))
+
+(defn- start-server-with-retry
+  "Start server, trying ports from start-port up to start-port + max-attempts.
+   Returns [stop-fn actual-port] or throws if all ports fail."
+  [app start-port max-attempts]
+  (loop [port start-port
+         attempts 0]
+    (if (>= attempts max-attempts)
+      (throw (ex-info "Could not find available port"
+                      {:start-port start-port :attempts max-attempts}))
+      (if-let [result (try-start-server app port)]
+        result
+        (do
+          (log/debug "Port" port "in use, trying" (inc port))
+          (recur (inc port) (inc attempts)))))))
+
+;;=============================================================================
 ;; System
 ;;=============================================================================
 
@@ -81,12 +108,14 @@
 
        :server
        (fnk [app port]
-            (log/log-startup port)
-            (let [stop-fn (http-kit/run-server app {:port port})]
-              (println "Blog server started on port" port)
-              (println "  POST http://localhost:" port "/api")
-              (println "  GET  http://localhost:" port "/api/_schema")
-              (closeable {:port port}
+            (let [[stop-fn actual-port] (start-server-with-retry app port 10)]
+              (log/log-startup actual-port)
+              (when (not= port actual-port)
+                (log/info "Requested port" port "was in use, using" actual-port))
+              (println "Blog server started on port" actual-port)
+              (println "  POST http://localhost:" actual-port "/api")
+              (println "  GET  http://localhost:" actual-port "/api/_schema")
+              (closeable {:port actual-port}
                          (fn []
                            (log/log-shutdown)
                            (stop-fn)

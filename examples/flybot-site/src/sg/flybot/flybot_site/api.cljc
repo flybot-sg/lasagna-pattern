@@ -22,6 +22,7 @@
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.pullable.malli]
    [malli.core :as m]
+   [malli.util :as mu]
    [robertluo.fun-map :refer [fnk life-cycle-map]]))
 
 ;;=============================================================================
@@ -48,18 +49,13 @@
     [:map [:post/author :string]]]))
 
 (def version-schema
-  "Schema for a historical version of a post. Uses inline Malli properties."
-  (m/schema
-   [:map {:doc "Historical version of a post"}
-    [:post/id {:doc "Unique identifier" :example 1} :int]
-    [:post/title {:doc "Post title"} :string]
-    [:post/content {:doc "Markdown content with optional YAML frontmatter"} :string]
-    [:post/author {:doc "Author name (extracted from frontmatter)"} :string]
-    [:post/tags {:doc "List of tags (extracted from frontmatter)" :example ["clojure" "web"]} [:vector :string]]
-    [:post/created-at {:doc "Creation timestamp"} :any]
-    [:post/updated-at {:doc "Last update timestamp"} :any]
-    [:version/tx {:doc "Transaction ID"} :int]
-    [:version/timestamp {:doc "When this version was created"} :any]]))
+  "Schema for a historical version of a post. Extends post-schema with version fields."
+  (mu/merge
+   post-schema
+   (m/schema
+    [:map {:doc "Historical version of a post"}
+     [:version/tx {:doc "Transaction ID"} :int]
+     [:version/timestamp {:doc "When this version was created"} :any]])))
 
 (def schema
   "API schema - noun-only, single source of truth.
@@ -80,11 +76,26 @@
   "Read-only schema for anonymous and non-owner users.
    Top-level is a plain map so auth module can assoc :me key."
   (with-meta
-    {:posts :any
+    {:posts (m/schema [:vector {:ilookup true} post-schema])
      :posts/history (m/schema [:map-of post-query [:vector version-schema]])}
     {:doc "Flybot Blog API (read-only)"
      :fields {:posts         {:doc "Blog posts (read-only)"}
               :posts/history {:doc "Post version history"}}}))
+
+^:rct/test
+(comment
+  ;; All schemas must be valid Malli schemas
+  (m/schema? post-schema) ;=> true
+  (m/schema? post-query) ;=> true
+  (m/schema? version-schema) ;=> true
+  (m/schema? (:posts schema)) ;=> true
+  (m/schema? (:posts/history schema)) ;=> true
+  (m/schema? (:posts viewer-schema)) ;=> true
+  (m/schema? (:posts/history viewer-schema)) ;=> true
+
+  ;; version-schema extends post-schema with version fields
+  (contains? (set (map first (m/children version-schema))) :version/tx) ;=> true
+  (contains? (set (map first (m/children version-schema))) :post/id)) ;=> true)
 
 ;;=============================================================================
 ;; API Builder
