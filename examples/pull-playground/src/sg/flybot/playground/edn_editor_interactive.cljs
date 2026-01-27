@@ -280,7 +280,7 @@
 ;;=============================================================================
 
 (defn edn-editor
-  "Interactive EDN editor with syntax highlighting, parinfer, and autocomplete.
+  "Interactive EDN editor with syntax highlighting, parinfer, autocomplete, and hover tooltips.
 
    Props:
    - :value - Current text value
@@ -289,16 +289,17 @@
    - :class - Additional CSS class
    - :parinfer-mode - :indent, :paren, :smart, or nil to disable (default :indent)
    - :read-only? - If true, editor is read-only
-   - :schema - Schema for autocomplete suggestions
+   - :schema - Schema for autocomplete suggestions and hover tooltips
    - :autocomplete - Current autocomplete state (from app state)
    - :on-autocomplete - Callback (fn [autocomplete-data]) to show autocomplete
    - :on-autocomplete-hide - Callback to hide autocomplete
    - :on-autocomplete-select - Callback (fn [idx]) when item selected
    - :on-autocomplete-move - Callback (fn [direction]) for arrow keys (+1/-1)
-   - :editor-id - Optional stable editor ID (for autocomplete coordination)"
+   - :editor-id - Optional stable editor ID (for autocomplete coordination)
+   - :hover-tooltips? - Enable schema documentation tooltips on hover (default false)"
   [{:keys [value on-change placeholder class parinfer-mode read-only? schema
            autocomplete on-autocomplete on-autocomplete-hide
-           on-autocomplete-select on-autocomplete-move editor-id]
+           on-autocomplete-select on-autocomplete-move editor-id hover-tooltips?]
     :or {parinfer-mode :indent}}]
   (let [editor-id (or editor-id (str "edn-editor-" (random-uuid)))]
     [:div.edn-editor {:class class
@@ -375,11 +376,19 @@
                           (set! (.-scrollTop overlay) (.-scrollTop textarea))
                           (set! (.-scrollLeft overlay) (.-scrollLeft textarea)))))}}]
      ;; Overlay with syntax highlighting (positioned on top, pointer-events: none)
-     [:div.edn-editor-overlay
+     ;; When hover-tooltips? is enabled, keywords get pointer-events: auto for hover
+     [:div.edn-editor-overlay {:class (when hover-tooltips? "hoverable")}
       [:pre.edn-editor-code
        (if (str/blank? value)
          [:span.edn-placeholder placeholder]
-         (edn/highlight-edn value))]]]))
+         (if (and hover-tooltips? schema)
+           (edn/highlight-edn value
+                              {:on-hover #(show-tooltip! % (.-target js/event) schema)
+                               :on-leave hide-tooltip!})
+           (edn/highlight-edn value)))]]
+     ;; Tooltip for hover docs
+     (when hover-tooltips?
+       (tooltip-view))]))
 
 (defn editor-autocomplete
   "Render autocomplete dropdown for an editor. Call this OUTSIDE the edn-editor
@@ -493,9 +502,17 @@
           [:button {:class (when (= view-mode :sample) "active")
                     :on {:click #(on-mode-change :sample)}}
            "Sample"]])
-       ;; Content - both views use same rendering
+       ;; Content
        [:pre.schema-code
         (let [data (if (= view-mode :sample) sample-data schema)]
           (if data
-            (edn/highlight-edn (edn/pretty-str data))
-            [:span.schema-empty "Generating sample..."]))]])))
+            ;; Sample view gets hover tooltips for schema docs
+            (if (= view-mode :sample)
+              (edn/highlight-edn (edn/pretty-str data)
+                                 {:on-hover #(show-tooltip! % (.-target js/event) schema)
+                                  :on-leave hide-tooltip!})
+              (edn/highlight-edn (edn/pretty-str data)))
+            [:span.schema-empty "Generating sample..."]))]
+       ;; Tooltip for sample data view
+       (when (= view-mode :sample)
+         (tooltip-view))])))

@@ -649,6 +649,19 @@ body {
   overflow: auto;
 }
 
+/* When hoverable, allow keyword tokens to receive hover events */
+.edn-editor-overlay.hoverable .token-keyword {
+  pointer-events: auto;
+  cursor: help;
+  border-radius: 2px;
+  transition: background-color 0.15s;
+}
+
+.edn-editor-overlay.hoverable .token-keyword:hover {
+  background-color: var(--accent);
+  color: white;
+}
+
 .edn-editor-code {
   margin: 0;
   font-family: "SF Mono", "Monaco", "Inconsolata", "Fira Code", monospace;

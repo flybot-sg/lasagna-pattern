@@ -130,8 +130,10 @@
                   :on-change #(dispatch! [:update-pattern %])
                   :parinfer-mode :indent
                   :editor-id pattern-editor-id
-                  ;; Pass schema for autocomplete in remote mode
+                  ;; Pass schema for autocomplete and hover tooltips in remote mode
                   :schema (when (= mode :remote) schema)
+                  ;; Enable hover tooltips in remote mode
+                  :hover-tooltips? (and (= mode :remote) (some? schema))
                   ;; Autocomplete state and callbacks (dropdown rendered separately below)
                   :autocomplete (when (= mode :remote) autocomplete)
                   :on-autocomplete #(dispatch! [:show-autocomplete %])
