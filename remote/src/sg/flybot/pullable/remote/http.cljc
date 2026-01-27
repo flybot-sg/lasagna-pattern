@@ -458,9 +458,10 @@
 
 (defn- handle-schema [api-fn ring-request]
   (let [res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
-        schema (:schema (api-fn ring-request))
+        {:keys [schema sample]} (api-fn ring-request)
         response (if schema
-                   (normalize-value schema)
+                   (normalize-value (cond-> {:schema schema}
+                                      sample (assoc :sample sample)))
                    (failure (error :not-found "No schema available")))
         {:keys [body content-type]} (encode-response response res-fmt)]
     (ring-response (if (success? response) 200 404) body content-type)))

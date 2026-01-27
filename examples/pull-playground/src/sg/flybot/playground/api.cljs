@@ -58,7 +58,7 @@
   "Fetch schema from remote server.
 
    url        - Server API endpoint (schema is at url/_schema)
-   on-success - fn of schema map
+   on-success - fn of {:schema ... :sample ...} map
    on-error   - fn of error string"
   [url on-success on-error]
   (let [schema-url (str url "/_schema")]

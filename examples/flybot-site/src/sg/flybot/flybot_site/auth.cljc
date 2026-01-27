@@ -26,6 +26,7 @@
   (:require
    [sg.flybot.flybot-site.api :as api]
    [sg.flybot.flybot-site.db :as db]
+   [sg.flybot.pullable.sample :as sample]
    [malli.core :as m]))
 
 ;;=============================================================================
@@ -45,6 +46,20 @@
     [:name :string]
     [:picture :string]
     [:role :keyword]]))
+
+(def ^:private sample-gen-schema
+  "Schema for generating sample data."
+  [:map
+   [:posts [:vector api/post-schema]]
+   [:me [:map
+         [:email :string]
+         [:name :string]
+         [:picture :string]
+         [:role :keyword]]]])
+
+(def ^:private sample-data
+  "Pre-generated sample data for schema endpoint."
+  (sample/generate sample-gen-schema {:size 10 :seed 42 :min 5}))
 
 (defn make-api
   "Create API function with role-based schema selection.
@@ -72,17 +87,20 @@
         ;; Owner: full schema with :me
         is-owner?
         {:data (assoc base-api :me me-data)
-         :schema (assoc api/schema :me me-schema)}
+         :schema (assoc api/schema :me me-schema)
+         :sample sample-data}
 
         ;; Logged-in non-owner: viewer-schema with :me
         email
         {:data (assoc base-api :me me-data)
-         :schema (assoc api/viewer-schema :me me-schema)}
+         :schema (assoc api/viewer-schema :me me-schema)
+         :sample sample-data}
 
         ;; Anonymous: viewer-schema with :me (nil indicates not logged in)
         :else
         {:data (assoc base-api :me nil)
-         :schema (assoc api/viewer-schema :me :any)}))))
+         :schema (assoc api/viewer-schema :me :any)
+         :sample sample-data}))))
 
 ^:rct/test
 (comment

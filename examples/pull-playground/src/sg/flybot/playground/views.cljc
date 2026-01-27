@@ -105,7 +105,7 @@
           [:label "Server URL"]
           [:input {:type "text"
                    :value server-url
-                   :placeholder "http://localhost:8081/api"
+                   :placeholder "http://localhost:8180/api"
                    :on {:input #(dispatch! [:update-server-url (.. % -target -value)])}}]]
          (schema-display state dispatch!)])]]))
 

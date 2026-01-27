@@ -6,6 +6,7 @@
             [ring.middleware.params :refer [wrap-params]]
             [sg.flybot.pullable.remote :as remote]
             [sg.flybot.pullable.collection :as coll]
+            [sg.flybot.pullable.sample :as sample]
             [sg.flybot.pullable.malli]
             [malli.core :as m]))
 
@@ -70,7 +71,8 @@
    Returns data and schema for pattern matching."
   [_ring-request]
   {:data   sample-data
-   :schema sample-schema})
+   :schema sample-schema
+   :sample (sample/generate sample-schema {:size 10 :seed 42 :min 5})})
 
 (defn- health-handler
   "Health check endpoint."
@@ -101,7 +103,7 @@
 
 (defonce server (atom nil))
 
-(defn start! [& [{:keys [port] :or {port 8081}}]]
+(defn start! [& [{:keys [port] :or {port 8180}}]]
   (println (str "Starting demo server on port " port "..."))
   (println "Sample data available:")
   (println "  :users - List of users")
@@ -117,6 +119,6 @@
     (println "Server stopped")))
 
 (defn -main [& args]
-  (let [port (if (seq args) (Integer/parseInt (first args)) 8081)]
+  (let [port (if (seq args) (Integer/parseInt (first args)) 8180)]
     (start! {:port port})
     @(promise))) ; Keep running
