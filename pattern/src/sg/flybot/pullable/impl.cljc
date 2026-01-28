@@ -749,12 +749,12 @@
 ;; When SCI (org.babashka/sci) is on the classpath, it's used by default.
 ;; Otherwise falls back to clojure.core/resolve and eval (CLJ only).
 ;;
-;; Users can override via :resolve and :eval options in compile-pattern,
+;; Users can override via :resolve and :eval-fn options in compile-pattern,
 ;; or by binding *resolve-sym* and *eval-form* directly.
 
 ;; Check at load time if SCI is available (no runtime penalty)
 ;; CLJ: try to require sci.core
-;; CLJS: SCI must be configured explicitly via :resolve/:eval options
+;; CLJS: SCI must be configured explicitly via :resolve/:eval-fn options
 #?(:clj
    (def ^:private sci-available?
      (try
@@ -787,7 +787,7 @@
 (def ^:dynamic *eval-form*
   "Custom form evaluator: (fn [form] -> value).
    When nil, uses SCI if available, else clojure.core/eval (CLJ only).
-   Bind via :eval option in compile-pattern."
+   Bind via :eval-fn option in compile-pattern."
   nil)
 
 (defn- fn-form?
@@ -810,7 +810,7 @@
   #?(:clj (if sci-available?
             (sci-eval form)
             (eval form))
-     :cljs (throw (ex-info "No form evaluator. Add SCI to dependencies or provide :eval option."
+     :cljs (throw (ex-info "No form evaluator. Add SCI to dependencies or provide :eval-fn option."
                            {:form form}))))
 
 (defn resolve-fn
@@ -820,7 +820,7 @@
    - (fn ...) or (fn* ...) forms: evaluated via *eval-form*, SCI, or clojure.core/eval
 
    SCI is auto-detected: add org.babashka/sci to your deps for sandboxed eval.
-   Override via :resolve and :eval options in compile-pattern."
+   Override via :resolve and :eval-fn options in compile-pattern."
   [x]
   (cond
     (fn? x) x
@@ -1304,7 +1304,7 @@
 
 ;; NOTE: Quoted patterns like '(?x :when odd?) contain symbols, not functions.
 ;; In CLJ, symbols and fn forms are resolved automatically via resolve-fn.
-;; For CLJS or sandboxed evaluation, provide :resolve and :eval options to
+;; For CLJS or sandboxed evaluation, provide :resolve and :eval-fn options to
 ;; compile-pattern (e.g., using SCI). See *resolve-sym* and *eval-form* docs.
 
 ;; Built-in chain option: :when - adds a predicate check
@@ -1749,9 +1749,9 @@
      :only    - use only these rules, ignoring defaults
      :schema  - schema to validate pattern against at compile time
      :resolve - custom symbol resolver (fn [sym] -> var-or-value)
-     :eval    - custom form evaluator (fn [form] -> value)
+     :eval-fn - custom form evaluator (fn [form] -> value)
 
-   The :resolve and :eval options enable:
+   The :resolve and :eval-fn options enable:
    - Sandboxed evaluation for security (e.g., using SCI)
    - CLJS compatibility (provide SCI's resolve/eval)
    - Custom symbol lookup from a registry
@@ -1787,10 +1787,10 @@
 
      ;; With custom resolver/evaluator (e.g., SCI for security/CLJS)
      (compile-pattern '(? :pred odd?)
-                      {:resolve sci/resolve :eval sci/eval})"
+                      {:resolve sci/resolve :eval-fn sci/eval})"
   ([ptn]
    (compile-pattern ptn nil))
-  ([ptn {:keys [rules only schema resolve eval]}]
+  ([ptn {:keys [rules only schema resolve eval-fn]}]
    (let [rewritten (cond
                      only (rewrite-pattern ptn only)
                      rules (-> ptn
@@ -1802,7 +1802,7 @@
        (validate-pattern-schema! rewritten schema))
      ;; Compile with custom resolver/evaluator if provided
      (binding [*resolve-sym* (or resolve *resolve-sym*)
-               *eval-form* (or eval *eval-form*)]
+               *eval-form* (or eval-fn *eval-form*)]
        (cond-> (core->matcher rewritten)
          ;; Filter output to schema's valid-keys for record schemas
          schema (wrap-with-schema-filter schema))))))
@@ -1900,7 +1900,7 @@
      :only    - use only these rules, ignoring defaults
      :schema  - schema for compile-time validation
      :resolve - custom symbol resolver (fn [sym] -> value)
-     :eval    - custom form evaluator (fn [form] -> value)
+     :eval-fn - custom form evaluator (fn [form] -> value)
 
    Special binding: $ is bound to the matched/transformed value.
 

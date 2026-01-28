@@ -1,0 +1,26 @@
+{:tasks
+ {dev
+  {:doc "Start nREPL for development. Connect editor, then (start!) for backend.
+         For CLJS: (shadow.cljs.devtools.api/watch :app) then (shadow.cljs.devtools.api/repl :app)"
+   :task (clojure "-M:dev:cljs -m nrepl.cmdline --middleware \"[shadow.cljs.devtools.server.nrepl/middleware,cider.nrepl/cider-middleware]\"")}
+
+  serve
+  {:doc "Build and serve static frontend on port 3000 (requires backend on 8080)"
+   :task (do
+           (shell "npm install")
+           (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
+           (println "\nServing at http://localhost:3000")
+           (println "Note: Backend must be running on port 8080 for API calls")
+           (shell "npx http-server resources/public -p 3000 -c-1 --proxy http://localhost:8080"))}
+
+  watch
+  {:doc "Start shadow-cljs watch (alternative to REPL-based workflow)"
+   :task (shell "npx shadow-cljs -A:dev:cljs watch app")}
+
+  test
+  {:doc "Run tests"
+   :task (clojure "-X:dev:test")}
+
+  clean
+  {:doc "Clean build artifacts"
+   :task (shell "rm -rf target .shadow-cljs .cpcache")}}}

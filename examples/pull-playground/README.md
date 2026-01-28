@@ -4,30 +4,30 @@ An interactive browser-based playground for experimenting with the pull pattern 
 
 ## Quick Start
 
-### Frontend Only (Local Mode)
+### Local Mode (Recommended)
+
+Pattern matching runs entirely in the browser - no backend needed.
 
 ```bash
-cd examples/pull-playground
+# From repo root
+bb serve examples/pull-playground
 
-# Install dependencies
-npm install
-
-# Start development server
-npm run dev
-
-# Open http://localhost:3000
+# Open http://localhost:3001
 ```
 
-### With Demo Server (Remote Mode)
+### Remote Mode
+
+Query a live server with sample data.
 
 ```bash
-# Terminal 1: Start demo server
-cd examples/pull-playground
-clj -M:run              # Server on :8081
+# Terminal 1: Start the UI
+bb serve examples/pull-playground
 
-# Terminal 2: Start frontend
-npm run dev             # Frontend on :3000
+# Terminal 2: Start the backend
+bb server examples/pull-playground
 ```
+
+Open http://localhost:3001, switch to "Remote Mode".
 
 ## Usage
 
@@ -40,7 +40,7 @@ npm run dev             # Frontend on :3000
 ### Remote Mode
 
 1. Switch to Remote mode
-2. Enter the server URL (default: http://localhost:8081/api)
+2. Server URL defaults to http://localhost:8081/api
 3. Enter a pull pattern
 4. Click Execute to query the demo server
 
@@ -57,7 +57,7 @@ npm run dev             # Frontend on :3000
 
 ## Demo Server Data
 
-The demo server provides sample data:
+The demo server (Remote Mode) provides sample data:
 
 ```clojure
 {:users [{:id 1 :name "Alice" :email "alice@example.com" :role :admin}
@@ -72,3 +72,11 @@ Example queries:
 - `{:users ?all}` - Get all users
 - `{:posts {{:id 1} ?post}}` - Get post by ID (indexed lookup)
 - `{:config {:version ?v}}` - Extract config version
+
+## Tasks
+
+| Command | Description |
+|---------|-------------|
+| `bb serve examples/pull-playground` | Serve UI on port 3001 |
+| `bb server examples/pull-playground` | Start backend on port 8081 |
+| `bb clean examples/pull-playground` | Clean build artifacts |

@@ -103,7 +103,7 @@
 
 (defonce server (atom nil))
 
-(defn start! [& [{:keys [port] :or {port 8180}}]]
+(defn start! [& [{:keys [port] :or {port 8081}}]]
   (println (str "Starting demo server on port " port "..."))
   (println "Sample data available:")
   (println "  :users - List of users")
@@ -119,6 +119,6 @@
     (println "Server stopped")))
 
 (defn -main [& args]
-  (let [port (if (seq args) (Integer/parseInt (first args)) 8180)]
+  (let [port (if (seq args) (Integer/parseInt (first args)) 8081)]
     (start! {:port port})
     @(promise))) ; Keep running

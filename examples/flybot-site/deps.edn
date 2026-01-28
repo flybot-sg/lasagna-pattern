@@ -15,7 +15,9 @@
  {:dev {:extra-paths ["dev" "test"]
         :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
                      io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
-                     ring/ring-mock {:mvn/version "0.4.0"}}}
+                     ring/ring-mock {:mvn/version "0.4.0"}
+                     nrepl/nrepl {:mvn/version "1.3.0"}
+                     cider/cider-nrepl {:mvn/version "0.50.2"}}}
   :test {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
          :exec-args {:dirs #{"src" "test"}}}
   :kaocha {:extra-paths ["test"]

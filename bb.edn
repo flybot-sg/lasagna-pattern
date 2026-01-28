@@ -1,7 +1,15 @@
 {:min-bb-version "1.0.0"
  :tasks
  {:requires [[babashka.fs :as fs]
-             [clojure.string :as str]]
+             [clojure.string :as str]
+             [clojure.edn :as edn]]
+
+  ;; Helper: check if component has a specific bb task
+  -comp-task?
+  {:task (fn [dir task]
+           (let [file (fs/file dir "bb.edn")]
+             (when (fs/exists? file)
+               (contains? (:tasks (edn/read-string (slurp file))) (symbol task)))))}
 
   ;; Discover components: directories with deps.edn (excluding hidden dirs)
   ;; Scans root level and examples/ subdirectory
@@ -46,10 +54,13 @@
                      (clojure {:dir c} "-M:cljs" "-m" "shadow.cljs.devtools.cli" "compile" "test")))))))}
 
   dev
-  {:doc "Start REPL: bb dev <component>"
+  {:doc "Start REPL: bb dev <component> (delegates to component bb.edn if present)"
+   :depends [-comp-task?]
    :task (let [component (first *command-line-args*)]
            (if component
-             (clojure {:dir component} "-M:dev")
+             (if (-comp-task? component "dev")
+               (shell {:dir component} "bb" "dev")
+               (clojure {:dir component} "-M:dev"))
              (println "Usage: bb dev <component>")))}
 
   clean
@@ -59,13 +70,38 @@
                components (if target [target] -components)]
            (doseq [c components]
              (println (str "Cleaning " c "..."))
-             (shell {:dir c} "rm" "-rf" "target" ".cpcache")))}
+             (shell {:dir c} "rm" "-rf" "target" ".cpcache" ".shadow-cljs")))}
 
   nrepl
-  {:doc "Start nREPL: bb nrepl <component>"
+  {:doc "Start nREPL: bb nrepl <component> (delegates to component bb.edn if present)"
+   :depends [-comp-task?]
    :task (let [component (first *command-line-args*)]
            (if component
-             (clojure {:dir component}
-                      "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}"
-                      "-M" "-m" "nrepl.cmdline")
-             (println "Usage: bb nrepl <component>")))}}}
+             (if (-comp-task? component "dev")
+               ;; Component has its own dev task (likely with proper middleware)
+               (shell {:dir component} "bb" "dev")
+               ;; Fallback: basic nREPL
+               (clojure {:dir component}
+                        "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}"
+                        "-M" "-m" "nrepl.cmdline"))
+             (println "Usage: bb nrepl <component>")))}
+
+  serve
+  {:doc "Serve static UI: bb serve <component>"
+   :depends [-comp-task?]
+   :task (let [component (first *command-line-args*)]
+           (if component
+             (if (-comp-task? component "serve")
+               (shell {:dir component} "bb" "serve")
+               (println (str "Component " component " has no 'serve' task")))
+             (println "Usage: bb serve <component>")))}
+
+  server
+  {:doc "Start backend server: bb server <component>"
+   :depends [-comp-task?]
+   :task (let [component (first *command-line-args*)]
+           (if component
+             (if (-comp-task? component "server")
+               (shell {:dir component} "bb" "server")
+               (println (str "Component " component " has no 'server' task")))
+             (println "Usage: bb server <component>")))}}}

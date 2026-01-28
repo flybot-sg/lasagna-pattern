@@ -133,4 +133,5 @@
     [(count (seq (:posts data))) (contains? schema :posts)])
   ;=> [10 true]
 
-  (halt! sys)) ;=> nil)
+  (halt! sys) ;=> nil
+  ) 

@@ -424,7 +424,7 @@
               compiled (pattern/compile-pattern
                         resolved-pattern
                         (cond-> {:resolve safe-resolve
-                                 :eval    safe-eval}
+                                 :eval-fn safe-eval}
                           schema (assoc :schema schema)))
               result (compiled (pattern/vmr data))]
           (if (pattern/failure? result)

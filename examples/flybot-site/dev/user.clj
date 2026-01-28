@@ -3,8 +3,8 @@
 
    ## Quick Start
 
-   1. Create and start system:
-      (def sys (start!))
+   1. Start server (with dev mode):
+      (start!)
 
    2. Connect a client:
       (def api (connect))
@@ -14,46 +14,49 @@
       (api '{:post {:title ?t}} {:post-id 1})
 
    4. Stop when done:
-      (stop!)"
+      (stop!)
+
+   ## Dev Mode
+
+   By default, starts with dev mode enabled (auto-login as dev@localhost).
+   The dev user is an owner, so you get full CRUD access.
+
+   To disable dev mode:
+      (start! {:dev-mode? false})"
   (:require
-   [sg.flybot.flybot-site.system :as system]
-   [sg.flybot.pullable.remote.client :as client]
-   [robertluo.fun-map :refer [halt!]]))
+   [sg.flybot.flybot-site.server :as server]
+   [sg.flybot.pullable.remote.client :as client]))
 
 ;;=============================================================================
-;; System Lifecycle
+;; Server Lifecycle
 ;;=============================================================================
 
-(defonce ^:private sys (atom nil))
-
-(declare stop!)
+(def ^:private default-dev-opts
+  "Default options for dev mode - auto-login as owner."
+  {:dev-mode? true
+   :owner-emails #{"dev@localhost"}})
 
 (defn start!
-  "Create and start the blog system.
+  "Start the blog server with dev mode enabled by default.
 
    Options:
    - :port - HTTP port (default 8080)
-   - :seed? - Seed database (default true)"
+   - :seed? - Seed database (default true)
+   - :dev-mode? - Enable dev auto-login (default true)
+   - :owner-emails - Set of owner emails (default #{\"dev@localhost\"})"
   ([] (start! {}))
   ([opts]
-   (when @sys (stop!))
-   (let [s (system/make-system opts)]
-     ;; Touch :server to start everything
-     (:server s)
-     (reset! sys s))))
+   (server/start! (merge default-dev-opts opts))))
 
 (defn stop!
-  "Stop the blog system."
+  "Stop the blog server."
   []
-  (when-let [s @sys]
-    (halt! s)
-    (reset! sys nil)))
+  (server/stop!))
 
 (defn restart!
-  "Restart the system."
+  "Restart the server."
   []
-  (stop!)
-  (start!))
+  (server/restart!))
 
 ;;=============================================================================
 ;; Client
@@ -95,16 +98,13 @@
 ;;=============================================================================
 
 (comment
-  ;; === START SYSTEM ===
-  ;; Creates db, app, and server as one unit
+  ;; === START SERVER ===
+  ;; Starts with dev mode (auto-login as dev@localhost owner)
   (start!)
   ;; Blog server started on port 8080
   ;;   POST http://localhost:8080/api
   ;;   GET  http://localhost:8080/api/_schema
-
-  ;; Inspect the system
-  @sys
-  ;; => {:port 8080, :db #<Atom>, :api-fn #<Fn>, :app #<Fn>, :server {...}}
+  ;; WARN DEV MODE: Auto-login as dev@localhost
 
   ;; === CONNECT CLIENT ===
   (def api (connect))
