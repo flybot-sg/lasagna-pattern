@@ -106,6 +106,22 @@ Add to package.json:
   [:div {:replicant/key (:id item)} ...])
 ```
 
+### Fragments
+
+Fragment syntax `[:<>]` may not be supported - use wrapper divs:
+
+```clojure
+;; BAD - Replicant doesn't support fragments
+[:<>
+  [:div "First"]
+  [:div "Second"]]
+
+;; GOOD - use wrapper div
+[:div.fragment
+  [:div "First"]
+  [:div "Second"]]
+```
+
 ## Development
 
 ```bash
@@ -115,6 +131,96 @@ npm run dev
 This starts the dev server at http://localhost:8080 with hot reload.
 
 **REPL:** Connect to nREPL port in `.shadow-cljs/nrepl.port`, then `(shadow/repl :app)`. Exit with `:cljs/quit`.
+
+## Macros in ClojureScript
+
+### Critical: Self-Namespace Macro Limitation
+
+**A namespace CANNOT use its own macros at the top level in ClojureScript.**
+
+ClojureScript macros are compiled by JVM Clojure. When a `.cljc` file defines and uses a macro in the same namespace, the macro won't be available during the namespace's initial load.
+
+```clojure
+;; BAD - will fail in ClojureScript with:
+;; "Can't take value of macro mylib.impl/my-macro"
+(ns mylib.impl)
+(defmacro my-macro [x] `(process ~x))
+(my-macro {:foo 1})  ; ERROR!
+```
+
+### Solution 1: Convert to Function
+
+If the macro only performs runtime operations (no code generation needed):
+
+```clojure
+(defn register! [type spec]
+  (swap! registry* assoc type spec))
+```
+
+### Solution 2: Self-Require Macros
+
+Add `:require-macros` for the namespace to find its own macros:
+
+```clojure
+(ns mylib.util
+  #?(:cljs (:require-macros [mylib.util])))
+
+(defmacro with-timing [& body]
+  `(let [start# (System/currentTimeMillis)]
+     ~@body
+     (- (System/currentTimeMillis) start#)))
+```
+
+### Solution 3: Separate Namespace
+
+Move macro calls to a namespace that requires the macro-defining namespace:
+
+```clojure
+;; mylib/macros.cljc - defines macros
+(ns mylib.macros
+  #?(:cljs (:require-macros [mylib.macros])))
+(defmacro register! [type spec] ...)
+
+;; mylib/registry.cljc - uses macros
+(ns mylib.registry
+  (:require [mylib.macros :refer [register!]]))
+(register! :foo {...})  ; Works!
+```
+
+### Solution 4: Reader Conditional
+
+Skip ClojureScript if the code is JVM-only:
+
+```clojure
+#?(:clj
+   (register-schema-rule!
+    (match-fn [:tuple ?types*] {:type :seq})))
+```
+
+## Debugging
+
+### Common Errors
+
+| Error | Cause | Solution |
+|-------|-------|----------|
+| "Can't take value of macro X" | Using macro in same namespace | See Macros section above |
+| "Cannot read properties of undefined (reading 'cljs$core$IFn$_invoke$arity$N')" | Macro not expanding, called as function | Add `:require-macros` or convert to function |
+| "TypeError: X is not a function" | Missing export or undefined var | Check namespace requires |
+
+### Clear Cache
+
+When debugging macro issues or stale compilation:
+
+```bash
+rm -rf .shadow-cljs/builds/*/dev/ana/
+```
+
+### Console Debugging
+
+```clojure
+(js/console.log "Debug:" (clj->js data))
+(tap> {:label "debug" :data data})  ; for portal/reveal
+```
 
 ## Effects-as-Data Architecture
 

@@ -94,18 +94,18 @@ cd ~/project
 
 ```bash
 # Create workspaces for each subagent
-jj workspace add /tmp/pull2-feature-a
-jj workspace add /tmp/pull2-feature-b
+jj workspace add /tmp/workspace-feature-a
+jj workspace add /tmp/workspace-feature-b
 
 # Each subagent works in its workspace, then commits:
-# (in /tmp/pull2-feature-a)
+# (in /tmp/workspace-feature-a)
 jj describe -m "Implement feature A"
 jj bookmark set main -r @
 
 # After all subagents complete, cleanup from main workspace:
-cd /Users/tianluo/workspace/pull2
+cd "$CLAUDE_PROJECT_DIR"
 jj workspace forget feature-a feature-b
-rm -rf /tmp/pull2-feature-a /tmp/pull2-feature-b
+rm -rf /tmp/workspace-feature-a /tmp/workspace-feature-b
 ```
 
 **Key benefits:**

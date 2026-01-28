@@ -14,8 +14,8 @@ A monorepo for pull-based pattern matching and data transformation tools in Cloj
 
 1. **Before coding** - Create isolated workspace:
    ```bash
-   jj workspace add <task-name> /tmp/pull2-<task-name>
-   cd /tmp/pull2-<task-name>
+   jj workspace add <task-name> /tmp/workspace-<task-name>
+   cd /tmp/workspace-<task-name>
    ```
 
 2. **Do the work** - Edit files, run tests in the workspace
@@ -24,9 +24,9 @@ A monorepo for pull-based pattern matching and data transformation tools in Cloj
    ```bash
    jj describe -m "Commit message"
    jj bookmark set main -r @
-   cd /Users/tianluo/workspace/pull2
+   cd "$CLAUDE_PROJECT_DIR"
    jj workspace forget <task-name>
-   rm -rf /tmp/pull2-<task-name>
+   rm -rf /tmp/workspace-<task-name>
    ```
 
 ## Build System
