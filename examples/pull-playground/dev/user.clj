@@ -1,23 +1,35 @@
 (ns user
-  "REPL helpers for playground development."
+  "REPL helpers for playground backend development.
+
+   Start the demo server:
+     (start!)
+
+   Stop:
+     (stop!)"
   (:require [sg.flybot.playground.server :as server]))
 
-(defn start []
+(defn start!
+  "Start the playground demo server on port 8081."
+  []
   (server/start!))
 
-(defn stop []
+(defn stop!
+  "Stop the server."
+  []
   (server/stop!))
 
-(defn restart []
-  (stop)
-  (start))
+(defn restart!
+  "Restart the server."
+  []
+  (stop!)
+  (start!))
 
 (comment
   ;; Start the demo server
-  (start)
+  (start!)
 
   ;; Stop the server
-  (stop)
+  (stop!)
 
   ;; Test pattern matching locally
   (require '[sg.flybot.pullable.impl :as impl])

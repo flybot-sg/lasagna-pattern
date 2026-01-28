@@ -186,9 +186,11 @@
               (cond-> id (assoc :selected-id id)))
    :fx {:history :push}})
 
-(defn view-new [state]
-  {:state (assoc state :view :new :form {:title "" :content ""})
-   :fx {:history :push}})
+(defn view-new [{:keys [user] :as state}]
+  (let [author (or (:name user) "Anonymous")
+        template (str "---\nauthor: " author "\ntags:\n  - \n---\n\n")]
+    {:state (assoc state :view :new :form {:title "" :content template})
+     :fx {:history :push}}))
 
 (defn view-edit [state post]
   {:state (assoc state

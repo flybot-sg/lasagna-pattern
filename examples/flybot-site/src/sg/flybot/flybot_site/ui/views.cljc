@@ -97,7 +97,7 @@
      (let [Editor (or (.-default toastui) (.-Editor toastui) toastui)
            editor (Editor. #js {:el node
                                 :height "400px"
-                                :initialEditType "wysiwyg"
+                                :initialEditType "markdown"
                                 :previewStyle "vertical"
                                 :initialValue (or content "")
                                 :hooks #js {:addImageBlobHook

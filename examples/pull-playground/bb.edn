@@ -1,0 +1,20 @@
+{:tasks
+ {serve
+  {:doc "Serve the playground UI (Local Mode - pattern matching in browser)
+         Open http://localhost:3003"
+   :task (do
+           (shell "npm install")
+           (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
+           (println "\n=== Pull Pattern Playground ===")
+           (println "Local Mode: http://localhost:3001")
+           (println "For Remote Mode, also run: bb server examples/pull-playground")
+           (shell "npx http-server resources/public -p 3001 -c-1"))}
+
+  server
+  {:doc "Start the demo backend server for Remote Mode (port 8081)
+         Run this alongside 'bb serve' to enable remote pattern queries"
+   :task (clojure "-M:run")}
+
+  clean
+  {:doc "Clean build artifacts"
+   :task (shell "rm -rf target .shadow-cljs .cpcache resources/public/js")}}}

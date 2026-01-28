@@ -146,6 +146,20 @@
       (upload-image-handler request)
       (handler request))))
 
+(defn- wrap-dev-user
+  "Inject fake session for local development when OAuth isn't configured.
+   Only active when :dev-user is provided."
+  [handler dev-user]
+  (if dev-user
+    (fn [request]
+      (let [session (merge (:session request)
+                           {:user-email (:email dev-user)
+                            :user-name (:name dev-user)
+                            :user-picture (:picture dev-user)})]
+        (log/debug "Dev mode: injecting user" (:user-email session))
+        (handler (assoc request :session session))))
+    handler))
+
 (defn make-app
   "Create Ring handler with given API function.
 
@@ -162,9 +176,10 @@
    - :google-client-id - Google OAuth client ID
    - :google-client-secret - Google OAuth client secret
    - :base-url - Base URL of the application
-   - :allowed-email-pattern - Regex pattern for allowed emails (nil = all allowed)"
+   - :allowed-email-pattern - Regex pattern for allowed emails (nil = all allowed)
+   - :dev-user - Map with :email :name :picture for local dev without OAuth"
   ([api-fn] (make-app api-fn {}))
-  ([api-fn {:keys [google-client-id google-client-secret base-url allowed-email-pattern]
+  ([api-fn {:keys [google-client-id google-client-secret base-url allowed-email-pattern dev-user]
             :or {base-url "http://localhost:8080"}}]
    (-> index-handler
        (wrap-resource "public")
@@ -179,6 +194,7 @@
        (oauth/wrap-google-auth {:client-id google-client-id
                                 :client-secret google-client-secret
                                 :base-url base-url})
+       (wrap-dev-user dev-user)
        (wrap-session {:store (memory-store)})
        wrap-cors
        wrap-error-handler)))
@@ -247,11 +263,15 @@
    - :base-url - Application base URL (or BLOG_BASE_URL env var)
    - :owner-emails - Set of owner emails (or BLOG_OWNER_EMAILS env var, comma-separated)
    - :allowed-email-pattern - Regex pattern for allowed emails (or BLOG_ALLOWED_EMAILS env var)
-                              Example: \".*@mycompany\\\\.com\" to allow only company emails"
+                              Example: \".*@mycompany\\\\.com\" to allow only company emails
+   - :dev-user - Map with :email :name :picture for local dev without OAuth.
+   - :dev-mode? - Enable dev mode (or BLOG_DEV_MODE=true env var). NEVER set in prod.
+                  When true AND OAuth not configured AND owner-emails set,
+                  auto-creates dev-user from first owner email."
   ([]
    (start! {}))
   ([opts]
-   (let [{:keys [port seed? backup-dir google-client-id google-client-secret base-url owner-emails allowed-email-pattern]
+   (let [{:keys [port seed? backup-dir google-client-id google-client-secret base-url owner-emails allowed-email-pattern dev-user]
           :or {port (parse-long (get-env "BLOG_PORT" "8080"))
                seed? true
                backup-dir (get-env "BLOG_BACKUP_DIR")
@@ -259,7 +279,15 @@
                google-client-secret (get-env "GOOGLE_CLIENT_SECRET")
                base-url (get-env "BLOG_BASE_URL" "http://localhost:8080")
                owner-emails (parse-owner-emails (get-env "BLOG_OWNER_EMAILS"))
-               allowed-email-pattern (parse-email-pattern (get-env "BLOG_ALLOWED_EMAILS"))}} opts]
+               allowed-email-pattern (parse-email-pattern (get-env "BLOG_ALLOWED_EMAILS"))}} opts
+         ;; Auto-enable dev-user ONLY when explicitly enabled via env var or option
+         ;; Requires: BLOG_DEV_MODE=true AND owner-emails set AND no OAuth configured
+         dev-mode? (or (:dev-mode? opts) (= "true" (get-env "BLOG_DEV_MODE")))
+         dev-user (or dev-user
+                      (when (and dev-mode? (not google-client-id) (seq owner-emails))
+                        (let [email (first owner-emails)]
+                          (log/warn "DEV MODE: Auto-login as" email "(set BLOG_DEV_MODE=false to disable)")
+                          {:email email :name (first (str/split email #"@")) :picture nil})))]
      (when @server
        (stop!))
      (log/info "Starting blog server...")
@@ -277,7 +305,8 @@
            app (make-app api-fn {:google-client-id google-client-id
                                  :google-client-secret google-client-secret
                                  :base-url base-url
-                                 :allowed-email-pattern allowed-email-pattern})
+                                 :allowed-email-pattern allowed-email-pattern
+                                 :dev-user dev-user})
            [stop-fn actual-port] (start-server-with-retry app port 10)]
        (reset! server stop-fn)
        (when (not= port actual-port)

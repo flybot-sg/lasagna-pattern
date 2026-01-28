@@ -93,7 +93,7 @@
      :only    - use only these rules, ignoring defaults
      :schema  - schema for compile-time validation
      :resolve - custom symbol resolver (fn [sym] -> value)
-     :eval    - custom form evaluator (fn [form] -> value)
+     :eval-fn - custom form evaluator (fn [form] -> value)
 
    Special binding: $ is bound to the matched/transformed value.
 

@@ -13,7 +13,7 @@
   {:mode :local           ; :local | :remote
    :pattern-text ""       ; Pattern editor content
    :data-text ""          ; Data editor content (local mode)
-   :server-url "http://localhost:8180/api"  ; Server URL (remote mode)
+   :server-url "http://localhost:8081/api"  ; Server URL (remote mode)
    :result nil            ; bindings map (symbol -> value) or nil
    :error nil             ; Error message string or nil
    :loading? false
