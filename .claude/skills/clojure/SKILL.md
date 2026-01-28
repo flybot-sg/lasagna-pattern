@@ -41,8 +41,8 @@ During planning, identify **independent subtasks** that can be implemented concu
 1. **Plan phase**: Break task into independent features
 2. **Spawn subagents**: Each in its own jj workspace
    ```bash
-   jj workspace add feature-a /tmp/pull2-feature-a
-   jj workspace add feature-b /tmp/pull2-feature-b
+   jj workspace add feature-a /tmp/workspace-feature-a
+   jj workspace add feature-b /tmp/workspace-feature-b
    ```
 3. **Implement in parallel**: Each agent works in isolation
 4. **Merge**: Bring workspaces back together
