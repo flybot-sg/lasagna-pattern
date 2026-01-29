@@ -11,13 +11,15 @@
      ;; Create system (components not started yet)
      (def sys (make-system {:server {:port 8080}}))
 
-     ;; Touch :http-server to start the full chain
-     (:http-server sys)
+     ;; Touch ::http-server to start the full chain
+     (::http-server sys)
 
      ;; Gracefully stop everything
      (halt! sys)
 
    ## Configuration
+
+   Uses Malli-validated config (see cfg.cljc for schema):
 
      {:server {:port 8080 :base-url \"http://localhost:8080\"}
       :db {:backend :mem}  ; or :file, :s3
@@ -28,6 +30,7 @@
    [sg.flybot.flybot-site.api :as api]
    [sg.flybot.flybot-site.auth :as auth]
    [sg.flybot.flybot-site.backup :as backup]
+   [sg.flybot.flybot-site.cfg :as cfg]
    [sg.flybot.flybot-site.db :as db]
    [sg.flybot.flybot-site.log :as log]
    [sg.flybot.flybot-site.oauth :as oauth]
@@ -46,34 +49,6 @@
    [clojure.java.io :as io]
    [clojure.string :as str])
   (:import [java.util UUID]))
-
-;;=============================================================================
-;; Config Parsing
-;;=============================================================================
-
-(defn- parse-owner-emails
-  "Parse comma-separated emails to set."
-  [s]
-  (if (or (nil? s) (str/blank? s))
-    #{}
-    (set (map str/trim (str/split s #",")))))
-
-(defn- parse-email-pattern
-  "Parse regex pattern string."
-  [s]
-  (when (and s (not (str/blank? s)))
-    (re-pattern s)))
-
-(defn- parse-session-secret
-  "Parse 32 hex chars to 16-byte array."
-  [s]
-  (when (and s (not (str/blank? s)))
-    (let [hex-chars (str/replace s #"[^0-9a-fA-F]" "")]
-      (when (not= 32 (count hex-chars))
-        (throw (ex-info "Session secret must be 32 hex characters (16 bytes)"
-                        {:provided-length (count hex-chars)})))
-      (byte-array (map #(unchecked-byte (Integer/parseInt (apply str %) 16))
-                       (partition 2 hex-chars))))))
 
 (defn- generate-session-key
   "Generate random 16-byte key for dev mode."
@@ -183,35 +158,32 @@
 (defn make-system
   "Create the blog system as a fun-map life-cycle-map.
 
-   Components are lazily initialized. Access :http-server to start.
+   Components are lazily initialized. Access ::http-server to start.
    Call (halt! sys) to stop all components.
 
-   Config keys:
-   - :server - {:port :base-url}
-   - :db - {:backend :mem|:file|:s3, :path, :bucket, :region}
-   - :auth - {:google-client-id :google-client-secret :owner-emails :allowed-email-pattern}
-   - :session - {:secret :timeout}
-   - :dev - {:mode? :seed? :backup-dir}"
+   Config is validated against Malli schema (see cfg.cljc).
+   Defaults are applied automatically."
   ([] (make-system {}))
   ([config]
-   (let [{:keys [server db auth session dev]
-          :or {server {} db {} auth {} session {} dev {}}} config
-         ;; Parse config
-         port (or (:port server) 8080)
-         base-url (or (:base-url server) "http://localhost:8080")
-         db-cfg (merge db/default-cfg
-                       (when-let [backend (:backend db)] {:store {:backend backend}})
-                       (when-let [path (:path db)] {:store {:path path}})
-                       (when-let [id (:id db)] {:store {:id id}})
-                       (when-let [bucket (:bucket db)] {:store {:bucket bucket}})
-                       (when-let [region (:region db)] {:store {:region region}}))
-         owner-emails (parse-owner-emails (:owner-emails auth))
-         allowed-email-pattern (parse-email-pattern (:allowed-email-pattern auth))
-         session-secret (parse-session-secret (:secret session))
-         session-timeout (or (:timeout session) 43200)
-         dev-mode? (:mode? dev)
-         seed? (if (contains? dev :seed?) (:seed? dev) true)
-         backup-dir (:backup-dir dev)]
+   (let [{:keys [server db auth session dev]} (cfg/prepare-cfg config)
+         ;; Extract validated config values (defaults already applied)
+         {:keys [port base-url]} server
+         {:keys [backend path id bucket region]} db
+         {:keys [owner-emails allowed-email-pattern
+                 google-client-id google-client-secret]} auth
+         {:keys [secret timeout]} session
+         {:keys [mode? seed? backup-dir]} dev
+         ;; Build Datahike config
+         db-cfg (cond-> {:store {:backend backend}
+                         :schema-flexibility :write
+                         :keep-history? true}
+                  id (assoc-in [:store :id] id)
+                  path (assoc-in [:store :path] path)
+                  bucket (assoc-in [:store :bucket] bucket)
+                  region (assoc-in [:store :region] region))
+         ;; Parse special fields
+         email-pattern (cfg/parse-email-pattern allowed-email-pattern)
+         session-key (cfg/parse-session-secret secret)]
 
      (life-cycle-map
       {;;-----------------------------------------------------------------------
@@ -221,7 +193,7 @@
        ::base-url base-url
        ::db-cfg db-cfg
        ::owner-emails owner-emails
-       ::dev-mode? dev-mode?
+       ::dev-mode? mode?
 
        ;;-----------------------------------------------------------------------
        ;; Database Connection
@@ -267,7 +239,7 @@
        ;;-----------------------------------------------------------------------
        ::session-config
        (fnk [::dev-mode?]
-            (let [key (or session-secret
+            (let [key (or session-key
                           (do (log/warn "SESSION_SECRET not set - using random key")
                               (generate-session-key)))]
               {:store (cookie-store {:key key})
@@ -281,7 +253,7 @@
        ::dev-user
        (fnk [::dev-mode? ::owner-emails]
             (when (and dev-mode?
-                       (not (:google-client-id auth))
+                       (not google-client-id)
                        (seq owner-emails))
               (let [email (first owner-emails)]
                 (log/warn "DEV MODE: Auto-login as" email)
@@ -305,12 +277,12 @@
                 wrap-keyword-params
                 wrap-params
                 oauth/wrap-logout
-                (oauth/wrap-fetch-profile {:allowed-email-pattern allowed-email-pattern})
-                (oauth/wrap-google-auth {:client-id (:google-client-id auth)
-                                         :client-secret (:google-client-secret auth)
+                (oauth/wrap-fetch-profile {:allowed-email-pattern email-pattern})
+                (oauth/wrap-google-auth {:client-id google-client-id
+                                         :client-secret google-client-secret
                                          :base-url base-url})
                 (wrap-dev-user dev-user)
-                (wrap-idle-session-timeout {:timeout session-timeout
+                (wrap-idle-session-timeout {:timeout timeout
                                             :timeout-handler session-timeout-handler})
                 (wrap-session session-config)
                 wrap-cors
@@ -326,7 +298,7 @@
               (println (str "Blog server started on port " actual-port))
               (println (str "  POST http://localhost:" actual-port "/api - Pull endpoint"))
               (println (str "  GET  http://localhost:" actual-port "/api/_schema - Schema"))
-              (when (:google-client-id auth)
+              (when google-client-id
                 (println (str "  GET  http://localhost:" actual-port "/oauth2/google - Google sign-in")))
               (when (seq owner-emails)
                 (println (str "  Owners: " (str/join ", " owner-emails))))
@@ -334,41 +306,6 @@
                          #(do (log/log-shutdown)
                               (stop-fn)
                               (println "Server stopped")))))}))))
-
-;;=============================================================================
-;; Environment Config
-;;=============================================================================
-
-(defn- get-env
-  ([k] (System/getenv k))
-  ([k default] (or (System/getenv k) default)))
-
-(defn config-from-env
-  "Build config map from environment variables.
-
-   Environment variables:
-   - BLOG_PORT, BLOG_BASE_URL
-   - DATAHIKE_BACKEND (:mem, :file, :s3), DATAHIKE_PATH, DATAHIKE_BUCKET, DATAHIKE_REGION
-   - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
-   - BLOG_OWNER_EMAILS, BLOG_ALLOWED_EMAILS
-   - SESSION_SECRET, SESSION_TIMEOUT
-   - BLOG_DEV_MODE, BLOG_BACKUP_DIR"
-  []
-  {:server {:port (some-> (get-env "BLOG_PORT") parse-long)
-            :base-url (get-env "BLOG_BASE_URL")}
-   :db {:backend (some-> (get-env "DATAHIKE_BACKEND") keyword)
-        :path (get-env "DATAHIKE_PATH")
-        :bucket (get-env "DATAHIKE_BUCKET")
-        :region (get-env "DATAHIKE_REGION")}
-   :auth {:google-client-id (get-env "GOOGLE_CLIENT_ID")
-          :google-client-secret (get-env "GOOGLE_CLIENT_SECRET")
-          :owner-emails (get-env "BLOG_OWNER_EMAILS")
-          :allowed-email-pattern (get-env "BLOG_ALLOWED_EMAILS")}
-   :session {:secret (get-env "SESSION_SECRET")
-             :timeout (some-> (get-env "SESSION_TIMEOUT") parse-long)}
-   :dev {:mode? (= "true" (get-env "BLOG_DEV_MODE"))
-         :seed? (not= "false" (get-env "BLOG_SEED"))
-         :backup-dir (get-env "BLOG_BACKUP_DIR")}})
 
 ;;=============================================================================
 ;; REPL Convenience (stateful)
@@ -381,7 +318,7 @@
   ([] (start! {}))
   ([config]
    (when @system (halt! @system))
-   (let [sys (make-system (merge (config-from-env) config))]
+   (let [sys (make-system (cfg/apply-defaults (merge (cfg/config-from-env) config)))]
      (::http-server sys)  ; touch to start
      (reset! system sys))))
 
