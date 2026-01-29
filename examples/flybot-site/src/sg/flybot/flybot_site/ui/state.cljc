@@ -77,9 +77,10 @@
   [{:keys [tag-filter pages]}]
   (boolean (and tag-filter (contains? (or pages #{}) tag-filter))))
 
-(defn form->post-data [{:keys [form]}]
-  {:post/title (:title form)
-   :post/content (:content form)})
+(defn form->post-data [{:keys [form user]}]
+  (cond-> {:post/title (:title form)
+           :post/content (:content form)}
+    (:name user) (assoc :post/author (:name user))))
 
 (defn logged-in?
   "Is a user currently logged in?"
@@ -186,11 +187,9 @@
               (cond-> id (assoc :selected-id id)))
    :fx {:history :push}})
 
-(defn view-new [{:keys [user] :as state}]
-  (let [author (or (:name user) "Anonymous")
-        template (str "---\nauthor: " author "\ntags:\n  - \n---\n\n")]
-    {:state (assoc state :view :new :form {:title "" :content template})
-     :fx {:history :push}}))
+(defn view-new [state]
+  {:state (assoc state :view :new :form {:title "" :content ""})
+   :fx {:history :push}})
 
 (defn view-edit [state post]
   {:state (assoc state
