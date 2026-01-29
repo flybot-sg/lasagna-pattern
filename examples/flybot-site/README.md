@@ -1,121 +1,85 @@
 # Flybot Site
 
-Migration of flybot.sg company site. Internal portal with blog-based content for company updates, announcements, and knowledge sharing.
+Migration of flybot.sg company site. Internal portal with blog-based content.
 
 ## Quick Start
 
-### Option 1: Full-Stack (Server + SPA)
-
 ```bash
-# Build the frontend
-npm install
-npm run release
+# Build frontend
+npm install && npm run release
 
-# Start the server
-clj -M:dev -e "(require '[sg.flybot.flybot-site.server :as s]) (s/start!)"
+# Start server
+clj -M:run
 ```
 
-Open http://localhost:8080 in your browser.
+Open http://localhost:8080.
 
-### Option 2: REPL-Driven Development
+## REPL Development
 
 ```bash
 clj -M:dev
 ```
 
-Then in the REPL:
-
 ```clojure
-(require '[sg.flybot.flybot-site.system :refer [make-system]]
-         '[sg.flybot.pullable.remote.client :as client]
-         '[robertluo.fun-map :refer [halt!]])
-
-;; Start system
-(def sys (make-system {:port 8080}))
-(:server sys)  ; starts server
+(start!)  ; server with dev mode (auto-login as owner)
 
 ;; Connect client
-(def api (client/connect "http://localhost:8080/api"))
+(def api (connect))
+(api '{:posts ?all})
+(api '{:posts {{:post/id 1} ?post}})
 
-;; List all posts
-(api '{:posts ?posts})
+(stop!)
+```
 
-;; Get single post by id
-(api '{:posts {{:id 1} ?post}})
+## fun-map Lifecycle
+
+The system uses [fun-map](https://github.com/robertluo/fun-map) `life-cycle-map` for dependency injection:
+
+```clojure
+(require '[sg.flybot.flybot-site.system :as sys]
+         '[robertluo.fun-map :refer [halt!]])
+
+;; Create system (components not started yet)
+(def sys (sys/make-system {:server {:port 8080}
+                           :auth {:owner-emails "alice@example.com"}}))
+
+;; Touch ::http-server to start the full chain
+(::sys/http-server sys)
 
 ;; Stop
 (halt! sys)
 ```
 
-### Option 3: Frontend Development (Hot Reload)
+## Config
 
-```bash
-# Terminal 1: Start backend
-clj -M:dev -e "(require '[sg.flybot.flybot-site.server :as s]) (s/start!)"
+Pass config with `:*` keys:
 
-# Terminal 2: Start shadow-cljs watcher
-npm run dev
+```clojure
+{:server {:port 8080 :base-url "http://localhost:8080"}
+ :db {:backend :mem}  ; or :file, :s3
+ :auth {:owner-emails "alice@example.com"
+            :google-client-id "..."
+            :google-client-secret "..."}
+ :session {:secret "32-hex-chars" :timeout 43200}
+ :dev {:mode? true :seed? true}}
 ```
 
-Frontend hot reloads at http://localhost:3000, proxies API to backend.
+Or use environment variables (see `config-from-env` in system.clj).
 
 ## Noun-Only CRUD
 
-The schema is purely nouns - no verbs like `create-post` or `update-post`.
-CRUD operations are expressed through pattern syntax on collections:
+No verbs - CRUD via pattern syntax on collections:
 
 | Pattern | Operation |
 |---------|-----------|
-| `{:posts ?all}` | LIST all posts |
-| `{:posts {{:id 3} ?post}}` | READ post by id |
-| `{:posts {nil {:title "..."}}}` | CREATE new post |
-| `{:posts {{:id 3} {:title "..."}}}` | UPDATE post |
-| `{:posts {{:id 3} nil}}` | DELETE post |
-
-## Role-Based Authentication
-
-Enable auth by passing `:owner-emails`:
-
-```clojure
-(def sys (make-system {:port 8080
-                       :owner-emails #{"alice@example.com"}}))
-```
-
-| User | Schema |
-|------|--------|
-| Anonymous / non-owner | Read-only (list, get posts) |
-| Owner (email in whitelist) | Full CRUD + `:me` endpoint |
-
-The session must contain `:user-email` - integrate with your auth middleware
-(Google SSO, Auth0, etc.) to set this.
-
-## Files
-
-### Backend (Clojure)
-
-| File | Description |
-|------|-------------|
-| `src/.../db.clj` | Datahike database with DataSource |
-| `src/.../api.cljc` | Schema and API builder |
-| `src/.../auth.cljc` | Role-based schema selection |
-| `src/.../system.clj` | System integration (life-cycle-map) |
-| `src/.../server.clj` | HTTP server with static file serving |
-
-### Frontend (ClojureScript)
-
-| File | Description |
-|------|-------------|
-| `src/.../ui/core.cljs` | App entry point, API actions, rendering |
-| `src/.../ui/api.cljs` | Transit-based API client |
-| `src/.../ui/state.cljc` | State management (testable on JVM) |
-| `src/.../ui/views.cljc` | Hiccup views (testable on JVM) |
+| `{:posts ?all}` | LIST |
+| `{:posts {{:post/id 3} ?post}}` | READ |
+| `{:posts {nil {:post/title "..."}}}` | CREATE |
+| `{:posts {{:post/id 3} {:post/title "..."}}}` | UPDATE |
+| `{:posts {{:post/id 3} nil}}` | DELETE |
 
 ## Testing
 
 ```bash
-# Run all tests (backend + frontend state/views)
 clj -X:dev:test
-
-# Build frontend release
-npm run release
 ```

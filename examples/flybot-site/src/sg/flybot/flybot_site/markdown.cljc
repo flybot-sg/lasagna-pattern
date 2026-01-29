@@ -43,12 +43,18 @@
                   :cljs [frontmatter {}])]
           (-> frontmatter
               (assoc :content content)
-              (cond-> (:tags frontmatter) (update :tags vec))))))))
+              ;; Filter out nil/empty tags to prevent db errors
+              (cond-> (:tags frontmatter)
+                (update :tags #(->> % (remove nil?) (remove str/blank?) vec)))))))))
 
 ^:rct/test
 (comment
   (parse nil) ;=> {}
   (parse "") ;=> {}
   (parse "Hello world") ;=> {:content "Hello world"}
-  (parse "---\nauthor: Alice\ntags:\n  - clojure\n  - test\n---\n\nHello world"))
-  ;=> {:content "Hello world" :author "Alice" :tags ["clojure" "test"]})
+  (parse "---\nauthor: Alice\ntags:\n  - clojure\n  - test\n---\n\nHello world")
+  ;=> {:content "Hello world" :author "Alice" :tags ["clojure" "test"]}
+
+  ;; Empty tags are filtered out
+  (parse "---\nauthor: dev\ntags:\n  - \n---\n\n"))
+  ;=> {:author "dev" :tags [] :content ""})
