@@ -58,13 +58,45 @@ Pass config with `:*` keys:
 {:server {:port 8080 :base-url "http://localhost:8080"}
  :db {:backend :mem}  ; or :file, :s3
  :auth {:owner-emails "alice@example.com"
-            :google-client-id "..."
-            :google-client-secret "..."}
+        :google-client-id "..."
+        :google-client-secret "..."}
  :session {:secret "32-hex-chars" :timeout 43200}
  :dev {:mode? true :seed? true}}
 ```
 
 Or use environment variables (see `config-from-env` in system.clj).
+
+## Database Backends
+
+Datahike supports three storage backends:
+
+### In-Memory (default)
+```clojure
+{:db {:backend :mem :id "blog"}}
+```
+Data is lost on restart. Use for development and testing.
+
+### File
+```clojure
+{:db {:backend :file :path "/var/data/flybot-db"}}
+```
+Persistent local storage. Data survives restarts.
+
+### S3
+```clojure
+{:db {:backend :s3 :bucket "my-bucket" :region "us-east-1"}}
+```
+Cloud storage for production. Requires AWS credentials.
+
+**Environment variables:**
+```bash
+DATAHIKE_BACKEND=file          # :mem, :file, :s3
+DATAHIKE_PATH=/var/data/db     # for :file backend
+DATAHIKE_BUCKET=my-bucket      # for :s3 backend
+DATAHIKE_REGION=us-east-1      # for :s3 backend
+```
+
+**Note:** For persistent backends (:file, :s3), the database is preserved across restarts. Seeding only occurs if the database is empty.
 
 ## Noun-Only CRUD
 

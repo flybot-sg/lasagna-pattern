@@ -202,7 +202,9 @@
          db-cfg (merge db/default-cfg
                        (when-let [backend (:backend db)] {:store {:backend backend}})
                        (when-let [path (:path db)] {:store {:path path}})
-                       (when-let [id (:id db)] {:store {:id id}}))
+                       (when-let [id (:id db)] {:store {:id id}})
+                       (when-let [bucket (:bucket db)] {:store {:bucket bucket}})
+                       (when-let [region (:region db)] {:store {:region region}}))
          owner-emails (parse-owner-emails (:owner-emails auth))
          allowed-email-pattern (parse-email-pattern (:allowed-email-pattern auth))
          session-secret (parse-session-secret (:secret session))
@@ -230,15 +232,18 @@
        ::db
        (fnk [::db-cfg]
             (log/info "Creating Datahike connection...")
-            (let [conn (db/create-conn! db-cfg)]
+            (let [conn (db/create-conn! db-cfg)
+                  empty-db? (db/database-empty? conn)]
               (log/log-db-connected db-cfg)
-              (cond
-                backup-dir
-                (let [result (backup/import-all! conn backup-dir)]
-                  (log/info "Imported" (:count result) "posts from" backup-dir))
-                seed?
-                (do (db/seed! conn)
-                    (log/log-db-seeded 10)))
+              ;; Only seed/import if database is empty (important for persistent backends)
+              (when empty-db?
+                (cond
+                  backup-dir
+                  (let [result (backup/import-all! conn backup-dir)]
+                    (log/info "Imported" (:count result) "posts from" backup-dir))
+                  seed?
+                  (do (db/seed! conn)
+                      (log/log-db-seeded 10))))
               ;; Return closeable with thunk accessor (hibou pattern)
               (closeable {:conn (fn [] conn)
                           :cfg db-cfg}
