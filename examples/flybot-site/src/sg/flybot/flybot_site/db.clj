@@ -82,23 +82,50 @@
    :schema-flexibility :write
    :keep-history? true})
 
+(defn- persistent-backend?
+  "Is this a persistent backend (file or S3)?"
+  [cfg]
+  (#{:file :s3} (get-in cfg [:store :backend])))
+
 (defn create-conn!
-  "Create a new Datahike connection with blog schema."
+  "Create or connect to a Datahike database with blog schema.
+
+   For :mem backend, always creates fresh database.
+   For :file/:s3 backends, connects to existing or creates new."
   ([] (create-conn! default-cfg))
   ([cfg]
-   (when (d/database-exists? cfg)
-     (d/delete-database cfg))
-   (d/create-database cfg)
-   (let [conn (d/connect cfg)]
-     (d/transact conn post-schema)
-     conn)))
+   (if (d/database-exists? cfg)
+     ;; Database exists - connect (for persistent) or recreate (for mem)
+     (if (persistent-backend? cfg)
+       (d/connect cfg)
+       (do
+         (d/delete-database cfg)
+         (d/create-database cfg)
+         (let [conn (d/connect cfg)]
+           (d/transact conn post-schema)
+           conn)))
+     ;; Database doesn't exist - create fresh
+     (do
+       (d/create-database cfg)
+       (let [conn (d/connect cfg)]
+         (d/transact conn post-schema)
+         conn)))))
+
+(defn database-empty?
+  "Check if database has no posts."
+  [conn]
+  (zero? (or (d/q '[:find (count ?e) . :where [?e :post/id _]] @conn) 0)))
 
 (defn release-conn!
-  "Release a Datahike connection and optionally delete database."
+  "Release a Datahike connection and optionally delete database.
+
+   For persistent backends, only releases connection (preserves data).
+   For :mem backend with cfg, deletes database."
   ([conn] (d/release conn))
   ([conn cfg]
    (d/release conn)
-   (d/delete-database cfg)))
+   (when-not (persistent-backend? cfg)
+     (d/delete-database cfg))))
 
 ;;=============================================================================
 ;; Entity Conversion (generic)
@@ -308,6 +335,14 @@
   ;; Index enforcement
   (def p2 (posts conn {:indexes #{#{:post/id} #{:post/author}}}))
   (:post/title (get p2 {:post/author "You"})) ;=> "Second"
+
+  ;; Database empty check
+  (database-empty? conn) ;=> false
+
+  ;; Persistent backend detection
+  (boolean (#'persistent-backend? {:store {:backend :mem}})) ;=> false
+  (boolean (#'persistent-backend? {:store {:backend :file :path "/tmp/db"}})) ;=> true
+  (boolean (#'persistent-backend? {:store {:backend :s3 :bucket "my-bucket"}})) ;=> true
 
   (release-conn! conn))
 
