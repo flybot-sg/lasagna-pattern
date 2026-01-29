@@ -21,7 +21,8 @@
    [ring.middleware.resource :refer [wrap-resource]]
    [ring.middleware.content-type :refer [wrap-content-type]]
    [ring.middleware.session :refer [wrap-session]]
-   [ring.middleware.session.memory :refer [memory-store]]
+   [ring.middleware.session.cookie :refer [cookie-store]]
+   [ring.middleware.session-timeout :refer [wrap-idle-session-timeout]]
    [ring.util.response :as resp]
    [clojure.java.io :as io]
    [clojure.string :as str])
@@ -160,6 +161,21 @@
         (handler (assoc request :session session))))
     handler))
 
+(defn- session-timeout-handler
+  "Handler for session timeout - redirects to home with error."
+  [_request]
+  {:status 302
+   :headers {"Location" "/?error=session-expired"}
+   :body ""})
+
+(defn- generate-session-key
+  "Generate a random 16-byte key for cookie encryption.
+   Only used in dev mode when SESSION_SECRET is not set."
+  []
+  (let [bytes (byte-array 16)]
+    (.nextBytes (java.security.SecureRandom.) bytes)
+    bytes))
+
 (defn make-app
   "Create Ring handler with given API function.
 
@@ -177,27 +193,41 @@
    - :google-client-secret - Google OAuth client secret
    - :base-url - Base URL of the application
    - :allowed-email-pattern - Regex pattern for allowed emails (nil = all allowed)
-   - :dev-user - Map with :email :name :picture for local dev without OAuth"
+   - :dev-user - Map with :email :name :picture for local dev without OAuth
+   - :session-secret - 16-byte key for cookie encryption (required in prod)
+   - :session-timeout - Session idle timeout in seconds (default 43200 = 12 hours)
+   - :secure-cookies? - Use secure cookies (default true, set false for local dev)"
   ([api-fn] (make-app api-fn {}))
-  ([api-fn {:keys [google-client-id google-client-secret base-url allowed-email-pattern dev-user]
-            :or {base-url "http://localhost:8080"}}]
-   (-> index-handler
-       (wrap-resource "public")
-       wrap-content-type
-       (remote/wrap-api api-fn {:path "/api"})
-       wrap-upload-route
-       wrap-multipart-params
-       wrap-keyword-params
-       wrap-params
-       oauth/wrap-logout
-       (oauth/wrap-fetch-profile {:allowed-email-pattern allowed-email-pattern})
-       (oauth/wrap-google-auth {:client-id google-client-id
-                                :client-secret google-client-secret
-                                :base-url base-url})
-       (wrap-dev-user dev-user)
-       (wrap-session {:store (memory-store)})
-       wrap-cors
-       wrap-error-handler)))
+  ([api-fn {:keys [google-client-id google-client-secret base-url allowed-email-pattern
+                   dev-user session-secret session-timeout secure-cookies?]
+            :or {base-url "http://localhost:8080"
+                 session-timeout 43200
+                 secure-cookies? true}}]
+   (let [cookie-key (or session-secret (generate-session-key))]
+     (when-not session-secret
+       (log/warn "SESSION_SECRET not set - using random key (sessions won't persist across restarts)"))
+     (-> index-handler
+         (wrap-resource "public")
+         wrap-content-type
+         (remote/wrap-api api-fn {:path "/api"})
+         wrap-upload-route
+         wrap-multipart-params
+         wrap-keyword-params
+         wrap-params
+         oauth/wrap-logout
+         (oauth/wrap-fetch-profile {:allowed-email-pattern allowed-email-pattern})
+         (oauth/wrap-google-auth {:client-id google-client-id
+                                  :client-secret google-client-secret
+                                  :base-url base-url})
+         (wrap-dev-user dev-user)
+         (wrap-idle-session-timeout {:timeout session-timeout
+                                     :timeout-handler session-timeout-handler})
+         (wrap-session {:store (cookie-store {:key cookie-key})
+                        :cookie-attrs {:same-site :lax
+                                       :http-only true
+                                       :secure secure-cookies?}})
+         wrap-cors
+         wrap-error-handler))))
 
 ;;=============================================================================
 ;; Port Selection
@@ -251,6 +281,18 @@
   (when-not (str/blank? s)
     (re-pattern s)))
 
+(defn- parse-session-secret
+  "Parse session secret from hex string to byte array.
+   Returns nil if blank. Throws if invalid format."
+  [s]
+  (when-not (str/blank? s)
+    (let [hex-chars (str/replace s #"[^0-9a-fA-F]" "")]
+      (when (not= 32 (count hex-chars))
+        (throw (ex-info "SESSION_SECRET must be 32 hex characters (16 bytes)"
+                        {:provided-length (count hex-chars)})))
+      (byte-array (map #(unchecked-byte (Integer/parseInt (apply str %) 16))
+                       (partition 2 hex-chars))))))
+
 (defn start!
   "Start the blog server.
 
@@ -264,6 +306,8 @@
    - :owner-emails - Set of owner emails (or BLOG_OWNER_EMAILS env var, comma-separated)
    - :allowed-email-pattern - Regex pattern for allowed emails (or BLOG_ALLOWED_EMAILS env var)
                               Example: \".*@mycompany\\\\.com\" to allow only company emails
+   - :session-secret - 16-byte key for cookie encryption (or SESSION_SECRET env var, 32 hex chars)
+   - :session-timeout - Session idle timeout in seconds (or SESSION_TIMEOUT env var, default 43200)
    - :dev-user - Map with :email :name :picture for local dev without OAuth.
    - :dev-mode? - Enable dev mode (or BLOG_DEV_MODE=true env var). NEVER set in prod.
                   When true AND OAuth not configured AND owner-emails set,
@@ -271,7 +315,8 @@
   ([]
    (start! {}))
   ([opts]
-   (let [{:keys [port seed? backup-dir google-client-id google-client-secret base-url owner-emails allowed-email-pattern dev-user]
+   (let [{:keys [port seed? backup-dir google-client-id google-client-secret base-url
+                 owner-emails allowed-email-pattern session-secret session-timeout dev-user]
           :or {port (parse-long (get-env "BLOG_PORT" "8080"))
                seed? true
                backup-dir (get-env "BLOG_BACKUP_DIR")
@@ -279,7 +324,9 @@
                google-client-secret (get-env "GOOGLE_CLIENT_SECRET")
                base-url (get-env "BLOG_BASE_URL" "http://localhost:8080")
                owner-emails (parse-owner-emails (get-env "BLOG_OWNER_EMAILS"))
-               allowed-email-pattern (parse-email-pattern (get-env "BLOG_ALLOWED_EMAILS"))}} opts
+               allowed-email-pattern (parse-email-pattern (get-env "BLOG_ALLOWED_EMAILS"))
+               session-secret (parse-session-secret (get-env "SESSION_SECRET"))
+               session-timeout (some-> (get-env "SESSION_TIMEOUT") parse-long)}} opts
          ;; Auto-enable dev-user ONLY when explicitly enabled via env var or option
          ;; Requires: BLOG_DEV_MODE=true AND owner-emails set AND no OAuth configured
          dev-mode? (or (:dev-mode? opts) (= "true" (get-env "BLOG_DEV_MODE")))
@@ -302,11 +349,14 @@
        (do (db/seed! @conn)
            (log/log-db-seeded 10)))
      (let [api-fn (make-api-fn @conn {:owner-emails owner-emails})
-           app (make-app api-fn {:google-client-id google-client-id
-                                 :google-client-secret google-client-secret
-                                 :base-url base-url
-                                 :allowed-email-pattern allowed-email-pattern
-                                 :dev-user dev-user})
+           app (make-app api-fn (cond-> {:google-client-id google-client-id
+                                         :google-client-secret google-client-secret
+                                         :base-url base-url
+                                         :allowed-email-pattern allowed-email-pattern
+                                         :dev-user dev-user
+                                         :secure-cookies? (not dev-mode?)}
+                                  session-secret (assoc :session-secret session-secret)
+                                  session-timeout (assoc :session-timeout session-timeout)))
            [stop-fn actual-port] (start-server-with-retry app port 10)]
        (reset! server stop-fn)
        (when (not= port actual-port)
