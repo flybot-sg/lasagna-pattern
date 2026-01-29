@@ -1,62 +1,31 @@
 (ns user
-  "REPL development namespace for blog example.
+  "REPL development namespace.
 
-   ## Quick Start
-
-   1. Start server (with dev mode):
-      (start!)
-
-   2. Connect a client:
-      (def api (connect))
-
-   3. Pull data:
-      (api '{:posts ?posts})
-      (api '{:post {:title ?t}} {:post-id 1})
-
-   4. Stop when done:
-      (stop!)
-
-   ## Dev Mode
-
-   By default, starts with dev mode enabled (auto-login as dev@localhost).
-   The dev user is an owner, so you get full CRUD access.
-
-   To disable dev mode:
-      (start! {:dev-mode? false})"
+   Quick Start:
+     (start!)              ; server with dev mode
+     (def api (connect))   ; connect client
+     (api '{:posts ?all})  ; pull data
+     (stop!)               ; stop server"
   (:require
-   [sg.flybot.flybot-site.server :as server]
+   [sg.flybot.flybot-site.system :as sys]
    [sg.flybot.pullable.remote.client :as client]))
 
 ;;=============================================================================
 ;; Server Lifecycle
 ;;=============================================================================
 
-(def ^:private default-dev-opts
-  "Default options for dev mode - auto-login as owner."
-  {:dev-mode? true
-   :owner-emails #{"dev@localhost"}})
+(def ^:private dev-config
+  "Dev mode config - auto-login as owner."
+  {:dev {:mode? true :seed? true}
+   :auth {:owner-emails "dev@localhost"}})
 
 (defn start!
-  "Start the blog server with dev mode enabled by default.
-
-   Options:
-   - :port - HTTP port (default 8080)
-   - :seed? - Seed database (default true)
-   - :dev-mode? - Enable dev auto-login (default true)
-   - :owner-emails - Set of owner emails (default #{\"dev@localhost\"})"
+  "Start server with dev mode. Pass config to override."
   ([] (start! {}))
-  ([opts]
-   (server/start! (merge default-dev-opts opts))))
+  ([config] (sys/start! (merge dev-config config))))
 
-(defn stop!
-  "Stop the blog server."
-  []
-  (server/stop!))
-
-(defn restart!
-  "Restart the server."
-  []
-  (server/restart!))
+(defn stop! [] (sys/stop!))
+(defn restart! [] (sys/restart!))
 
 ;;=============================================================================
 ;; Client
