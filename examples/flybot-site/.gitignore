@@ -10,3 +10,6 @@ package-lock.json
 # Editor
 .nrepl-port
 .shadow-cljs/
+
+# Logs
+logs/
