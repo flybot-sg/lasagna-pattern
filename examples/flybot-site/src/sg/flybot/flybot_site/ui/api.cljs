@@ -37,6 +37,7 @@
                 #js {:method "POST"
                      :headers #js {"Content-Type" "application/transit+json"
                                    "Accept" "application/transit+json"}
+                     :credentials "include"
                      :body (encode {:pattern pattern})})
       (.then (fn [resp]
                (if (.-ok resp)

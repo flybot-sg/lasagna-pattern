@@ -2,70 +2,77 @@
   "Google OAuth middleware for blog authentication.
 
    Endpoints created:
-   - GET /oauth2/google - Start OAuth flow
-   - GET /oauth2/google/callback - OAuth callback
+   - GET /oauth2/google - Start OAuth flow (handled by ring-oauth2)
+   - GET /oauth2/google/callback - OAuth callback (handled by ring-oauth2)
+   - GET /oauth2/google/success - Profile fetch and redirect (our handler)
    - GET /logout - Clear session
+
+   Flow:
+   1. User clicks login -> /oauth2/google
+   2. ring-oauth2 redirects to Google
+   3. Google redirects back to /oauth2/google/callback
+   4. ring-oauth2 exchanges code for token, stores in session
+   5. ring-oauth2 redirects to /oauth2/google/success (landing-uri)
+   6. Our success handler fetches profile, stores user info, redirects to /
 
    Usage:
    (-> handler
        wrap-logout
-       (wrap-fetch-profile {:allowed-email-pattern #\".*@mycompany\\\\.com\"})
+       (wrap-oauth-success {:allowed-email-pattern #\".*@mycompany\\\\.com\"})
        (wrap-google-auth {:client-id \"...\"
                           :client-secret \"...\"
-                          :base-url \"http://localhost:8080\"})
-       (wrap-session {:store (memory-store)}))
+                          :redirect-uri \"http://localhost:8080/oauth2/google/callback\"})
+       (wrap-session {:store (cookie-store {:key ...})}))
 
    The :allowed-email-pattern option restricts which Google accounts can log in.
-   Users whose email doesn't match will be redirected with an error."
+   Users whose email doesn't match will be logged out and shown an error."
   (:require
    [ring.middleware.oauth2 :refer [wrap-oauth2]]
    [clj-http.client :as http]
-   [cheshire.core :as json]
-   [sg.flybot.flybot-site.log :as log]))
+   [com.brunobonacci.mulog :as mu]))
 
 ;;=============================================================================
 ;; Google Profile Fetching
 ;;=============================================================================
 
 (defn- fetch-google-profile
-  "Fetch user profile from Google People API using access token."
+  "Fetch user profile from Google userinfo API using access token.
+   Returns map with :email, :name, :picture or throws on failure."
   [access-token]
-  (try
-    (let [response (http/get "https://www.googleapis.com/oauth2/v2/userinfo"
-                             {:headers {"Authorization" (str "Bearer " access-token)}
-                              :as :json})]
-      (log/debug "Google profile response:" (:body response))
-      (:body response))
-    (catch Exception e
-      (log/error "Failed to fetch Google profile:" (ex-message e))
-      nil)))
+  (mu/log ::profile-fetch-start)
+  (let [{:keys [status body]} (try
+                                (http/request
+                                 {:content-type :json
+                                  :accept :json
+                                  :url "https://www.googleapis.com/oauth2/v2/userinfo"
+                                  :method :get
+                                  :oauth-token access-token
+                                  :as :json})
+                                (catch Exception e
+                                  (mu/log ::profile-fetch-error :error (ex-message e))
+                                  (throw (ex-info "Could not fetch Google user info"
+                                                  {:type :oauth/fetch-profile-failed
+                                                   :cause (ex-message e)}))))]
+    (if (= status 200)
+      (do
+        (mu/log ::profile-fetch-success :email (:email body))
+        body)
+      (do
+        (mu/log ::profile-fetch-error :status status)
+        (throw (ex-info "Google API returned error"
+                        {:type :oauth/google-api-error
+                         :status status}))))))
 
 ;;=============================================================================
-;; Middleware
+;; Helpers
 ;;=============================================================================
 
-(defn wrap-google-auth
-  "Wrap handler with Google OAuth2 authentication.
-
-   Config:
-   - :client-id - Google OAuth client ID
-   - :client-secret - Google OAuth client secret
-   - :base-url - Base URL of the application (e.g., \"http://localhost:8080\")"
-  [handler {:keys [client-id client-secret base-url]}]
-  (if (and client-id client-secret)
-    (wrap-oauth2 handler
-                 {:google
-                  {:authorize-uri "https://accounts.google.com/o/oauth2/v2/auth"
-                   :access-token-uri "https://oauth2.googleapis.com/token"
-                   :client-id client-id
-                   :client-secret client-secret
-                   :scopes ["openid" "email" "profile"]
-                   :launch-uri "/oauth2/google"
-                   :redirect-uri (str base-url "/oauth2/google/callback")
-                   :landing-uri "/"}})
-    (do
-      (log/warn "Google OAuth not configured - authentication disabled")
-      handler)))
+(defn- redirect-302
+  "Create a 302 redirect response."
+  [location]
+  {:status 302
+   :headers {"Location" location}
+   :body ""})
 
 (defn- email-allowed?
   "Check if email matches the allowed pattern."
@@ -74,42 +81,116 @@
    (or (nil? allowed-pattern)
        (and email (re-matches allowed-pattern email)))))
 
-(defn wrap-fetch-profile
-  "After OAuth callback, fetch Google profile and store in session.
+;;=============================================================================
+;; Middleware
+;;=============================================================================
 
-   Reads OAuth2 token from session, fetches profile, and stores:
-   - :user-email
-   - :user-name
-   - :user-picture
+(defn- wrap-oauth-debug
+  "Debug wrapper to log OAuth-related requests and responses."
+  [handler]
+  (fn [request]
+    (let [uri (:uri request)
+          oauth-path? (and uri (.startsWith uri "/oauth2"))
+          debug-path? (= uri "/debug-session")
+          api-path? (= uri "/api")]
+      (when (or oauth-path? debug-path? api-path?)
+        (mu/log ::oauth-request
+                :uri uri
+                :session-keys (keys (:session request))
+                :user-email (get-in request [:session :user-email])
+                :has-tokens (some? (get-in request [:session :ring.middleware.oauth2/access-tokens]))
+                :cookie (get-in request [:headers "cookie"])))
+      (let [response (handler request)]
+        (when (or oauth-path? debug-path?)
+          (mu/log ::oauth-response
+                  :uri uri
+                  :status (:status response)
+                  :has-session (contains? response :session)
+                  :session-keys (keys (:session response))
+                  :user-email (get-in response [:session :user-email])))
+        response))))
+
+(defn wrap-google-auth
+  "Wrap handler with Google OAuth2 authentication.
+
+   Config:
+   - :client-id - Google OAuth client ID
+   - :client-secret - Google OAuth client secret
+   - :base-url - Base URL for constructing redirect-uri (e.g., \"http://localhost:8080\")
+
+   Creates routes:
+   - /oauth2/google - Initiates OAuth flow
+   - /oauth2/google/callback - Receives Google callback
+   - After callback, redirects to /oauth2/google/success (landing-uri)"
+  [handler {:keys [client-id client-secret base-url]}]
+  (if (and client-id client-secret base-url)
+    (let [redirect-uri (str base-url "/oauth2/google/callback")]
+      (mu/log ::oauth-configured :redirect-uri redirect-uri)
+      (-> handler
+          (wrap-oauth2 {:google
+                        {:authorize-uri "https://accounts.google.com/o/oauth2/v2/auth"
+                         :access-token-uri "https://oauth2.googleapis.com/token"
+                         :client-id client-id
+                         :client-secret client-secret
+                         :scopes ["openid" "email" "profile"]
+                         :launch-uri "/oauth2/google"
+                         :redirect-uri redirect-uri
+                         :landing-uri "/oauth2/google/success"}})
+          wrap-oauth-debug))
+    (do
+      (mu/log ::oauth-disabled :reason "missing credentials")
+      handler)))
+
+(defn wrap-oauth-success
+  "Handle the /oauth2/google/success route after OAuth callback completes.
+
+   This middleware intercepts requests to /oauth2/google/success, fetches
+   the Google profile using the access token from session, and:
+   - If email is allowed: stores user info in session, redirects to /
+   - If email not allowed: clears session, redirects with error
 
    Options:
    - :allowed-email-pattern - Regex pattern for allowed emails.
-     Users whose email doesn't match will be logged out and shown an error."
-  ([handler] (wrap-fetch-profile handler {}))
-  ([handler {:keys [allowed-email-pattern]}]
+   - :client-root-path - Where to redirect after success (default: \"/\")"
+  ([handler] (wrap-oauth-success handler {}))
+  ([handler {:keys [allowed-email-pattern client-root-path]
+             :or {client-root-path "/"}}]
    (fn [request]
-     (let [access-token (get-in request [:session :ring.middleware.oauth2/access-tokens :google :token])]
-       (if (and access-token
-                (not (get-in request [:session :user-email])))
-         ;; Have OAuth token but haven't fetched profile yet
-         (let [profile (fetch-google-profile access-token)
-               email (:email profile)]
-           (if (email-allowed? email allowed-email-pattern)
-             ;; Email allowed - store in session
-             (let [session (-> (:session request)
-                               (assoc :user-email email
-                                      :user-name (:name profile)
-                                      :user-picture (:picture profile)))]
-               (log/info "User logged in:" email)
-               (-> (handler (assoc request :session session))
-                   (assoc :session session)))
-             ;; Email not allowed - clear session and redirect with error
-             (do
-               (log/warn "Login denied - email not allowed:" email)
-               {:status 302
-                :headers {"Location" "/?error=unauthorized"}
-                :session nil})))
-         (handler request))))))
+     (if (= "/oauth2/google/success" (:uri request))
+       ;; Handle OAuth success - fetch profile and redirect
+       (let [session-keys (keys (:session request))
+             has-tokens (some? (get-in request [:session :ring.middleware.oauth2/access-tokens]))
+             _ (mu/log ::success-handler-start :session-keys session-keys :has-tokens has-tokens)
+             access-token (get-in request [:session :ring.middleware.oauth2/access-tokens :google :token])]
+         (if access-token
+           (try
+             (let [profile (fetch-google-profile access-token)
+                   email (:email profile)]
+               (if (email-allowed? email allowed-email-pattern)
+                 ;; Email allowed - store in session and redirect to app
+                 (let [session (-> (:session request)
+                                   (assoc :user-email email
+                                          :user-name (:name profile)
+                                          :user-picture (:picture profile)))]
+                   (mu/log ::user-logged-in :email email :role (if allowed-email-pattern :viewer :owner))
+                   (-> (redirect-302 client-root-path)
+                       (assoc :session session)))
+                 ;; Email not allowed - clear session and show error
+                 (do
+                   (mu/log ::login-denied :email email :reason "email not allowed")
+                   (-> (redirect-302 (str client-root-path "?error=unauthorized"))
+                       (assoc :session nil)))))
+             (catch Exception e
+               (mu/log ::success-handler-error :error (ex-message e) :type (type e))
+               (-> (redirect-302 (str client-root-path "?error=oauth-failed"))
+                   (assoc :session nil))))
+           ;; No token in session - something went wrong
+           (do
+             (mu/log ::no-token-in-session :session-keys session-keys)
+             (-> (redirect-302 (str client-root-path "?error=no-token"))
+                 (assoc :session nil)))))
+       ;; Not the success route - pass through
+       (handler request)))))
 
 (defn wrap-logout
   "Handle /logout by clearing session and redirecting to home."
@@ -117,7 +198,7 @@
   (fn [request]
     (if (= "/logout" (:uri request))
       (do
-        (log/info "User logged out:" (get-in request [:session :user-email]))
+        (mu/log ::user-logout :email (get-in request [:session :user-email]))
         {:status 302
          :headers {"Location" "/"}
          :session nil})
@@ -160,5 +241,18 @@
   ;; wrap-google-auth passes through when not configured
   (let [handler (wrap-google-auth identity {})
         result (handler {:uri "/test"})]
-    (:uri result)))
-  ;=> "/test")
+    (:uri result))
+  ;=> "/test"
+
+  ;; wrap-oauth-success passes through non-success routes
+  (let [handler (wrap-oauth-success (fn [_] {:status 200 :body "ok"}))
+        response (handler {:uri "/api" :session {}})]
+    (:status response))
+  ;=> 200
+
+  ;; wrap-oauth-success redirects with error when no token
+  (let [handler (wrap-oauth-success (fn [_] {:status 200}))
+        response (handler {:uri "/oauth2/google/success" :session {}})]
+    [(:status response) (get-in response [:headers "Location"])])
+  ;=> [302 "/?error=no-token"]
+  )
