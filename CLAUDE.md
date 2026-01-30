@@ -2,32 +2,9 @@
 
 A monorepo for pull-based pattern matching and data transformation tools in Clojure/ClojureScript.
 
-## Required Skills
+## Version Control
 
-**Always use these skills when working on this project:**
-- `/clojure` - For all Clojure/ClojureScript development (planning, design, coding, idioms)
-- `/jj` - For all version control operations (this project uses Jujutsu instead of git)
-
-## Workspace Workflow
-
-**Always use jj workspaces for coding tasks:**
-
-1. **Before coding** - Create isolated workspace:
-   ```bash
-   jj workspace add <task-name> /tmp/workspace-<task-name>
-   cd /tmp/workspace-<task-name>
-   ```
-
-2. **Do the work** - Edit files, run tests in the workspace
-
-3. **After finishing** - Commit, merge to main, cleanup:
-   ```bash
-   jj describe -m "Commit message"
-   jj bookmark set main -r @
-   cd "$CLAUDE_PROJECT_DIR"
-   jj workspace forget <task-name>
-   rm -rf /tmp/workspace-<task-name>
-   ```
+This project uses **jj** (Jujutsu), not git.
 
 ## Build System
 
@@ -207,7 +184,7 @@ The portal has a unified logging system for both frontend and backend.
 
 ## Testing
 
-Uses Rich Comment Tests (RCT) - inline tests in source:
+Uses Rich Comment Tests (RCT). Run `bb test` to execute all tests.
 
 ```clojure
 ^:rct/test
@@ -215,5 +192,3 @@ Uses Rich Comment Tests (RCT) - inline tests in source:
   (some-fn 1 2) ;=> expected-result
   )
 ```
-
-Run `bb test` to execute all tests.
