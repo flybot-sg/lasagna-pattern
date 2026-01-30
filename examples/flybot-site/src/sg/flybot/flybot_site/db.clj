@@ -120,12 +120,17 @@
   "Release a Datahike connection and optionally delete database.
 
    For persistent backends, only releases connection (preserves data).
-   For :mem backend with cfg, deletes database."
-  ([conn] (d/release conn))
+   For :mem backend with cfg, deletes database.
+   Handles protocol reload errors gracefully (common during REPL development)."
+  ([conn] (try (d/release conn) (catch Exception _)))
   ([conn cfg]
-   (d/release conn)
-   (when-not (persistent-backend? cfg)
-     (d/delete-database cfg))))
+   (try
+     (d/release conn)
+     (when-not (persistent-backend? cfg)
+       (d/delete-database cfg))
+     (catch IllegalArgumentException _
+       ;; Protocol mismatch after reload - connection already invalid
+       nil))))
 
 ;;=============================================================================
 ;; Entity Conversion (generic)
@@ -150,11 +155,15 @@
 
 (defn- extract-frontmatter
   "Extract properties from markdown frontmatter in content.
-   Converts :author/:tags from frontmatter to :post/author/:post/tags."
+   Converts :author/:tags from frontmatter to :post/author/:post/tags.
+   Strips frontmatter from content, keeping only the body."
   [data]
   (if-let [content (:post/content data)]
     (let [parsed (md/parse content)]
       (cond-> data
+        ;; Strip frontmatter from content, keep only body
+        (:content parsed) (assoc :post/content (:content parsed))
+        ;; Extract author/tags to dedicated fields
         (:author parsed) (assoc :post/author (:author parsed))
         (:tags parsed) (assoc :post/tags (:tags parsed))))
     data))
