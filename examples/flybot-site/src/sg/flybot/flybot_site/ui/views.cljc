@@ -294,7 +294,7 @@
         ;; In page mode: first post is hero, rest go to slideshow
         hero-post (when page-mode? (first posts))
         slideshow-posts (when page-mode? (rest posts))]
-    [:div (when page-mode? {:class "page-view"})
+    [:div (cond-> {} page-mode? (assoc :class "page-view"))
      [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
       [:h1 (if page-mode? tag-filter "Blog Posts")]
       (when can-edit?
