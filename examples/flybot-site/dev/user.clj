@@ -11,9 +11,10 @@
    [sg.flybot.pullable.remote.client :as client]))
 
 (def ^:private dev-config
-  "Dev mode config - auto-login as owner."
-  {:dev {:mode? true :seed? true}
-   :auth {:owner-emails "dev@localhost"}})
+  "Dev defaults - uses BLOG_MODE from env, falls back to :dev if not set."
+  (cond-> {:init {:seed? true}
+           :auth {:owner-emails "dev@localhost"}}
+    (nil? (System/getenv "BLOG_MODE")) (assoc :mode :dev)))
 
 (defn start!
   "Start server with dev mode. Pass config to override."

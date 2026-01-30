@@ -9,6 +9,8 @@
 .nrepl*
 .rebel*
 .jj/
+.env
+.envrc
 
 # JS build artifacts
 .shadow-cljs/

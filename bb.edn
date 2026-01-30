@@ -11,6 +11,21 @@
              (when (fs/exists? file)
                (contains? (:tasks (edn/read-string (slurp file))) (symbol task)))))}
 
+  ;; Helper: load .env file and merge with current env (for local dev)
+  -load-env
+  {:task (fn [dir]
+           (let [env-file (fs/file dir ".env")
+                 base-env (into {} (System/getenv))
+                 dotenv (when (fs/exists? env-file)
+                          (println (str "Loading .env from " dir))
+                          (->> (slurp env-file)
+                               str/split-lines
+                               (remove (fn [line] (or (str/blank? line) (str/starts-with? line "#"))))
+                               (map (fn [line] (str/split line (re-pattern "=") 2)))
+                               (filter (fn [parts] (= 2 (count parts))))
+                               (into {})))]
+             (merge base-env dotenv)))}
+
   ;; Discover components: directories with deps.edn (excluding hidden dirs)
   ;; Scans root level and examples/ subdirectory
   -components
@@ -54,13 +69,14 @@
                      (clojure {:dir c} "-M:cljs" "-m" "shadow.cljs.devtools.cli" "compile" "test")))))))}
 
   dev
-  {:doc "Start REPL: bb dev <component> (delegates to component bb.edn if present)"
-   :depends [-comp-task?]
+  {:doc "Start REPL: bb dev <component> (loads .env if present)"
+   :depends [-comp-task? -load-env]
    :task (let [component (first *command-line-args*)]
            (if component
-             (if (-comp-task? component "dev")
-               (shell {:dir component} "bb" "dev")
-               (clojure {:dir component} "-M:dev"))
+             (let [env (-load-env component)]
+               (if (-comp-task? component "dev")
+                 (shell {:dir component :env env} "bb" "dev")
+                 (clojure {:dir component :env env} "-M:dev")))
              (println "Usage: bb dev <component>")))}
 
   clean
@@ -73,17 +89,18 @@
              (shell {:dir c} "rm" "-rf" "target" ".cpcache" ".shadow-cljs")))}
 
   nrepl
-  {:doc "Start nREPL: bb nrepl <component> (delegates to component bb.edn if present)"
-   :depends [-comp-task?]
+  {:doc "Start nREPL: bb nrepl <component> (loads .env if present)"
+   :depends [-comp-task? -load-env]
    :task (let [component (first *command-line-args*)]
            (if component
-             (if (-comp-task? component "dev")
-               ;; Component has its own dev task (likely with proper middleware)
-               (shell {:dir component} "bb" "dev")
-               ;; Fallback: basic nREPL
-               (clojure {:dir component}
-                        "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}"
-                        "-M" "-m" "nrepl.cmdline"))
+             (let [env (-load-env component)]
+               (if (-comp-task? component "dev")
+                 ;; Component has its own dev task (likely with proper middleware)
+                 (shell {:dir component :env env} "bb" "dev")
+                 ;; Fallback: basic nREPL
+                 (clojure {:dir component :env env}
+                          "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}"
+                          "-M" "-m" "nrepl.cmdline")))
              (println "Usage: bb nrepl <component>")))}
 
   serve
