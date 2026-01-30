@@ -1,8 +1,10 @@
 {:tasks
- {dev
+ {:init (defn current-env [] (into {} (System/getenv)))
+
+  dev
   {:doc "Start nREPL for development. Connect editor, then (start!) for backend.
          For CLJS: (shadow.cljs.devtools.api/watch :app) then (shadow.cljs.devtools.api/repl :app)"
-   :task (clojure "-M:dev:cljs -m nrepl.cmdline --middleware \"[shadow.cljs.devtools.server.nrepl/middleware,cider.nrepl/cider-middleware]\"")}
+   :task (clojure {:env (current-env)} "-M:dev:cljs -m nrepl.cmdline --middleware \"[shadow.cljs.devtools.server.nrepl/middleware,cider.nrepl/cider-middleware]\"")}
 
   serve
   {:doc "Build and serve static frontend on port 3000 (requires backend on 8080)"

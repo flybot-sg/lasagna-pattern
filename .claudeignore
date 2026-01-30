@@ -1,0 +1,26 @@
+# Secrets and credentials
+.env
+.env.local
+.env.production
+.env.*.local
+credentials.json
+service-account*.json
+*-credentials.json
+secrets.edn
+secrets.json
+secrets.yaml
+
+# Private keys
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# AWS
+.aws/credentials
+
+# Google Cloud
+gcloud-*.json
+application_default_credentials.json
