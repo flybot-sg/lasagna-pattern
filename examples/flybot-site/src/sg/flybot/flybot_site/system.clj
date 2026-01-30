@@ -32,9 +32,9 @@
    [sg.flybot.flybot-site.backup :as backup]
    [sg.flybot.flybot-site.cfg :as cfg]
    [sg.flybot.flybot-site.db :as db]
-   [sg.flybot.flybot-site.log :as log]
    [sg.flybot.flybot-site.oauth :as oauth]
    [sg.flybot.pullable.remote :as remote]
+   [com.brunobonacci.mulog :as mu]
    [org.httpkit.server :as http-kit]
    [ring.middleware.params :refer [wrap-params]]
    [ring.middleware.keyword-params :refer [wrap-keyword-params]]
@@ -43,6 +43,7 @@
    [ring.middleware.content-type :refer [wrap-content-type]]
    [ring.middleware.session :refer [wrap-session]]
    [ring.middleware.session.cookie :refer [cookie-store]]
+   [ring.middleware.session.memory :refer [memory-store]]
    [ring.middleware.session-timeout :refer [wrap-idle-session-timeout]]
    [ring.util.response :as resp]
    [robertluo.fun-map :refer [fnk life-cycle-map closeable halt!]]
@@ -84,7 +85,7 @@
     (try
       (handler request)
       (catch Exception e
-        (log/error "Unhandled exception:" (ex-message e))
+        (mu/log ::unhandled-exception :error (ex-message e))
         (let [api-route? (str/starts-with? (or (:uri request) "") "/api")]
           (if api-route?
             (-> (resp/response "{\"error\":\"Internal server error\"}")
@@ -110,7 +111,7 @@
                 filename (str (UUID/randomUUID) "." ext)
                 dest-file (io/file uploads-dir filename)]
             (io/copy (:tempfile file) dest-file)
-            (log/info "Image uploaded:" filename)
+            (mu/log ::image-uploaded :filename filename)
             (-> (resp/response (str "{\"url\":\"/uploads/" filename "\"}"))
                 (resp/content-type "application/json")))
           (-> (resp/response "{\"error\":\"No image provided\"}")
@@ -134,24 +135,6 @@
   {:status 302 :headers {"Location" "/?error=session-expired"} :body ""})
 
 ;;=============================================================================
-;; Port Selection
-;;=============================================================================
-
-(defn- try-start-server [app port]
-  (try
-    [(http-kit/run-server app {:port port}) port]
-    (catch java.net.BindException _ nil)))
-
-(defn- start-server-with-retry [app start-port max-attempts]
-  (loop [port start-port, attempts 0]
-    (if (>= attempts max-attempts)
-      (throw (ex-info "Could not find available port" {:start-port start-port}))
-      (if-let [result (try-start-server app port)]
-        result
-        (do (log/debug "Port" port "in use, trying" (inc port))
-            (recur (inc port) (inc attempts)))))))
-
-;;=============================================================================
 ;; System Definition
 ;;=============================================================================
 
@@ -165,14 +148,16 @@
    Defaults are applied automatically."
   ([] (make-system {}))
   ([config]
-   (let [{:keys [server db auth session dev]} (cfg/prepare-cfg config)
+   (let [{:keys [mode server db auth session init log]} (cfg/prepare-cfg config)
          ;; Extract validated config values (defaults already applied)
          {:keys [port base-url]} server
          {:keys [backend path id bucket region]} db
          {:keys [owner-emails allowed-email-pattern
                  google-client-id google-client-secret]} auth
          {:keys [secret timeout]} session
-         {:keys [mode? seed? backup-dir]} dev
+         {:keys [seed? backup-dir]} init
+         {:keys [publishers context]} log
+         dev-mode? (boolean (#{:dev :dev-with-oauth2} mode))
          ;; Build Datahike config
          db-cfg (cond-> {:store {:backend backend}
                          :schema-flexibility :write
@@ -193,7 +178,22 @@
        ::base-url base-url
        ::db-cfg db-cfg
        ::owner-emails owner-emails
-       ::dev-mode? mode?
+       ::mode mode
+       ::dev-mode? dev-mode?
+
+       ;;-----------------------------------------------------------------------
+       ;; Logger (mulog)
+       ;;-----------------------------------------------------------------------
+       ::logger
+       (fnk []
+            (io/make-parents (-> publishers first :filename))
+            (let [stop-fn (mu/start-publisher! {:type :multi :publishers publishers})]
+              (when context (mu/set-global-context! context))
+              (mu/log ::logger-started :publishers (mapv :type publishers))
+              (closeable {:log (fn [event data] (mu/log event data))}
+                         #(do (mu/log ::logger-stopping)
+                              (Thread/sleep 100)
+                              (stop-fn)))))
 
        ;;-----------------------------------------------------------------------
        ;; Database Connection
@@ -202,35 +202,35 @@
        ;; See: fun-map gotcha #1 - automatic dereferencing of IDeref values.
        ;;-----------------------------------------------------------------------
        ::db
-       (fnk [::db-cfg]
-            (log/info "Creating Datahike connection...")
+       (fnk [::db-cfg ::logger]
+            (mu/log ::db-creating :config db-cfg)
             (let [conn (db/create-conn! db-cfg)
                   empty-db? (db/database-empty? conn)]
-              (log/log-db-connected db-cfg)
+              (mu/log ::db-connected :backend (:backend db-cfg))
               ;; Only seed/import if database is empty (important for persistent backends)
               (when empty-db?
                 (cond
                   backup-dir
                   (let [result (backup/import-all! conn backup-dir)]
-                    (log/info "Imported" (:count result) "posts from" backup-dir))
+                    (mu/log ::db-imported :count (:count result) :from backup-dir))
                   seed?
                   (do (db/seed! conn)
-                      (log/log-db-seeded 10))))
+                      (mu/log ::db-seeded :posts 10))))
               ;; Return closeable with thunk accessor (hibou pattern)
               (closeable {:conn (fn [] conn)
                           :cfg db-cfg}
-                         #(do (log/info "Releasing Datahike connection...")
+                         #(do (mu/log ::db-releasing)
                               (db/release-conn! conn db-cfg)))))
 
        ;;-----------------------------------------------------------------------
        ;; API Function (request -> {:data :schema})
        ;;-----------------------------------------------------------------------
        ::api-fn
-       (fnk [::db ::owner-emails]
-            (log/debug "Initializing API function")
+       (fnk [::db ::owner-emails ::logger]
+            (mu/log ::api-fn-init)
             (let [conn ((:conn db))]  ; Call thunk to get connection
               (if (seq owner-emails)
-                (do (log/info "Role-based auth enabled for:" owner-emails)
+                (do (mu/log ::role-auth-enabled :owner-emails owner-emails)
                     (auth/make-api {:owner-emails owner-emails :conn conn}))
                 (fn [_] {:data (api/make-api conn) :schema api/schema}))))
 
@@ -238,25 +238,25 @@
        ;; Session Configuration
        ;;-----------------------------------------------------------------------
        ::session-config
-       (fnk [::dev-mode?]
+       (fnk [::dev-mode? ::logger]
             (let [key (or session-key
-                          (do (log/warn "SESSION_SECRET not set - using random key")
+                          (do (mu/log ::session-secret-missing :using "random-key")
                               (generate-session-key)))]
-              {:store (cookie-store {:key key})
+              (mu/log ::session-store :type :memory)
+              {:store (ring.middleware.session.memory/memory-store)
                :cookie-attrs {:same-site :lax
                               :http-only true
                               :secure (not dev-mode?)}}))
 
        ;;-----------------------------------------------------------------------
-       ;; Dev User (auto-login for dev mode)
+       ;; Dev User (auto-login for :dev mode only, not :dev-with-oauth2)
        ;;-----------------------------------------------------------------------
        ::dev-user
-       (fnk [::dev-mode? ::owner-emails]
-            (when (and dev-mode?
-                       (not google-client-id)
+       (fnk [::mode ::owner-emails ::logger]
+            (when (and (= :dev mode)
                        (seq owner-emails))
               (let [email (first owner-emails)]
-                (log/warn "DEV MODE: Auto-login as" email)
+                (mu/log ::dev-mode-auto-login :email email)
                 {:email email
                  :name (first (str/split email #"@"))
                  :picture nil})))
@@ -265,8 +265,8 @@
        ;; Ring Application
        ;;-----------------------------------------------------------------------
        ::ring-app
-       (fnk [::api-fn ::session-config ::dev-user ::base-url]
-            (log/debug "Building Ring application")
+       (fnk [::api-fn ::session-config ::dev-user ::base-url ::logger]
+            (mu/log ::ring-app-building)
             (-> (fn [_] (-> (resp/resource-response "index.html" {:root "public"})
                             (resp/content-type "text/html")))
                 (wrap-resource "public")
@@ -274,10 +274,8 @@
                 (remote/wrap-api api-fn {:path "/api"})
                 wrap-upload-route
                 wrap-multipart-params
-                wrap-keyword-params
-                wrap-params
                 oauth/wrap-logout
-                (oauth/wrap-fetch-profile {:allowed-email-pattern email-pattern})
+                (oauth/wrap-oauth-success {:allowed-email-pattern email-pattern})
                 (oauth/wrap-google-auth {:client-id google-client-id
                                          :client-secret google-client-secret
                                          :base-url base-url})
@@ -285,6 +283,8 @@
                 (wrap-idle-session-timeout {:timeout timeout
                                             :timeout-handler session-timeout-handler})
                 (wrap-session session-config)
+                wrap-keyword-params
+                wrap-params
                 wrap-cors
                 wrap-error-handler))
 
@@ -292,20 +292,17 @@
        ;; HTTP Server
        ;;-----------------------------------------------------------------------
        ::http-server
-       (fnk [::ring-app ::port ::owner-emails]
-            (let [[stop-fn actual-port] (start-server-with-retry ring-app port 10)]
-              (log/log-startup actual-port)
-              (println (str "Blog server started on port " actual-port))
-              (println (str "  POST http://localhost:" actual-port "/api - Pull endpoint"))
-              (println (str "  GET  http://localhost:" actual-port "/api/_schema - Schema"))
-              (when google-client-id
-                (println (str "  GET  http://localhost:" actual-port "/oauth2/google - Google sign-in")))
-              (when (seq owner-emails)
-                (println (str "  Owners: " (str/join ", " owner-emails))))
-              (closeable {:port actual-port}
-                         #(do (log/log-shutdown)
-                              (stop-fn)
-                              (println "Server stopped")))))}))))
+       (fnk [::ring-app ::port ::owner-emails ::logger]
+            (let [stop-fn (http-kit/run-server ring-app {:port port})
+                  info {:port port
+                        :api-endpoint (str "http://localhost:" port "/api")
+                        :schema-endpoint (str "http://localhost:" port "/api/_schema")
+                        :oauth-endpoint (when google-client-id (str "http://localhost:" port "/oauth2/google"))
+                        :owners owner-emails}]
+              (mu/log ::server-started info)
+              (closeable info
+                         #(do (mu/log ::server-stopping)
+                              (stop-fn)))))}))))
 
 ;;=============================================================================
 ;; REPL Convenience (stateful)
@@ -342,12 +339,14 @@
   (require '[ring.mock.request :as mock])
 
   ;; Create system with test config
-  (def sys (make-system {:server {:port 18766}
-                         :dev {:seed? true :mode? true}
+  (def sys (make-system {:mode :dev
+                         :server {:port 18766}
+                         :init {:seed? true}
                          :auth {:owner-emails "test@example.com"}}))
 
   ;; Access components (lazy - starts on demand)
   (::port sys) ;=> 18766
+  (::mode sys) ;=> :dev
   (::dev-mode? sys) ;=> true
 
   ;; Start server
