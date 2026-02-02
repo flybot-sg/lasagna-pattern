@@ -262,6 +262,13 @@ h2 { font-size: 1.25rem; margin: 0 0 0.5rem 0; }
   font-family: "SF Mono", Consolas, monospace;
 }
 
+/* Page tags (Home, About, Apply) - darker/muted style */
+.tag-page {
+  background: var(--bg-secondary);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+}
+
 /* Post detail */
 .post-detail, .post-form, .post-history, .post-history-detail {
   background: var(--bg-card);

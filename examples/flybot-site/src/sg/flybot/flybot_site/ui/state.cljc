@@ -3,7 +3,8 @@
 
    Each function returns a map with:
    - :state - the new state
-   - :fx    - optional effects map {:api ... :confirm ... :history ...}")
+   - :fx    - optional effects map {:api ... :confirm ... :history ...}"
+  (:require [clojure.string :as str]))
 
 ;;=============================================================================
 ;; State Shape
@@ -15,7 +16,7 @@
    :selected-id nil
    :loading? false
    :error nil          ; {:message "..." :retryable? bool} or nil
-   :form {:title "" :content ""}
+   :form {:title "" :content "" :tags "" :featured? false}
    :history []
    :history-version nil
    :tag-filter nil    ; nil = show all, string = filter by tag (includes pages)
@@ -29,14 +30,14 @@
 (defn- retryable-error-pattern?
   "Check if error string indicates a retryable error (network/server issues)."
   [s]
-  (let [lc (some-> s clojure.string/lower-case)]
+  (let [lc (some-> s str/lower-case)]
     (boolean
      (and lc
-          (or (clojure.string/includes? lc "failed to fetch")
-              (clojure.string/includes? lc "networkerror")
-              (clojure.string/includes? lc "network error")
-              (clojure.string/includes? lc "http 5")
-              (clojure.string/includes? lc "500"))))))
+          (or (str/includes? lc "failed to fetch")
+              (str/includes? lc "networkerror")
+              (str/includes? lc "network error")
+              (str/includes? lc "http 5")
+              (str/includes? lc "500"))))))
 
 (defn classify-error
   "Classify error into {:message ... :retryable? ...}"
@@ -61,15 +62,16 @@
 (defn filtered-posts
   "Filter posts for list view.
    - When tag-filter is set, show posts with that tag
-   - Otherwise, exclude posts whose ONLY tags are page tags"
+   - Otherwise, show posts that have regular tags OR are featured"
   [{:keys [posts tag-filter pages]}]
   (let [pages (or pages #{})]
     (if tag-filter
       (filter #(some #{tag-filter} (:post/tags %)) posts)
-      ;; Exclude posts that have ONLY page tags (no regular tags)
-      (remove #(let [tags (set (:post/tags %))]
-                 (and (seq tags)
-                      (every? pages tags)))
+      ;; Show posts that have regular tags OR are featured
+      (filter #(let [tags (set (:post/tags %))]
+                 (or (:post/featured? %)
+                     (empty? tags)
+                     (not (every? pages tags))))
               posts))))
 
 (defn page-mode?
@@ -77,10 +79,21 @@
   [{:keys [tag-filter pages]}]
   (boolean (and tag-filter (contains? (or pages #{}) tag-filter))))
 
+(defn- parse-tags
+  "Parse comma-separated tags string into vector."
+  [s]
+  (when (and (string? s) (seq s))
+    (->> (str/split s #",")
+         (map str/trim)
+         (remove empty?)
+         vec)))
+
 (defn form->post-data [{:keys [form user]}]
   (cond-> {:post/title (:title form)
            :post/content (:content form)}
-    (:name user) (assoc :post/author (:name user))))
+    (:name user) (assoc :post/author (:name user))
+    (seq (:tags form)) (assoc :post/tags (parse-tags (:tags form)))
+    (:featured? form) (assoc :post/featured? true)))
 
 (defn logged-in?
   "Is a user currently logged in?"
@@ -164,7 +177,7 @@
      :fx (api-fx {:posts {{:post/id id} (form->post-data state)}} :post-saved)}))
 
 (defn post-saved [state _]
-  {:state (assoc state :loading? false :view :list :form {:title "" :content ""})
+  {:state (assoc state :loading? false :view :list :form {:title "" :content "" :tags "" :featured? false})
    :fx (merge {:history :push} fetch-posts-fx)})
 
 (defn delete-post [state id]
@@ -188,15 +201,24 @@
    :fx {:history :push}})
 
 (defn view-new [state]
-  {:state (assoc state :view :new :form {:title "" :content ""})
+  {:state (assoc state :view :new :form {:title "" :content "" :tags "" :featured? false})
    :fx {:history :push}})
+
+(defn- tags->string
+  "Convert tags vector/set to comma-separated string for form."
+  [tags]
+  (if (seq tags)
+    (str/join ", " tags)
+    ""))
 
 (defn view-edit [state post]
   {:state (assoc state
                  :view :edit
                  :selected-id (:post/id post)
                  :form {:title (:post/title post "")
-                        :content (:post/content post "")})
+                        :content (:post/content post "")
+                        :tags (tags->string (:post/tags post))
+                        :featured? (boolean (:post/featured? post))})
    :fx {:history :push}})
 
 ;; --- Form ---
@@ -207,11 +229,11 @@
 ;; --- Tag Filter / Pages ---
 
 (defn filter-by-tag
-  "Filter posts by tag. Pages (tags in :pages set) push to history for URL support."
+  "Filter posts by tag. Always navigates to list view with URL update.
+   Pages go to /page/{tag}, regular tags go to /tag/{tag}."
   [state tag]
-  (let [is-page? (contains? (or (:pages state) #{}) tag)]
-    {:state (assoc state :view :list :tag-filter tag)
-     :fx (when (or is-page? (nil? tag)) {:history :push})}))
+  {:state (assoc state :view :list :tag-filter tag)
+   :fx {:history :push}})
 
 ;; --- History ---
 
@@ -316,13 +338,13 @@
                    :pages #{}})
   ;=> [{:post/id 1 :post/tags ["clojure"]}]
 
-  ;; filtered-posts excludes page-only posts
+  ;; filtered-posts excludes page-only posts (unless featured)
   (filtered-posts {:posts [{:post/id 1 :post/tags ["Home"]}
                            {:post/id 2 :post/tags ["clojure"]}
-                           {:post/id 3 :post/tags ["Home" "featured"]}]
+                           {:post/id 3 :post/tags ["Home"] :post/featured? true}]
                    :tag-filter nil
                    :pages #{"Home"}})
-  ;=> [{:post/id 2 :post/tags ["clojure"]} {:post/id 3 :post/tags ["Home" "featured"]}]
+  ;=> [{:post/id 2 :post/tags ["clojure"]} {:post/id 3 :post/tags ["Home"] :post/featured? true}]
 
   ;; page-mode? returns true when tag-filter is a page
   (page-mode? {:tag-filter "Home" :pages #{"Home"}})
@@ -341,10 +363,10 @@
     (:history fx))
   ;=> :push
 
-  ;; filter-by-tag with regular tag doesn't push history
+  ;; filter-by-tag with regular tag now also pushes history (goes to /tag/clojure)
   (let [{:keys [fx]} (filter-by-tag {:pages #{"Home"}} "clojure")]
     (:history fx))
-  ;=> nil
+  ;=> :push
 
   ;; filter-by-tag sets filter and switches to list view
   (let [{:keys [state]} (filter-by-tag {:view :detail} "clojure")]

@@ -15,18 +15,26 @@
   #?(:clj (when d (str d))
      :cljs (when d (.toLocaleDateString (js/Date. d)))))
 
+(def ^:private page-tags
+  "Tags that represent pages (styled differently)."
+  #{"Home" "About" "Apply"})
+
 (defn tag-list
-  "Render tags. If dispatch! provided, tags are clickable to filter."
+  "Render tags. If dispatch! provided, tags are clickable to filter.
+   Page tags (Home, About, Apply) are styled with .tag-page class."
   ([tags] (tag-list tags nil))
   ([tags dispatch!]
    (when (seq tags)
      [:div.tags
-      (for [tag tags]
-        [:span.tag (cond-> {:replicant/key tag}
-                     dispatch! (assoc :on {:click (fn [e]
-                                                    (.stopPropagation e)
-                                                    (dispatch! [:filter-by-tag tag]))}
-                                      :style {:cursor "pointer"}))
+      (for [tag tags
+            :let [is-page? (contains? page-tags tag)]]
+        [:span {:replicant/key tag
+                :class (if is-page? "tag tag-page" "tag")
+                :style (when dispatch! {:cursor "pointer"})
+                :on (when dispatch!
+                      {:click (fn [e]
+                                (.stopPropagation e)
+                                (dispatch! [:filter-by-tag tag]))})}
          tag])])))
 
 (defn- strip-frontmatter [content]
@@ -379,6 +387,21 @@
       [:label "Title"]
       [:input {:type "text" :value (:title form)
                :on {:input #(dispatch! [:update-form :title (.. % -target -value)])}}]]
+     [:div.form-group
+      [:label "Tags"]
+      [:input {:type "text"
+               :value (:tags form)
+               :placeholder "clojure, web, Home (comma-separated)"
+               :on {:input #(dispatch! [:update-form :tags (.. % -target -value)])}}]
+      [:small {:style {:color "var(--text-muted)" :display "block" :margin-top "0.25rem"}}
+       "Page tags: Home, About, Apply"]]
+     [:div.form-group.checkbox-group
+      [:label {:style {:display "flex" :align-items "center" :gap "0.5rem" :cursor "pointer"}}
+       [:input {:type "checkbox"
+                :checked (:featured? form)
+                :on {:change #(dispatch! [:update-form :featured? (.. % -target -checked)])}}]
+       "Featured"
+       [:small {:style {:color "var(--text-muted)"}} "(also shows in Posts feed)"]]]
      [:div.form-group
       [:label "Content"]
       (markdown-editor (:content form) dispatch!)]

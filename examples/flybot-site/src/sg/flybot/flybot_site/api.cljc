@@ -38,6 +38,7 @@
     [:post/content {:doc "Markdown content with optional YAML frontmatter"} :string]
     [:post/author {:doc "Author name (extracted from frontmatter)"} :string]
     [:post/tags {:doc "List of tags (extracted from frontmatter)" :example ["clojure" "web"]} [:vector :string]]
+    [:post/featured? {:doc "Featured post (appears in Posts feed even if page-only)" :optional true} :boolean]
     [:post/created-at {:doc "Creation timestamp"} :any]
     [:post/updated-at {:doc "Last update timestamp"} :any]]))
 
