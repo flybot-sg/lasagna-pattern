@@ -75,6 +75,17 @@
                [:filename {:optional true} :string]]]]
     [:context {:optional true} :map]]})
 
+(def uploads-registry
+  {::uploads
+   [:multi {:dispatch :type :default :local}
+    [:local [:map
+             [:type [:= :local]]
+             [:dir {:optional true} :string]]]
+    [:s3 [:map
+          [:type [:= :s3]]
+          [:bucket :string]
+          [:region :string]]]]})
+
 ;; Mode-specific config validation using multi-dispatch
 ;; :prod requires OAuth + session secret
 ;; :dev-with-oauth2 requires OAuth only
@@ -96,7 +107,8 @@
                  [:secret :string]
                  [:timeout {:optional true} [:maybe :int]]]]
       [:init {:optional true} ::init]
-      [:log {:optional true} ::log]]]
+      [:log {:optional true} ::log]
+      [:uploads {:optional true} ::uploads]]]
 
     [:dev-with-oauth2
      [:map
@@ -110,7 +122,8 @@
               [:allowed-email-pattern {:optional true} [:maybe :string]]]]
       [:session {:optional true} ::session]
       [:init {:optional true} ::init]
-      [:log {:optional true} ::log]]]
+      [:log {:optional true} ::log]
+      [:uploads {:optional true} ::uploads]]]
 
     [:dev
      [:map
@@ -120,7 +133,8 @@
       [:auth {:optional true} ::auth]
       [:session {:optional true} ::session]
       [:init {:optional true} ::init]
-      [:log {:optional true} ::log]]]]})
+      [:log {:optional true} ::log]
+      [:uploads {:optional true} ::uploads]]]]})
 
 ;;=============================================================================
 ;; Combined Registry
@@ -137,6 +151,7 @@
    mode-registry
    init-registry
    log-registry
+   uploads-registry
    config-registry))
 
 ;;=============================================================================
@@ -210,7 +225,8 @@
    :session {:timeout 43200}
    :init {:seed? false}
    :log {:publishers [{:type :simple-file :filename "logs/flybot.log"}]
-         :context {:app "flybot-site"}}})
+         :context {:app "flybot-site"}}
+   :uploads {:type :local :dir "resources/public/uploads"}})
 
 (defn apply-defaults
   "Deep merge config with defaults."
@@ -264,7 +280,13 @@
        :session {:secret (get-env "SESSION_SECRET")
                  :timeout (some-> (get-env "SESSION_TIMEOUT") parse-long)}
        :init {:seed? (= "true" (get-env "BLOG_SEED"))
-              :backup-dir (get-env "BLOG_BACKUP_DIR")}}
+              :backup-dir (get-env "BLOG_BACKUP_DIR")}
+       :uploads (if-let [bucket (get-env "S3_UPLOADS_BUCKET")]
+                  {:type :s3
+                   :bucket bucket
+                   :region (or (get-env "S3_UPLOADS_REGION") "ap-southeast-1")}
+                  {:type :local
+                   :dir (or (get-env "UPLOADS_DIR") "resources/public/uploads")})}
        (parse-mode (get-env "BLOG_MODE")) (assoc :mode (parse-mode (get-env "BLOG_MODE"))))))
 
 #?(:clj

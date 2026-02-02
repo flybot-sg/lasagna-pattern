@@ -1,5 +1,7 @@
 {:tasks
- {:init (defn current-env [] (into {} (System/getenv)))
+ {:requires [[clojure.edn :as edn]]
+
+  :init (defn current-env [] (into {} (System/getenv)))
 
   dev
   {:doc "Start nREPL for development. Connect editor, then (start!) for backend.
@@ -20,9 +22,19 @@
    :task (shell "npx shadow-cljs -A:dev:cljs watch app")}
 
   test
-  {:doc "Run tests"
-   :task (clojure "-X:dev:test")}
+  {:doc "Run tests (kaocha includes RCT via rct-test.clj)"
+   :task (apply clojure "-M:dev:kaocha" *command-line-args*)}
 
   clean
   {:doc "Clean build artifacts"
-   :task (shell "rm -rf target .shadow-cljs .cpcache")}}}
+   :task (shell "rm -rf target .shadow-cljs .cpcache")}
+
+  tag
+  {:doc "Create and push git tag from project.edn version (triggers deploy)"
+   :task (let [version (-> (slurp "project.edn") edn/read-string :version)
+               tag (str "v" version)]
+           (println "Creating tag:" tag)
+           (shell "git" "tag" "-a" tag "-m" (str "Release " tag))
+           (println "Pushing tag to origin...")
+           (shell "git" "push" "origin" tag)
+           (println "Done! CI/CD will deploy" tag))}}}

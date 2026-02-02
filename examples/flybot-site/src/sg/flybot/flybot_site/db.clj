@@ -32,6 +32,7 @@
    ```"
   (:require
    [datahike.api :as d]
+   [datahike-s3.core] ; registers :s3 backend
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.flybot-site.markdown :as md]
    [sg.flybot.flybot-site.log :as log]))
