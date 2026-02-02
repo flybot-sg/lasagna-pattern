@@ -169,10 +169,11 @@
                (if (email-allowed? email allowed-email-pattern)
                  ;; Email allowed - store in session and redirect to app
                  (let [session (-> (:session request)
-                                   (assoc :user-email email
+                                   (assoc :user-id (:id profile)
+                                          :user-email email
                                           :user-name (:name profile)
                                           :user-picture (:picture profile)))]
-                   (mu/log ::user-logged-in :email email :role (if allowed-email-pattern :viewer :owner))
+                   (mu/log ::user-logged-in :user-id (:id profile) :email email)
                    (-> (redirect-302 client-root-path)
                        (assoc :session session)))
                  ;; Email not allowed - clear session and show error

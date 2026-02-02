@@ -29,7 +29,10 @@
   (when d (.format DateTimeFormatter/ISO_INSTANT (.toInstant d))))
 
 (defn- iso->date [s]
-  (when s (java.util.Date/from (Instant/parse s))))
+  (cond
+    (nil? s) nil
+    (instance? java.util.Date s) s
+    :else (java.util.Date/from (Instant/parse s))))
 
 ;;=============================================================================
 ;; Export
@@ -82,18 +85,19 @@
           end-idx (->> (rest lines) (take-while #(not= % "---")) count inc)
           yaml-str (str/join "\n" (subvec (vec lines) 1 end-idx))
           body (str/trim (str/join "\n" (subvec (vec lines) (inc end-idx))))
-          {:keys [id title author tags created-at updated-at]} (yaml/parse-string yaml-str :keywords true)]
-      {:post/id (long id)
-       :post/title title
-       :post/author author
-       :post/tags (set tags)
-       :post/created-at (iso->date created-at)
-       :post/updated-at (iso->date updated-at)
-       :post/content (str "---\n"
-                          (when author (str "author: " author "\n"))
-                          (when (seq tags)
-                            (str "tags:\n" (str/join "\n" (map #(str "  - " %) tags)) "\n"))
-                          "---\n\n" body)})))
+          {:keys [id title author tags created-at updated-at featured?]} (yaml/parse-string yaml-str :keywords true)]
+      (cond-> {:post/id (long id)
+               :post/title title
+               :post/author author
+               :post/tags (set tags)
+               :post/created-at (iso->date created-at)
+               :post/updated-at (iso->date updated-at)
+               :post/content (str "---\n"
+                                  (when author (str "author: " author "\n"))
+                                  (when (seq tags)
+                                    (str "tags:\n" (str/join "\n" (map #(str "  - " %) tags)) "\n"))
+                                  "---\n\n" body)}
+        featured? (assoc :post/featured? true)))))
 
 (defn import-all!
   "Import all .md files from directory.

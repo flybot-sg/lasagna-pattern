@@ -18,13 +18,26 @@ Full-stack Clojure/ClojureScript demonstrating pull-based pattern matching.
 ## Quick Start
 
 ```bash
-# Backend
-clj -M:run              # Start server at localhost:8080
-
-# Frontend (separate terminal)
-npm install
-npm run dev             # shadow-cljs watch with hot reload
+# From repo root - starts nREPL with both CLJ and CLJS support
+bb dev examples/flybot-site
 ```
+
+### REPL Development
+
+Go to `dev/user.clj` namespace — it has everything you need:
+
+```clojure
+(start!)       ; Start server (config from .env)
+(sys/stop!)    ; Stop server
+(sys/restart!) ; Restart server
+```
+
+### Ports
+
+| Port | Purpose |
+|------|---------|
+| 8080 | Backend server (prepackaged JS) |
+| 3000 | shadow-cljs dev server (hot reload) |
 
 ## Architecture
 
