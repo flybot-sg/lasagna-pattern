@@ -9,9 +9,15 @@
   "Convert app state to URL path."
   [{:keys [view selected-id tag-filter pages]}]
   (case view
-    :list (if (and tag-filter (contains? (or pages #{}) tag-filter))
+    :list (cond
+            ;; Page tag -> /page/Home
+            (and tag-filter (contains? (or pages #{}) tag-filter))
             (str "/page/" (js/encodeURIComponent tag-filter))
-            "/")
+            ;; Regular tag -> /tag/clojure
+            tag-filter
+            (str "/tag/" (js/encodeURIComponent tag-filter))
+            ;; No filter -> /
+            :else "/")
     :detail (str "/posts/" selected-id)
     :edit (str "/posts/" selected-id "/edit")
     :new "/posts/new"
@@ -31,6 +37,11 @@
       ;; /page/:name - pages are just tag filters
       (re-matches #"/page/(.+)" path)
       (let [[_ tag] (re-matches #"/page/(.+)" path)]
+        {:view :list :id nil :tag (js/decodeURIComponent tag)})
+
+      ;; /tag/:name - regular tag filter
+      (re-matches #"/tag/(.+)" path)
+      (let [[_ tag] (re-matches #"/tag/(.+)" path)]
         {:view :list :id nil :tag (js/decodeURIComponent tag)})
 
       ;; /posts/:id/history/detail

@@ -35,7 +35,7 @@
    [datahike-s3.core] ; registers :s3 backend
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.flybot-site.markdown :as md]
-   [sg.flybot.flybot-site.log :as log]))
+   [com.brunobonacci.mulog :as mu]))
 
 ;;=============================================================================
 ;; Schema
@@ -67,11 +67,14 @@
     :db/cardinality :db.cardinality/one}
    {:db/ident :post/updated-at
     :db/valueType :db.type/instant
+    :db/cardinality :db.cardinality/one}
+   {:db/ident :post/featured?
+    :db/valueType :db.type/boolean
     :db/cardinality :db.cardinality/one}])
 
 (def ^:private attr-keys
   "Post attribute keys (namespaced)."
-  [:post/id :post/title :post/content :post/author :post/tags :post/created-at :post/updated-at])
+  [:post/id :post/title :post/content :post/author :post/tags :post/created-at :post/updated-at :post/featured?])
 
 ;;=============================================================================
 ;; Connection Management
@@ -189,20 +192,20 @@
   coll/DataSource
   (fetch [_ query]
     (try
-      (log/log-db-op :fetch :post (:post/id query))
+      (mu/log ::db-fetch :entity :post :id (:post/id query))
       (normalize-entity (find-by conn query))
       (catch Exception e
-        (log/error "DB fetch failed:" {:query query :error (ex-message e)})
+        (mu/log ::db-fetch-error :query query :error (ex-message e))
         (throw e))))
 
   (list-all [_]
     (try
-      (log/log-db-op :list-all :post nil)
+      (mu/log ::db-list-all :entity :post)
       (->> (d/q '[:find [(pull ?e [*]) ...] :where [?e :post/id _]] @conn)
            (map normalize-entity)
            (sort-by :post/created-at #(compare %2 %1)))
       (catch Exception e
-        (log/error "DB list-all failed:" {:error (ex-message e)})
+        (mu/log ::db-list-all-error :error (ex-message e))
         (throw e))))
 
   (create! [_ data]
@@ -213,10 +216,10 @@
                            :post/created-at ts
                            :post/updated-at ts})]
         (d/transact conn [entity])
-        (log/log-db-create :post entity)
+        (mu/log ::db-create :entity :post :id (:post/id entity))
         (normalize-entity entity))
       (catch Exception e
-        (log/error "DB create failed:" {:data data :error (ex-message e)})
+        (mu/log ::db-create-error :data data :error (ex-message e))
         (throw e))))
 
   (update! [this query data]
@@ -226,10 +229,10 @@
                              {:post/id (:post/id post)
                               :post/updated-at (now)})]
           (d/transact conn [updates])
-          (log/log-db-update :post (:post/id post))
+          (mu/log ::db-update :entity :post :id (:post/id post))
           (coll/fetch this {:post/id (:post/id post)})))
       (catch Exception e
-        (log/error "DB update failed:" {:query query :data data :error (ex-message e)})
+        (mu/log ::db-update-error :query query :data data :error (ex-message e))
         (throw e))))
 
   (delete! [this query]
@@ -238,11 +241,11 @@
         (let [eid (d/q '[:find ?e . :in $ ?id :where [?e :post/id ?id]]
                        @conn (:post/id post))]
           (d/transact conn [[:db/retractEntity eid]])
-          (log/log-db-delete :post (:post/id post))
+          (mu/log ::db-delete :entity :post :id (:post/id post))
           true)
         false)
       (catch Exception e
-        (log/error "DB delete failed:" {:query query :error (ex-message e)})
+        (mu/log ::db-delete-error :query query :error (ex-message e))
         (throw e)))))
 
 ;;=============================================================================
@@ -263,7 +266,7 @@
    Returns list of {:version/tx, :version/timestamp, :post/*} maps sorted newest first.
    Takes a db value (not conn) to ensure consistent view."
   [db post-id]
-  (log/debug "post-history called for post:" post-id)
+  (mu/log ::post-history-start :post-id post-id)
   (let [history-db (d/history db)
         ;; Find all transactions that touched this post's content or title
         txs (d/q '[:find ?tx ?inst
@@ -274,7 +277,7 @@
                        [?e :post/title _ ?tx true])
                    [?tx :db/txInstant ?inst]]
                  history-db post-id)]
-    (log/debug "Found" (count txs) "transaction(s) for post" post-id)
+    (mu/log ::post-history-found :post-id post-id :tx-count (count txs))
     (->> txs
          (sort-by second)
          reverse
@@ -297,9 +300,9 @@
     clojure.lang.ILookup
     (valAt [_ query]
       (when-let [post-id (:post/id query)]
-        (log/debug "History lookup for post:" post-id)
+        (mu/log ::history-lookup :post-id post-id)
         (let [result (post-history @conn post-id)]
-          (log/debug "History result count:" (count result))
+          (mu/log ::history-lookup-result :post-id post-id :count (count result))
           result)))
     (valAt [this query not-found]
       (or (.valAt this query) not-found))
@@ -370,6 +373,7 @@
 author: Flybot Team
 tags:
   - Home
+  - clojure
 ---
 
 # Building the Future of Software
@@ -401,6 +405,8 @@ author: Alice
 tags:
   - Home
   - projects
+  - tech
+  - clojure
 ---
 
 Check out our latest case study on building high-performance data pipelines with Clojure and Kafka."})
@@ -437,6 +443,7 @@ author: Bob
 tags:
   - About
   - tech
+  - clojure
 ---
 
 We work primarily with Clojure/ClojureScript, Datomic, and modern cloud infrastructure. Our tooling philosophy emphasizes composability and data-driven configuration."})
