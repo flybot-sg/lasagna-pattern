@@ -59,20 +59,36 @@
 (defn selected-post [{:keys [posts selected-id]}]
   (first (filter #(= (:post/id %) selected-id) posts)))
 
+(defn- sort-by-date
+  "Sort posts by created-at descending (newest first)."
+  [posts]
+  (sort-by :post/created-at #(compare %2 %1) posts))
+
 (defn filtered-posts
   "Filter posts for list view.
    - When tag-filter is set, show posts with that tag
-   - Otherwise, show posts that have regular tags OR are featured"
+   - Otherwise, show posts that have at least one non-page tag
+   - Results sorted by creation date (newest first)"
   [{:keys [posts tag-filter pages]}]
   (let [pages (or pages #{})]
-    (if tag-filter
-      (filter #(some #{tag-filter} (:post/tags %)) posts)
-      ;; Show posts that have regular tags OR are featured
-      (filter #(let [tags (set (:post/tags %))]
-                 (or (:post/featured? %)
-                     (empty? tags)
-                     (not (every? pages tags))))
-              posts))))
+    (->> (if tag-filter
+           (filter #(some #{tag-filter} (:post/tags %)) posts)
+           ;; Show posts that have at least one non-page tag
+           (filter #(let [tags (set (:post/tags %))]
+                      (or (empty? tags)
+                          (not (every? pages tags))))
+                   posts))
+         sort-by-date)))
+
+(defn hero-post
+  "Get the featured post from filtered posts (for page mode hero display)."
+  [posts]
+  (first (filter :post/featured? posts)))
+
+(defn non-hero-posts
+  "Get posts excluding the hero (featured) post."
+  [posts]
+  (remove :post/featured? posts))
 
 (defn page-mode?
   "Is the current view showing a page (tag-filter is a page tag)?"
@@ -88,12 +104,35 @@
          (remove empty?)
          vec)))
 
+(defn- strip-frontmatter
+  "Remove YAML frontmatter from content for editing."
+  [content]
+  (if (and (string? content) (str/starts-with? content "---"))
+    (if-let [match (re-find #"(?s)^---\s*\n.*?\n---\s*\n?" content)]
+      (str/trim (subs content (count match)))
+      content)
+    (or content "")))
+
+(defn- has-h1?
+  "Check if content has any H1 headings (lines starting with '# ')."
+  [content]
+  (boolean (and (string? content)
+                (re-find #"(?m)^# " content))))
+
+(defn- demote-headings
+  "Demote all headings by one level (# -> ##, ## -> ###, etc.)
+   Only if content contains H1 headings."
+  [content]
+  (if (has-h1? content)
+    (str/replace content #"(?m)^(#{1,5}) " "$1# ")
+    content))
+
 (defn form->post-data [{:keys [form user]}]
   (cond-> {:post/title (:title form)
-           :post/content (:content form)}
+           :post/content (demote-headings (:content form))
+           :post/featured? (boolean (:featured? form))}
     (:name user) (assoc :post/author (:name user))
-    (seq (:tags form)) (assoc :post/tags (parse-tags (:tags form)))
-    (:featured? form) (assoc :post/featured? true)))
+    (seq (:tags form)) (assoc :post/tags (parse-tags (:tags form)))))
 
 (defn logged-in?
   "Is a user currently logged in?"
@@ -216,7 +255,7 @@
                  :view :edit
                  :selected-id (:post/id post)
                  :form {:title (:post/title post "")
-                        :content (:post/content post "")
+                        :content (strip-frontmatter (:post/content post))
                         :tags (tags->string (:post/tags post))
                         :featured? (boolean (:post/featured? post))})
    :fx {:history :push}})

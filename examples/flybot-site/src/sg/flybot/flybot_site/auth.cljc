@@ -42,6 +42,7 @@
   "Schema for the :me endpoint."
   (m/schema
    [:map
+    [:id :string]
     [:email :string]
     [:name :string]
     [:picture :string]
@@ -52,6 +53,7 @@
   [:map
    [:posts [:vector api/post-schema]]
    [:me [:map
+         [:id :string]
          [:email :string]
          [:name :string]
          [:picture :string]
@@ -74,12 +76,14 @@
    - Owner → full schema + :me (full CRUD access)"
   [{:keys [owner-emails conn] :or {owner-emails #{}}}]
   (fn [ring-request]
-    (let [email (get-in ring-request [:session :user-email])
+    (let [id (get-in ring-request [:session :user-id])
+          email (get-in ring-request [:session :user-email])
           name' (get-in ring-request [:session :user-name] email)
           picture (get-in ring-request [:session :user-picture])
           is-owner? (and email (owner? {:owner-emails owner-emails} email))
           base-api (api/make-api conn)
-          me-data {:email email
+          me-data {:id id
+                   :email email
                    :name name'
                    :picture picture
                    :role (if is-owner? :owner :viewer)}]

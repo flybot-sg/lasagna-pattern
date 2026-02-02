@@ -13,3 +13,6 @@ package-lock.json
 
 # Logs
 logs/
+
+# Backups (contain user IDs, migrated locally)
+backups/

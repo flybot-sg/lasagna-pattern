@@ -240,7 +240,7 @@
     (if page-mode?
       [:div.page-card {:on {:click #(dispatch! [:select-post id])}}
        [:div.card-header
-        [:h2 title]
+        [:h2.post-title title]
         (when can-edit?
           [:button.edit-btn {:title "Edit"
                              :on {:click (fn [e]
@@ -250,7 +250,7 @@
        [:div.page-content (render-markdown content)]]
       [:div.post-card {:on {:click #(dispatch! [:select-post id])}}
        [:div.card-header
-        [:h2 title]
+        [:h2.post-title title]
         (when can-edit?
           [:button.edit-btn {:title "Edit"
                              :on {:click (fn [e]
@@ -299,12 +299,12 @@
   (let [posts (state/filtered-posts state)
         can-edit? (state/can-edit? state)
         page-mode? (state/page-mode? state)
-        ;; In page mode: first post is hero, rest go to slideshow
-        hero-post (when page-mode? (first posts))
-        slideshow-posts (when page-mode? (rest posts))]
+        ;; In page mode: featured post is hero, rest go to slideshow (sorted by date)
+        hero-post (when page-mode? (state/hero-post posts))
+        slideshow-posts (when page-mode? (state/non-hero-posts posts))]
     [:div (cond-> {} page-mode? (assoc :class "page-view"))
      [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
-      [:h1 (if page-mode? tag-filter "Blog Posts")]
+      [:h1.page-title (if page-mode? tag-filter "Blog Posts")]
       (when can-edit?
         [:button {:on {:click #(dispatch! :view-new)}} "New Post"])]
      ;; Show tag filter chip only for non-page filters
@@ -395,13 +395,12 @@
                :on {:input #(dispatch! [:update-form :tags (.. % -target -value)])}}]
       [:small {:style {:color "var(--text-muted)" :display "block" :margin-top "0.25rem"}}
        "Page tags: Home, About, Apply"]]
-     [:div.form-group.checkbox-group
-      [:label {:style {:display "flex" :align-items "center" :gap "0.5rem" :cursor "pointer"}}
+     [:div.form-group
+      [:label.checkbox-label
        [:input {:type "checkbox"
                 :checked (:featured? form)
                 :on {:change #(dispatch! [:update-form :featured? (.. % -target -checked)])}}]
-       "Featured"
-       [:small {:style {:color "var(--text-muted)"}} "(also shows in Posts feed)"]]]
+       "Featured (hero post on page)"]]
      [:div.form-group
       [:label "Content"]
       (markdown-editor (:content form) dispatch!)]

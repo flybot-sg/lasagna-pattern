@@ -184,6 +184,23 @@ h2 { font-size: 1.25rem; margin: 0 0 0.5rem 0; }
   gap: 1rem;
 }
 
+/* Page title (H1) */
+.page-title {
+  flex: 1;
+  margin: 0;
+  font-size: 2rem;
+}
+
+/* Post title (H2) - distinct from content h2 */
+.post-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--accent);
+  margin: 0 0 0.5rem 0;
+  border-bottom: 2px solid var(--accent);
+  padding-bottom: 0.25rem;
+}
+
 .post-card, .page-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
@@ -352,6 +369,18 @@ h2 { font-size: 1.25rem; margin: 0 0 0.5rem 0; }
   font-family: "SF Mono", Consolas, monospace;
 }
 
+.form-group label.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  font-weight: normal;
+}
+
+.form-group label.checkbox-label input[type="checkbox"] {
+  width: auto;
+}
+
 /* Buttons */
 button {
   background: var(--accent);
@@ -518,8 +547,6 @@ button.danger { background: var(--danger); }
 }
 
 .page-hero .page-card h2 {
-  font-size: 1.75rem;
-  color: var(--accent);
   margin-bottom: 1rem;
 }
 
@@ -528,6 +555,25 @@ button.danger { background: var(--danger); }
   line-height: 1.8;
   max-height: none;
   overflow: visible;
+}
+
+/* Content headings (from markdown) - smaller than post titles */
+.page-content h2,
+.post-content h2,
+.post-body h2 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin: 1.5rem 0 0.75rem 0;
+  color: var(--text);
+}
+
+.page-content h3,
+.post-content h3,
+.post-body h3 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 1.25rem 0 0.5rem 0;
+  color: var(--text);
 }
 
 /* Slideshow Container */
