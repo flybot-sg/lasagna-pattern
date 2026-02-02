@@ -33,8 +33,8 @@ src/sg/flybot/flybot_site/
 ├── api.cljc            # API schema and data structure
 ├── auth.cljc           # Role-based authentication
 ├── db.clj              # Datahike database + DataSource impl
-├── log.clj             # Backend logging (Timbre)
 ├── markdown.cljc       # Frontmatter parsing
+├── s3.clj              # S3 upload handler
 ├── server.clj          # HTTP server (standalone)
 ├── system.clj          # System lifecycle (fun-map)
 └── ui/
@@ -47,47 +47,26 @@ src/sg/flybot/flybot_site/
 
 ## Logging
 
-Use logging for debugging API calls, database operations, and state changes.
+Use mulog for structured logging. Events are keyword-namespaced with key-value pairs.
 
 ### Backend Logging
 
-**File:** `src/sg/flybot/flybot_site/log.clj`
+**Library:** [mulog](https://github.com/BrunoBonacci/mulog)
 
 ```clojure
-(require '[sg.flybot.flybot-site.log :as log])
+(require '[com.brunobonacci.mulog :as mu])
 
-;; Basic
-(log/debug "Processing:" data)
-(log/info "User logged in:" email)
-(log/warn "Deprecated API called")
-(log/error "Database error:" ex)
+;; Structured event logging
+(mu/log ::server-started :port 8080)
+(mu/log ::db-create :entity :post :id 1)
+(mu/log ::api-request :pattern '{:posts ?all})
+(mu/log ::upload-complete :url "/uploads/abc.png")
 
-;; Set level
-(log/set-level! :info)  ; :trace :debug :info :warn :error :fatal
-
-;; Domain-specific helpers
-(log/log-api-request '{:posts ?all})
-(log/log-api-response {:posts [...]})
-(log/log-api-error ex '{:posts ?all})
-
-(log/log-db-op :fetch :post 123)
-(log/log-db-create :post {:post/id 1 :post/title "New"})
-(log/log-db-update :post 123)
-(log/log-db-delete :post 123)
-
-(log/log-startup 8080)
-(log/log-shutdown)
-(log/log-db-connected {:backend :mem :id "blog"})
-(log/log-db-seeded 10)
-
-;; Ring middleware (adds request timing)
-(-> handler (log/wrap-request-logging))
+;; Error logging
+(mu/log ::db-error :error (ex-message e) :query query)
 ```
 
-**Output format:**
-```
-2024-01-24T19:13:06.710Z INFO [sg.flybot.flybot-site.log:86] - DB created :post id= 1
-```
+**Output:** JSON or console depending on publisher config in `system.clj`.
 
 ### Frontend Logging
 
@@ -124,26 +103,13 @@ Cross-platform (.cljc) so logic can be tested on JVM.
 
 ### When to Log
 
-| Event | Level | Logger |
-|-------|-------|--------|
-| API request/response | debug | `log-api-request/response` |
-| API error | error | `log-api-error` |
-| DB read operation | debug | `log-db-op` |
-| DB write operation | info | `log-db-create/update/delete` |
-| Server start/stop | info | `log-startup/shutdown` |
-| State view change | debug | `log-state-change` |
-| Image upload success | info | `log/info` |
-| Image upload failure | error | `log/error` |
-
-### Production Configuration
-
-```clojure
-;; Backend - set in system startup
-(log/set-level! :info)
-
-;; Frontend - set in init!
-(log/set-level! :warn)
-```
+| Event | Example |
+|-------|---------|
+| DB operations | `(mu/log ::db-create :entity :post :id 1)` |
+| API requests | `(mu/log ::api-request :pattern pattern)` |
+| Errors | `(mu/log ::db-error :error (ex-message e))` |
+| Lifecycle | `(mu/log ::server-started :port 8080)` |
+| Uploads | `(mu/log ::upload-complete :url url)` |
 
 ## Database
 

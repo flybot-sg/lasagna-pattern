@@ -16,7 +16,7 @@
    [datahike.api :as d]
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.flybot-site.db :as db]
-   [sg.flybot.flybot-site.log :as log])
+   [com.brunobonacci.mulog :as mu])
   (:import
    [java.time Instant]
    [java.time.format DateTimeFormatter]))
@@ -59,7 +59,7 @@
   "Export all posts to directory as .md files.
    Returns {:count n :dir path}."
   [conn dir]
-  (log/info "Exporting posts to:" dir)
+  (mu/log ::export-start :dir dir)
   (let [posts (coll/list-all (db/->PostsDataSource conn))
         dir-file (io/file dir)]
     (.mkdirs dir-file)
@@ -67,7 +67,7 @@
             :let [filename (str id "-" (str/replace (or title "untitled") #"[^a-zA-Z0-9]+" "-") ".md")
                   file (io/file dir filename)]]
       (spit file (post->markdown post)))
-    (log/info "Exported" (count posts) "posts")
+    (mu/log ::export-complete :count (count posts) :dir (.getAbsolutePath dir-file))
     {:count (count posts) :dir (.getAbsolutePath dir-file)}))
 
 ;;=============================================================================
@@ -99,13 +99,13 @@
   "Import all .md files from directory.
    Preserves IDs and timestamps. Returns {:count n :dir path}."
   [conn dir]
-  (log/info "Importing posts from:" dir)
+  (mu/log ::import-start :dir dir)
   (let [files (->> (.listFiles (io/file dir))
                    (filter #(str/ends-with? (.getName %) ".md")))
         entities (keep #(parse-backup (slurp %)) files)]
     (when (seq entities)
       (d/transact conn (vec entities)))
-    (log/info "Imported" (count entities) "posts")
+    (mu/log ::import-complete :count (count entities) :dir (.getAbsolutePath (io/file dir)))
     {:count (count entities) :dir (.getAbsolutePath (io/file dir))}))
 
 ^:rct/test
