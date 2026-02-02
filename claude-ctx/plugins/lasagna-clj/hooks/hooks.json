@@ -1,0 +1,44 @@
+{
+  "description": "Clojure guardian (enforces /clojure before editing) and delimiter repair",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "rm -f ${CLAUDE_PROJECT_DIR:-.}/.claude/.clojure-ready"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Skill|Read|Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PLUGIN_DIR/hooks/clojure-guardian.sh" }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          { "type": "command", "command": "clj-paren-repair-claude-hook --cljfmt" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          { "type": "command", "command": "clj-paren-repair-claude-hook --cljfmt" }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          { "type": "command", "command": "clj-paren-repair-claude-hook --cljfmt" }
+        ]
+      }
+    ]
+  }
+}

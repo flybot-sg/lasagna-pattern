@@ -1,0 +1,9 @@
+{
+  "name": "lasagna-jj",
+  "version": "1.0.0",
+  "description": "Jujutsu (jj) workflow with git blocker",
+  "author": {
+    "name": "Lasagna Pattern"
+  },
+  "keywords": ["jj", "jujutsu", "version-control", "guardian"]
+}
