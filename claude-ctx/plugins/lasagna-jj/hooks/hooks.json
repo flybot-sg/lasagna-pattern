@@ -1,0 +1,13 @@
+{
+  "description": "jj guardian - blocks git commands, reminds about tests before commits",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "$CLAUDE_PLUGIN_DIR/hooks/jj-guardian.sh" }
+        ]
+      }
+    ]
+  }
+}

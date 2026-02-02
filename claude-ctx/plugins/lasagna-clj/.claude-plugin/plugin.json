@@ -1,0 +1,9 @@
+{
+  "name": "lasagna-clj",
+  "version": "1.0.0",
+  "description": "Clojure development with enforced /clojure skill before editing",
+  "author": {
+    "name": "Lasagna Pattern"
+  },
+  "keywords": ["clojure", "repl", "guardian"]
+}

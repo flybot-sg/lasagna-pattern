@@ -2,9 +2,28 @@
 
 A monorepo for pull-based pattern matching and data transformation tools in Clojure/ClojureScript.
 
-## Version Control
+## Claude Code Plugins (Optional)
 
-This project uses **jj** (Jujutsu), not git.
+A local marketplace is available at `claude-ctx/` with enforced workflows:
+
+```bash
+/plugin marketplace add ./claude-ctx
+```
+
+Then enable in `.claude/settings.local.json`:
+```json
+{
+  "enabledPlugins": {
+    "lasagna-clj@lasagna": true,
+    "lasagna-jj@lasagna": true
+  }
+}
+```
+
+| Plugin | What it does |
+|--------|--------------|
+| `lasagna-clj` | Enforces `/clojure` skill before editing .clj files, paren repair |
+| `lasagna-jj` | Blocks git commands (jj only), test reminders before commits |
 
 ## Build System
 
