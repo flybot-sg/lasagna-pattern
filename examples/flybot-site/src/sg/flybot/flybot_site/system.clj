@@ -33,6 +33,7 @@
    [sg.flybot.flybot-site.cfg :as cfg]
    [sg.flybot.flybot-site.db :as db]
    [sg.flybot.flybot-site.oauth :as oauth]
+   [sg.flybot.flybot-site.s3 :as s3]
    [sg.flybot.pullable.remote :as remote]
    [com.brunobonacci.mulog :as mu]
    [org.httpkit.server :as http-kit]
@@ -43,7 +44,6 @@
    [ring.middleware.content-type :refer [wrap-content-type]]
    [ring.middleware.session :refer [wrap-session]]
    [ring.middleware.session.cookie :refer [cookie-store]]
-   [ring.middleware.session.memory :refer [memory-store]]
    [ring.middleware.session-timeout :refer [wrap-idle-session-timeout]]
    [ring.util.response :as resp]
    [robertluo.fun-map :refer [fnk life-cycle-map closeable halt!]]
@@ -98,25 +98,26 @@
 (def ^:private uploads-dir "resources/public/uploads")
 
 (defn- wrap-upload-route
-  "Handle image uploads at /api/upload."
-  [handler]
+  "Handle image uploads at /api/upload.
+
+   Uses S3 if configured, otherwise falls back to local filesystem."
+  [handler upload-handler]
   (fn [request]
     (if (and (= :post (:request-method request))
              (= "/api/upload" (:uri request)))
-      (do
-        (let [dir (io/file uploads-dir)]
-          (when-not (.exists dir) (.mkdirs dir)))
-        (if-let [file (get-in request [:params "image"])]
-          (let [ext (-> (:filename file) (str/split #"\.") last)
-                filename (str (UUID/randomUUID) "." ext)
-                dest-file (io/file uploads-dir filename)]
-            (io/copy (:tempfile file) dest-file)
-            (mu/log ::image-uploaded :filename filename)
-            (-> (resp/response (str "{\"url\":\"/uploads/" filename "\"}"))
+      (if-let [file (get-in request [:params "image"])]
+        (try
+          (let [result (upload-handler (:tempfile file) (:filename file))]
+            (-> (resp/response (str "{\"url\":\"" (:url result) "\"}"))
                 (resp/content-type "application/json")))
-          (-> (resp/response "{\"error\":\"No image provided\"}")
-              (resp/status 400)
-              (resp/content-type "application/json"))))
+          (catch Exception e
+            (mu/log ::upload-error :error (ex-message e))
+            (-> (resp/response "{\"error\":\"Upload failed\"}")
+                (resp/status 500)
+                (resp/content-type "application/json"))))
+        (-> (resp/response "{\"error\":\"No image provided\"}")
+            (resp/status 400)
+            (resp/content-type "application/json")))
       (handler request))))
 
 (defn- wrap-dev-user
@@ -148,10 +149,11 @@
    Defaults are applied automatically."
   ([] (make-system {}))
   ([config]
-   (let [{:keys [mode server db auth session init log]} (cfg/prepare-cfg config)
+   (let [{:keys [mode server db auth session init log uploads]} (cfg/prepare-cfg config)
          ;; Extract validated config values (defaults already applied)
          {:keys [port base-url]} server
          {:keys [backend path id bucket region]} db
+         {uploads-type :type uploads-bucket :bucket uploads-region :region uploads-dir :dir} uploads
          {:keys [owner-emails allowed-email-pattern
                  google-client-id google-client-secret]} auth
          {:keys [secret timeout]} session
@@ -159,10 +161,12 @@
          {:keys [publishers context]} log
          dev-mode? (boolean (#{:dev :dev-with-oauth2} mode))
          ;; Build Datahike config
+         ;; Note: S3 backend uses :store-id, mem/file use :id
+         id-key (if (= backend :s3) :store-id :id)
          db-cfg (cond-> {:store {:backend backend}
                          :schema-flexibility :write
                          :keep-history? true}
-                  id (assoc-in [:store :id] id)
+                  id (assoc-in [:store id-key] id)
                   path (assoc-in [:store :path] path)
                   bucket (assoc-in [:store :bucket] bucket)
                   region (assoc-in [:store :region] region))
@@ -186,7 +190,8 @@
        ;;-----------------------------------------------------------------------
        ::logger
        (fnk []
-            (io/make-parents (-> publishers first :filename))
+            (when-let [filename (-> publishers first :filename)]
+              (io/make-parents filename))
             (let [stop-fn (mu/start-publisher! {:type :multi :publishers publishers})]
               (when context (mu/set-global-context! context))
               (mu/log ::logger-started :publishers (mapv :type publishers))
@@ -236,14 +241,15 @@
 
        ;;-----------------------------------------------------------------------
        ;; Session Configuration
+       ;; Uses encrypted cookie-store for stateless sessions (survives container restarts)
        ;;-----------------------------------------------------------------------
        ::session-config
        (fnk [::dev-mode? ::logger]
             (let [key (or session-key
                           (do (mu/log ::session-secret-missing :using "random-key")
                               (generate-session-key)))]
-              (mu/log ::session-store :type :memory)
-              {:store (ring.middleware.session.memory/memory-store)
+              (mu/log ::session-store :type :cookie)
+              {:store (cookie-store {:key key})
                :cookie-attrs {:same-site :lax
                               :http-only true
                               :secure (not dev-mode?)}}))
@@ -262,17 +268,27 @@
                  :picture nil})))
 
        ;;-----------------------------------------------------------------------
+       ;; Upload Handler (S3 or local filesystem)
+       ;;-----------------------------------------------------------------------
+       ::upload-handler
+       (fnk [::logger]
+            (s3/make-upload-handler {:type uploads-type
+                                     :bucket uploads-bucket
+                                     :region uploads-region
+                                     :dir uploads-dir}))
+
+       ;;-----------------------------------------------------------------------
        ;; Ring Application
        ;;-----------------------------------------------------------------------
        ::ring-app
-       (fnk [::api-fn ::session-config ::dev-user ::base-url ::logger]
+       (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger]
             (mu/log ::ring-app-building)
             (-> (fn [_] (-> (resp/resource-response "index.html" {:root "public"})
                             (resp/content-type "text/html")))
                 (wrap-resource "public")
                 wrap-content-type
                 (remote/wrap-api api-fn {:path "/api"})
-                wrap-upload-route
+                (wrap-upload-route upload-handler)
                 wrap-multipart-params
                 oauth/wrap-logout
                 (oauth/wrap-oauth-success {:allowed-email-pattern email-pattern})

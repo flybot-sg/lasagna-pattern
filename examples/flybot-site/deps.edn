@@ -6,13 +6,17 @@
         http-kit/http-kit {:mvn/version "2.8.0"}
         ring/ring-core {:mvn/version "1.12.2"}
         ring/ring-session-timeout {:mvn/version "0.3.0"}
-        io.replikativ/datahike {:mvn/version "0.6.1610"}
+        io.replikativ/datahike {:mvn/version "0.6.1555"} ;; same as used in datahike-s3
+        io.replikativ/datahike-s3 {:mvn/version "0.1.13"}
         clj-commons/clj-yaml {:mvn/version "1.0.29"}
         io.github.studer-l/ring-oauth2 {:git/sha "db75c05284aa2a3458025ebb124efe9d3c14439b"}
         clj-http/clj-http {:mvn/version "3.13.0"}
         cheshire/cheshire {:mvn/version "5.13.0"}
         metosin/malli {:mvn/version "0.16.4"}
-        com.brunobonacci/mulog {:mvn/version "0.9.0"}}
+        com.brunobonacci/mulog {:mvn/version "0.9.0"}
+        com.cognitect.aws/api {:mvn/version "0.8.692"}
+        com.cognitect.aws/endpoints {:mvn/version "1.1.12.772"}
+        com.cognitect.aws/s3 {:mvn/version "871.2.40.9"}}
  :aliases
  {:dev {:extra-paths ["dev" "test"]
         :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
@@ -28,4 +32,9 @@
   :run {:main-opts ["-m" "sg.flybot.flybot-site.system"]}
   :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.28.22"}
                       no.cjohansen/replicant {:mvn/version "2025.06.21"}
-                      com.cognitect/transit-cljs {:mvn/version "0.8.280"}}}}}
+                      com.cognitect/transit-cljs {:mvn/version "0.8.280"}}}
+  :jib {:paths ["src"]
+        :extra-deps {io.github.atomisthq/jibbit {:git/url "https://github.com/skydread1/jibbit.git"
+                                                 :git/sha "7bcb146c911431541fde86c3eebac95ac32d98e3"}}
+        :ns-default jibbit.core
+        :ns-aliases {jib jibbit.core}}}}
