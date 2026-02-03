@@ -148,7 +148,7 @@
 
   ;; LIST: get all posts via seq
   (let [api (make-api conn)]
-    (count (seq (:posts api)))) ;=> 10
+    (count (seq (:posts api)))) ;=> 11
 
   ;; READ: lookup by id via ILookup
   (let [api (make-api conn)]
@@ -166,26 +166,26 @@
 
   ;; READ: verify created post - author is expanded to user map
   (let [api (make-api conn)
-        post (get (:posts api) {:post/id 11})]
+        post (get (:posts api) {:post/id 12})]
     [(:post/title post) (get-in post [:post/author :user/name]) (:post/tags post)])
   ;=> ["New" "Test User" ["demo"]]
 
   ;; UPDATE: mutate! with query and data
   (let [api (make-api conn)
-        updated (coll/mutate! (:posts api) {:post/id 11} {:post/title "Updated"})]
+        updated (coll/mutate! (:posts api) {:post/id 12} {:post/title "Updated"})]
     (:post/title updated)) ;=> "Updated"
 
   ;; DELETE: mutate! with query and nil
   (let [api (make-api conn)]
-    (coll/mutate! (:posts api) {:post/id 11} nil)) ;=> true
+    (coll/mutate! (:posts api) {:post/id 12} nil)) ;=> true
 
   ;; Verify deleted
   (let [api (make-api conn)]
-    (get (:posts api) {:post/id 11})) ;=> nil
+    (get (:posts api) {:post/id 12})) ;=> nil
 
   ;; Pattern matching still works for LIST
   (let [api (make-api conn)]
-    (count ((p/match-fn {:posts ?posts} ?posts {:schema schema}) api))) ;=> 10
+    (count ((p/match-fn {:posts ?posts} ?posts {:schema schema}) api))) ;=> 11
 
   ;; Cleanup
   (db/release-conn! conn))

@@ -141,7 +141,7 @@
 
   ;; All users can read posts
   (count (seq (:posts (:data (api-fn {})))))
-  ;=> 10
+  ;=> 11
 
   ;; Cleanup
   (db/release-conn! conn))
