@@ -29,15 +29,25 @@
 ;; Schema
 ;;=============================================================================
 
+(def user-schema
+  "Schema for a user. Users are created on first OAuth login."
+  (m/schema
+   [:map {:doc "User account"}
+    [:user/id {:doc "Google user ID (sub claim)" :example "google-110248495921238986420"} :string]
+    [:user/email {:doc "User email" :example "alice@example.com"} :string]
+    [:user/name {:doc "Display name"} :string]
+    [:user/slug {:doc "URL-safe identifier" :example "bob-smith"} :string]
+    [:user/picture {:doc "Profile picture URL"} :string]]))
+
 (def post-schema
-  "Schema for a single post. Uses inline Malli properties for documentation."
+  "Schema for a single post. Author is a reference to user entity."
   (m/schema
    [:map {:doc "Blog post"}
     [:post/id {:doc "Unique identifier" :example 1} :int]
     [:post/title {:doc "Post title"} :string]
-    [:post/content {:doc "Markdown content with optional YAML frontmatter"} :string]
-    [:post/author {:doc "Author name (extracted from frontmatter)"} :string]
-    [:post/tags {:doc "List of tags (extracted from frontmatter)" :example ["clojure" "web"]} [:vector :string]]
+    [:post/content {:doc "Markdown content"} :string]
+    [:post/author {:doc "Author (user reference)" :optional true} [:maybe user-schema]]
+    [:post/tags {:doc "List of tags" :example ["clojure" "web"]} [:vector :string]]
     [:post/featured? {:doc "Featured post (appears in Posts feed even if page-only)" :optional true} :boolean]
     [:post/created-at {:doc "Creation timestamp"} :any]
     [:post/updated-at {:doc "Last update timestamp"} :any]]))
@@ -144,16 +154,21 @@
   (let [api (make-api conn)]
     (:post/title (get (:posts api) {:post/id 1}))) ;=> "Welcome to Flybot"
 
-  ;; CREATE: mutate! with nil query (content has frontmatter)
+  ;; READ: author is now a nested user map
+  (let [api (make-api conn)]
+    (get-in (get (:posts api) {:post/id 1}) [:post/author :user/name])) ;=> "Alice Johnson"
+
+  ;; CREATE: mutate! with user ID (user must exist)
+  (db/create-user! conn #:user{:id "test-user" :email "test@example.com" :name "Test User" :picture ""})
   (let [api (make-api conn)
-        created (coll/mutate! (:posts api) nil {:post/title "New" :post/content "---\nauthor: Test\ntags:\n  - demo\n---\n\nPost body"})]
+        created (coll/mutate! (:posts api) nil {:post/title "New" :post/content "Post body" :post/author "test-user" :post/tags ["demo"]})]
     (:post/title created)) ;=> "New"
 
-  ;; READ: verify created post and frontmatter extraction
+  ;; READ: verify created post - author is expanded to user map
   (let [api (make-api conn)
         post (get (:posts api) {:post/id 11})]
-    [(:post/title post) (:post/author post) (:post/tags post)])
-  ;=> ["New" "Test" ["demo"]]
+    [(:post/title post) (get-in post [:post/author :user/name]) (:post/tags post)])
+  ;=> ["New" "Test User" ["demo"]]
 
   ;; UPDATE: mutate! with query and data
   (let [api (make-api conn)

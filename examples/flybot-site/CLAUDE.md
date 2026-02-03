@@ -32,6 +32,38 @@ Go to `dev/user.clj` namespace — it has everything you need:
 (sys/restart!) ; Restart server
 ```
 
+### nREPL Connection (for Claude Code)
+
+After user runs `bb dev examples/flybot-site`, connect to the nREPL:
+
+```bash
+# Port is in .nrepl-port file (user will provide port number)
+clj-nrepl-eval -p <port> "(require 'user)"
+clj-nrepl-eval -p <port> "(user/start!)"
+```
+
+**Important:**
+- Use `:reload`, never `:reload-all` (breaks core.async protocols)
+- If REPL state is corrupted, ask user to restart with `bb dev`
+- Backend serves on 8080, shadow-cljs hot reload on 3000
+
+### Restarting After Code Changes (fun-map pattern)
+
+When you modify backend files (e.g., db.clj, system.clj), follow these steps:
+
+```bash
+# 1. Stop the system
+clj-nrepl-eval -p <port> "(sg.flybot.flybot-site.system/stop!)"
+
+# 2. Reload the changed namespace
+clj-nrepl-eval -p <port> "(require 'sg.flybot.flybot-site.db :reload)"
+
+# 3. Start the system again
+clj-nrepl-eval -p <port> "(user/start!)"
+```
+
+**Note:** Frontend files (.cljs, .cljc used by frontend) auto-reload via shadow-cljs on save.
+
 ### Ports
 
 | Port | Purpose |

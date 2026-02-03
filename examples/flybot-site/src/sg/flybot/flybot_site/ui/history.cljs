@@ -7,9 +7,12 @@
 
 (defn state->path
   "Convert app state to URL path."
-  [{:keys [view selected-id tag-filter pages]}]
+  [{:keys [view selected-id tag-filter author-filter pages]}]
   (case view
     :list (cond
+            ;; Author filter -> /author/bob-smith
+            author-filter
+            (str "/author/" (js/encodeURIComponent (:slug author-filter)))
             ;; Page tag -> /page/Home
             (and tag-filter (contains? (or pages #{}) tag-filter))
             (str "/page/" (js/encodeURIComponent tag-filter))
@@ -26,13 +29,18 @@
     "/"))
 
 (defn path->state
-  "Parse URL path to {:view ... :id ... :tag ...}. Returns nil for unknown paths."
+  "Parse URL path to {:view ... :id ... :tag ... :author ...}. Returns nil for unknown paths."
   [path]
   (let [path (or path "/")]
     (cond
       ;; /posts/new
       (= path "/posts/new")
       {:view :new :id nil}
+
+      ;; /author/:slug - author filter
+      (re-matches #"/author/(.+)" path)
+      (let [[_ slug] (re-matches #"/author/(.+)" path)]
+        {:view :list :id nil :tag nil :author {:slug (js/decodeURIComponent slug)}})
 
       ;; /page/:name - pages are just tag filters
       (re-matches #"/page/(.+)" path)
@@ -83,7 +91,8 @@
     (when (not= path (.-pathname js/location))
       (.pushState js/history (clj->js {:view (:view state)
                                        :id (:selected-id state)
-                                       :tag (:tag-filter state)})
+                                       :tag (:tag-filter state)
+                                       :author (:author-filter state)})
                   ""
                   path))))
 
@@ -93,7 +102,8 @@
   (let [path (state->path state)]
     (.replaceState js/history (clj->js {:view (:view state)
                                         :id (:selected-id state)
-                                        :tag (:tag-filter state)})
+                                        :tag (:tag-filter state)
+                                        :author (:author-filter state)})
                    ""
                    path)))
 

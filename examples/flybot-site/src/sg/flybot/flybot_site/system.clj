@@ -126,7 +126,8 @@
   (if dev-user
     (fn [request]
       (let [session (merge (:session request)
-                           {:user-email (:email dev-user)
+                           {:user-id (:id dev-user)
+                            :user-email (:email dev-user)
                             :user-name (:name dev-user)
                             :user-picture (:picture dev-user)})]
         (handler (assoc request :session session))))
@@ -202,9 +203,7 @@
 
        ;;-----------------------------------------------------------------------
        ;; Database Connection
-       ;; Note: We wrap conn in closeable and return a thunk to access it.
-       ;; This prevents fun-map from auto-dereferencing (Connection is IDeref).
-       ;; See: fun-map gotcha #1 - automatic dereferencing of IDeref values.
+       ;; closeable wraps in a map, so fun-map won't auto-deref the conn inside.
        ;;-----------------------------------------------------------------------
        ::db
        (fnk [::db-cfg ::logger]
@@ -212,7 +211,6 @@
             (let [conn (db/create-conn! db-cfg)
                   empty-db? (db/database-empty? conn)]
               (mu/log ::db-connected :backend (:backend db-cfg))
-              ;; Only seed/import if database is empty (important for persistent backends)
               (when empty-db?
                 (cond
                   backup-dir
@@ -221,9 +219,7 @@
                   seed?
                   (do (db/seed! conn)
                       (mu/log ::db-seeded :posts 10))))
-              ;; Return closeable with thunk accessor (hibou pattern)
-              (closeable {:conn (fn [] conn)
-                          :cfg db-cfg}
+              (closeable {:conn conn :cfg db-cfg}
                          #(do (mu/log ::db-releasing)
                               (db/release-conn! conn db-cfg)))))
 
@@ -233,7 +229,7 @@
        ::api-fn
        (fnk [::db ::owner-emails ::logger]
             (mu/log ::api-fn-init)
-            (let [conn ((:conn db))]  ; Call thunk to get connection
+            (let [conn (:conn db)]
               (if (seq owner-emails)
                 (do (mu/log ::role-auth-enabled :owner-emails owner-emails)
                     (auth/make-api {:owner-emails owner-emails :conn conn}))
@@ -258,13 +254,23 @@
        ;; Dev User (auto-login for :dev mode only, not :dev-with-oauth2)
        ;;-----------------------------------------------------------------------
        ::dev-user
-       (fnk [::mode ::owner-emails ::logger]
+       (fnk [::mode ::owner-emails ::db ::logger]
             (when (and (= :dev mode)
                        (seq owner-emails))
-              (let [email (first owner-emails)]
-                (mu/log ::dev-mode-auto-login :email email)
-                {:email email
-                 :name (first (str/split email #"@"))
+              (let [conn (:conn db)
+                    email (first owner-emails)
+                    ;; Use sample-alice to match seed data (same slug for filtering)
+                    user-id "sample-alice"
+                    user-name "Alice Johnson"]
+                (mu/log ::dev-mode-auto-login :email email :user-id user-id)
+                ;; Upsert ensures user exists with correct data
+                (db/upsert-user! conn #:user{:id user-id
+                                             :email email
+                                             :name user-name
+                                             :picture ""})
+                {:id user-id
+                 :email email
+                 :name user-name
                  :picture nil})))
 
        ;;-----------------------------------------------------------------------
@@ -281,7 +287,7 @@
        ;; Ring Application
        ;;-----------------------------------------------------------------------
        ::ring-app
-       (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger]
+       (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger ::db]
             (mu/log ::ring-app-building)
             (-> (fn [_] (-> (resp/resource-response "index.html" {:root "public"})
                             (resp/content-type "text/html")))
@@ -291,7 +297,8 @@
                 (wrap-upload-route upload-handler)
                 wrap-multipart-params
                 oauth/wrap-logout
-                (oauth/wrap-oauth-success {:allowed-email-pattern email-pattern})
+                (oauth/wrap-oauth-success {:allowed-email-pattern email-pattern
+                                           :conn (:conn db)})
                 (oauth/wrap-google-auth {:client-id google-client-id
                                          :client-secret google-client-secret
                                          :base-url base-url})

@@ -10,16 +10,25 @@
    [sg.flybot.flybot-site.system :as sys]
    [sg.flybot.pullable.remote.client :as client]))
 
-(def ^:private dev-config
-  "Dev defaults - uses BLOG_MODE from env, falls back to :dev if not set."
-  (cond-> {:init {:seed? true}
-           :auth {:owner-emails "dev@localhost"}}
-    (nil? (System/getenv "BLOG_MODE")) (assoc :mode :dev)))
+(def dev-cfg
+  "Development configuration - mirrors .env.example structure.
+   Uses :dev mode for auto-login without OAuth."
+  {:mode :dev
+   :server {:port 8080
+            :base-url "http://localhost:8080"}
+   :db {:backend :mem
+        :id "blog"}
+   :auth {:owner-emails "alice@flybot.sg"
+          :allowed-email-pattern ".*@flybot\\.sg$"}
+   :session {:timeout 43200}
+   :init {:seed? true}
+   :uploads {:type :local
+             :dir "resources/public/uploads"}})
 
 (defn start!
-  "Start server with dev mode. Pass config to override."
+  "Start server with dev config. Pass config to override."
   ([] (start! {}))
-  ([config] (sys/start! (merge dev-config config))))
+  ([config] (sys/start! (merge dev-cfg config))))
 
 (comment
   ;; === START SERVER ===
