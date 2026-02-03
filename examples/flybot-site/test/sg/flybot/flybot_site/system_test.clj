@@ -14,6 +14,7 @@
    [clojure.string :as str]
    [clj-http.client :as http]
    [sg.flybot.flybot-site.system :as system]
+   [sg.flybot.flybot-site.db :as db]
    [robertluo.fun-map :refer [halt! touch]]))
 
 ;;=============================================================================
@@ -87,6 +88,12 @@
     (try
       (touch sys) ; Start all components
       (Thread/sleep 500) ; Wait for server to be ready
+      ;; Create test user for posts
+      (let [conn (:conn (::system/db sys))]
+        (db/create-user! conn #:user{:id "tester"
+                                     :email "tester@test.com"
+                                     :name "Test User"
+                                     :picture ""}))
       (binding [*sys* sys]
         (f))
       (finally

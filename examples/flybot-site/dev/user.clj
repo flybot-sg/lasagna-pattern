@@ -23,7 +23,11 @@
    :session {:timeout 43200}
    :init {:seed? true}
    :uploads {:type :local
-             :dir "resources/public/uploads"}})
+             :dir "resources/public/uploads"}
+   ;; Dev user for auto-login (must match a seeded user for author filtering to work)
+   :dev {:user {:id "sample-alice"
+                :name "Alice Johnson"
+                :email "alice@flybot.sg"}}})
 
 (defn start!
   "Start server with dev config. Pass config to override."

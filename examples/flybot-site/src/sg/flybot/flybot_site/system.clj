@@ -3,8 +3,10 @@
 
    ## Key Concepts
 
-   This module demonstrates fun-map for dependency injection and lifecycle management.
-   Components are lazily initialized and dependencies are automatically resolved.
+   This module uses fun-map's associative dependency injection pattern:
+   - `make-base-system` creates a production-ready system
+   - `make-dev-system` and `make-dev-oauth-system` extend base via `assoc`
+   - No mode conditionals inside components - just override components
 
    ## Usage
 
@@ -17,15 +19,23 @@
      ;; Gracefully stop everything
      (halt! sys)
 
+   ## Modes
+
+   - :prod (default) - Production system with secure cookies
+   - :dev - Auto-login with configured user, insecure cookies
+   - :dev-with-oauth2 - OAuth flow but insecure cookies
+
    ## Configuration
 
    Uses Malli-validated config (see cfg.cljc for schema):
 
-     {:server {:port 8080 :base-url \"http://localhost:8080\"}
+     {:mode :dev  ; or :prod, :dev-with-oauth2
+      :server {:port 8080 :base-url \"http://localhost:8080\"}
       :db {:backend :mem}  ; or :file, :s3
       :auth {:owner-emails \"admin@example.com\"}
       :session {:secret \"32-hex-chars\" :timeout 43200}
-      :dev {:mode? false :seed? true}}"
+      :init {:seed? true}
+      :dev {:user {:id \"...\" :name \"...\" :email \"...\"}}}"
   (:require
    [sg.flybot.flybot-site.api :as api]
    [sg.flybot.flybot-site.auth :as auth]
@@ -140,192 +150,244 @@
 ;; System Definition
 ;;=============================================================================
 
-(defn make-system
-  "Create the blog system as a fun-map life-cycle-map.
+(defn make-base-system
+  "Create the base production blog system as a fun-map life-cycle-map.
+
+   This is the production-ready system with no dev-mode conditionals.
+   Use `make-dev-system` or `make-dev-oauth-system` for development.
 
    Components are lazily initialized. Access ::http-server to start.
    Call (halt! sys) to stop all components.
 
    Config is validated against Malli schema (see cfg.cljc).
    Defaults are applied automatically."
+  [config]
+  (let [{:keys [server db auth session init log uploads]} (cfg/prepare-cfg config)
+        ;; Extract validated config values (defaults already applied)
+        {:keys [port base-url]} server
+        {:keys [backend path id bucket region]} db
+        {uploads-type :type uploads-bucket :bucket uploads-region :region uploads-dir :dir} uploads
+        {:keys [owner-emails allowed-email-pattern
+                google-client-id google-client-secret]} auth
+        {:keys [secret timeout]} session
+        {:keys [seed? backup-dir]} init
+        {:keys [publishers context]} log
+        ;; Build Datahike config
+        ;; Note: S3 backend uses :store-id, mem/file use :id
+        id-key (if (= backend :s3) :store-id :id)
+        db-cfg (cond-> {:store {:backend backend}
+                        :schema-flexibility :write
+                        :keep-history? true}
+                 id (assoc-in [:store id-key] id)
+                 path (assoc-in [:store :path] path)
+                 bucket (assoc-in [:store :bucket] bucket)
+                 region (assoc-in [:store :region] region))
+        ;; Parse special fields
+        email-pattern (cfg/parse-email-pattern allowed-email-pattern)
+        session-key (cfg/parse-session-secret secret)]
+
+    (life-cycle-map
+     {;;-----------------------------------------------------------------------
+      ;; Config (plain values, no fnk needed)
+      ;;-----------------------------------------------------------------------
+      ::port port
+      ::base-url base-url
+      ::db-cfg db-cfg
+      ::owner-emails owner-emails
+
+      ;;-----------------------------------------------------------------------
+      ;; Logger (mulog)
+      ;;-----------------------------------------------------------------------
+      ::logger
+      (fnk []
+           (when-let [filename (-> publishers first :filename)]
+             (io/make-parents filename))
+           (let [stop-fn (mu/start-publisher! {:type :multi :publishers publishers})]
+             (when context (mu/set-global-context! context))
+             (mu/log ::logger-started :publishers (mapv :type publishers))
+             (closeable {:log (fn [event data] (mu/log event data))}
+                        #(do (mu/log ::logger-stopping)
+                             (Thread/sleep 100)
+                             (stop-fn)))))
+
+      ;;-----------------------------------------------------------------------
+      ;; Database Connection
+      ;; closeable wraps in a map, so fun-map won't auto-deref the conn inside.
+      ;;-----------------------------------------------------------------------
+      ::db
+      (fnk [::db-cfg ::logger]
+           (mu/log ::db-creating :config db-cfg)
+           (let [conn (db/create-conn! db-cfg)
+                 empty-db? (db/database-empty? conn)]
+             (mu/log ::db-connected :backend (:backend db-cfg))
+             (when empty-db?
+               (cond
+                 backup-dir
+                 (let [result (backup/import-all! conn backup-dir)]
+                   (mu/log ::db-imported :count (:count result) :from backup-dir))
+                 seed?
+                 (do (db/seed! conn)
+                     (mu/log ::db-seeded :posts 10))))
+             (closeable {:conn conn :cfg db-cfg}
+                        #(do (mu/log ::db-releasing)
+                             (db/release-conn! conn db-cfg)))))
+
+      ;;-----------------------------------------------------------------------
+      ;; API Function (request -> {:data :schema})
+      ;;-----------------------------------------------------------------------
+      ::api-fn
+      (fnk [::db ::owner-emails ::logger]
+           (mu/log ::api-fn-init)
+           (let [conn (:conn db)]
+             (if (seq owner-emails)
+               (do (mu/log ::role-auth-enabled :owner-emails owner-emails)
+                   (auth/make-api {:owner-emails owner-emails :conn conn}))
+               (fn [_] {:data (api/make-api conn) :schema api/schema}))))
+
+      ;;-----------------------------------------------------------------------
+      ;; Session Configuration (production: secure cookies)
+      ;;-----------------------------------------------------------------------
+      ::session-config
+      (fnk [::logger]
+           (let [key (or session-key
+                         (do (mu/log ::session-secret-missing :using "random-key")
+                             (generate-session-key)))]
+             (mu/log ::session-store :type :cookie :secure true)
+             {:store (cookie-store {:key key})
+              :cookie-attrs {:same-site :lax
+                             :http-only true
+                             :secure true}}))
+
+      ;;-----------------------------------------------------------------------
+      ;; Upload Handler (S3 or local filesystem)
+      ;;-----------------------------------------------------------------------
+      ::upload-handler
+      (fnk [::logger]
+           (s3/make-upload-handler {:type uploads-type
+                                    :bucket uploads-bucket
+                                    :region uploads-region
+                                    :dir uploads-dir}))
+
+      ;;-----------------------------------------------------------------------
+      ;; Dev User (nil in prod, overridden in dev mode)
+      ;;-----------------------------------------------------------------------
+      ::dev-user nil
+
+      ;;-----------------------------------------------------------------------
+      ;; Ring Application
+      ;; Note: wrap-dev-user is a no-op when dev-user is nil
+      ;;-----------------------------------------------------------------------
+      ::ring-app
+      (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger ::db]
+           (mu/log ::ring-app-building)
+           (-> (fn [_] (-> (resp/resource-response "index.html" {:root "public"})
+                           (resp/content-type "text/html")))
+               (wrap-resource "public")
+               wrap-content-type
+               (remote/wrap-api api-fn {:path "/api"})
+               (wrap-upload-route upload-handler)
+               wrap-multipart-params
+               oauth/wrap-logout
+               (oauth/wrap-oauth-success {:allowed-email-pattern email-pattern
+                                          :conn (:conn db)})
+               (oauth/wrap-google-auth {:client-id google-client-id
+                                        :client-secret google-client-secret
+                                        :base-url base-url})
+               (wrap-dev-user dev-user)
+               (wrap-idle-session-timeout {:timeout timeout
+                                           :timeout-handler session-timeout-handler})
+               (wrap-session session-config)
+               wrap-keyword-params
+               wrap-params
+               wrap-cors
+               wrap-error-handler))
+
+      ;;-----------------------------------------------------------------------
+      ;; HTTP Server
+      ;;-----------------------------------------------------------------------
+      ::http-server
+      (fnk [::ring-app ::port ::owner-emails ::logger]
+           (let [stop-fn (http-kit/run-server ring-app {:port port})
+                 info {:port port
+                       :api-endpoint (str "http://localhost:" port "/api")
+                       :schema-endpoint (str "http://localhost:" port "/api/_schema")
+                       :oauth-endpoint (when google-client-id (str "http://localhost:" port "/oauth2/google"))
+                       :owners owner-emails}]
+             (mu/log ::server-started info)
+             (closeable info
+                        #(do (mu/log ::server-stopping)
+                             (stop-fn)))))})))
+
+(defn- make-dev-session-config
+  "Create session config component with insecure cookies for development."
+  [session-key]
+  (fnk [::logger]
+       (let [key (or session-key
+                     (do (mu/log ::session-secret-missing :using "random-key")
+                         (generate-session-key)))]
+         (mu/log ::session-store :type :cookie :secure false)
+         {:store (cookie-store {:key key})
+          :cookie-attrs {:same-site :lax
+                         :http-only true
+                         :secure false}})))
+
+(defn- make-dev-user-component
+  "Create dev-user component that auto-logs in a configured user."
+  [dev-user-cfg]
+  (fnk [::db ::logger]
+       (when dev-user-cfg
+         (let [conn (:conn db)
+               {:keys [id name email]} dev-user-cfg]
+           (mu/log ::dev-mode-auto-login :name name)
+           (db/upsert-user! conn #:user{:id id
+                                        :email email
+                                        :name name
+                                        :picture ""})
+           {:id id
+            :email email
+            :name name
+            :picture nil}))))
+
+(defn make-dev-system
+  "Create dev system with auto-login user and insecure cookies.
+
+   Extends base system via assoc - the fun-map associative DI pattern.
+   Use for local development without OAuth flow."
+  [config]
+  (let [{:keys [session dev]} (cfg/prepare-cfg config)
+        {:keys [secret]} session
+        {dev-user-cfg :user} dev
+        session-key (cfg/parse-session-secret secret)]
+    (-> (make-base-system config)
+        (assoc ::session-config (make-dev-session-config session-key))
+        (assoc ::dev-user (make-dev-user-component dev-user-cfg)))))
+
+(defn make-dev-oauth-system
+  "Create dev system with OAuth but insecure cookies.
+
+   Extends base system via assoc - the fun-map associative DI pattern.
+   Use for testing OAuth flow locally (no auto-login)."
+  [config]
+  (let [{:keys [session]} (cfg/prepare-cfg config)
+        {:keys [secret]} session
+        session-key (cfg/parse-session-secret secret)]
+    (-> (make-base-system config)
+        (assoc ::session-config (make-dev-session-config session-key)))))
+
+(defn make-system
+  "Create the appropriate system based on :mode in config.
+
+   Modes:
+   - :prod (default) - Production system with secure cookies
+   - :dev - Dev system with auto-login user and insecure cookies
+   - :dev-with-oauth2 - Dev system with OAuth but insecure cookies"
   ([] (make-system {}))
   ([config]
-   (let [{:keys [mode server db auth session init log uploads]} (cfg/prepare-cfg config)
-         ;; Extract validated config values (defaults already applied)
-         {:keys [port base-url]} server
-         {:keys [backend path id bucket region]} db
-         {uploads-type :type uploads-bucket :bucket uploads-region :region uploads-dir :dir} uploads
-         {:keys [owner-emails allowed-email-pattern
-                 google-client-id google-client-secret]} auth
-         {:keys [secret timeout]} session
-         {:keys [seed? backup-dir]} init
-         {:keys [publishers context]} log
-         dev-mode? (boolean (#{:dev :dev-with-oauth2} mode))
-         ;; Build Datahike config
-         ;; Note: S3 backend uses :store-id, mem/file use :id
-         id-key (if (= backend :s3) :store-id :id)
-         db-cfg (cond-> {:store {:backend backend}
-                         :schema-flexibility :write
-                         :keep-history? true}
-                  id (assoc-in [:store id-key] id)
-                  path (assoc-in [:store :path] path)
-                  bucket (assoc-in [:store :bucket] bucket)
-                  region (assoc-in [:store :region] region))
-         ;; Parse special fields
-         email-pattern (cfg/parse-email-pattern allowed-email-pattern)
-         session-key (cfg/parse-session-secret secret)]
-
-     (life-cycle-map
-      {;;-----------------------------------------------------------------------
-       ;; Config (plain values, no fnk needed)
-       ;;-----------------------------------------------------------------------
-       ::port port
-       ::base-url base-url
-       ::db-cfg db-cfg
-       ::owner-emails owner-emails
-       ::mode mode
-       ::dev-mode? dev-mode?
-
-       ;;-----------------------------------------------------------------------
-       ;; Logger (mulog)
-       ;;-----------------------------------------------------------------------
-       ::logger
-       (fnk []
-            (when-let [filename (-> publishers first :filename)]
-              (io/make-parents filename))
-            (let [stop-fn (mu/start-publisher! {:type :multi :publishers publishers})]
-              (when context (mu/set-global-context! context))
-              (mu/log ::logger-started :publishers (mapv :type publishers))
-              (closeable {:log (fn [event data] (mu/log event data))}
-                         #(do (mu/log ::logger-stopping)
-                              (Thread/sleep 100)
-                              (stop-fn)))))
-
-       ;;-----------------------------------------------------------------------
-       ;; Database Connection
-       ;; closeable wraps in a map, so fun-map won't auto-deref the conn inside.
-       ;;-----------------------------------------------------------------------
-       ::db
-       (fnk [::db-cfg ::logger]
-            (mu/log ::db-creating :config db-cfg)
-            (let [conn (db/create-conn! db-cfg)
-                  empty-db? (db/database-empty? conn)]
-              (mu/log ::db-connected :backend (:backend db-cfg))
-              (when empty-db?
-                (cond
-                  backup-dir
-                  (let [result (backup/import-all! conn backup-dir)]
-                    (mu/log ::db-imported :count (:count result) :from backup-dir))
-                  seed?
-                  (do (db/seed! conn)
-                      (mu/log ::db-seeded :posts 10))))
-              (closeable {:conn conn :cfg db-cfg}
-                         #(do (mu/log ::db-releasing)
-                              (db/release-conn! conn db-cfg)))))
-
-       ;;-----------------------------------------------------------------------
-       ;; API Function (request -> {:data :schema})
-       ;;-----------------------------------------------------------------------
-       ::api-fn
-       (fnk [::db ::owner-emails ::logger]
-            (mu/log ::api-fn-init)
-            (let [conn (:conn db)]
-              (if (seq owner-emails)
-                (do (mu/log ::role-auth-enabled :owner-emails owner-emails)
-                    (auth/make-api {:owner-emails owner-emails :conn conn}))
-                (fn [_] {:data (api/make-api conn) :schema api/schema}))))
-
-       ;;-----------------------------------------------------------------------
-       ;; Session Configuration
-       ;; Uses encrypted cookie-store for stateless sessions (survives container restarts)
-       ;;-----------------------------------------------------------------------
-       ::session-config
-       (fnk [::dev-mode? ::logger]
-            (let [key (or session-key
-                          (do (mu/log ::session-secret-missing :using "random-key")
-                              (generate-session-key)))]
-              (mu/log ::session-store :type :cookie)
-              {:store (cookie-store {:key key})
-               :cookie-attrs {:same-site :lax
-                              :http-only true
-                              :secure (not dev-mode?)}}))
-
-       ;;-----------------------------------------------------------------------
-       ;; Dev User (auto-login for :dev mode only, not :dev-with-oauth2)
-       ;;-----------------------------------------------------------------------
-       ::dev-user
-       (fnk [::mode ::owner-emails ::db ::logger]
-            (when (and (= :dev mode)
-                       (seq owner-emails))
-              (let [conn (:conn db)
-                    email (first owner-emails)
-                    ;; Use sample-alice to match seed data (same slug for filtering)
-                    user-id "sample-alice"
-                    user-name "Alice Johnson"]
-                (mu/log ::dev-mode-auto-login :email email :user-id user-id)
-                ;; Upsert ensures user exists with correct data
-                (db/upsert-user! conn #:user{:id user-id
-                                             :email email
-                                             :name user-name
-                                             :picture ""})
-                {:id user-id
-                 :email email
-                 :name user-name
-                 :picture nil})))
-
-       ;;-----------------------------------------------------------------------
-       ;; Upload Handler (S3 or local filesystem)
-       ;;-----------------------------------------------------------------------
-       ::upload-handler
-       (fnk [::logger]
-            (s3/make-upload-handler {:type uploads-type
-                                     :bucket uploads-bucket
-                                     :region uploads-region
-                                     :dir uploads-dir}))
-
-       ;;-----------------------------------------------------------------------
-       ;; Ring Application
-       ;;-----------------------------------------------------------------------
-       ::ring-app
-       (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger ::db]
-            (mu/log ::ring-app-building)
-            (-> (fn [_] (-> (resp/resource-response "index.html" {:root "public"})
-                            (resp/content-type "text/html")))
-                (wrap-resource "public")
-                wrap-content-type
-                (remote/wrap-api api-fn {:path "/api"})
-                (wrap-upload-route upload-handler)
-                wrap-multipart-params
-                oauth/wrap-logout
-                (oauth/wrap-oauth-success {:allowed-email-pattern email-pattern
-                                           :conn (:conn db)})
-                (oauth/wrap-google-auth {:client-id google-client-id
-                                         :client-secret google-client-secret
-                                         :base-url base-url})
-                (wrap-dev-user dev-user)
-                (wrap-idle-session-timeout {:timeout timeout
-                                            :timeout-handler session-timeout-handler})
-                (wrap-session session-config)
-                wrap-keyword-params
-                wrap-params
-                wrap-cors
-                wrap-error-handler))
-
-       ;;-----------------------------------------------------------------------
-       ;; HTTP Server
-       ;;-----------------------------------------------------------------------
-       ::http-server
-       (fnk [::ring-app ::port ::owner-emails ::logger]
-            (let [stop-fn (http-kit/run-server ring-app {:port port})
-                  info {:port port
-                        :api-endpoint (str "http://localhost:" port "/api")
-                        :schema-endpoint (str "http://localhost:" port "/api/_schema")
-                        :oauth-endpoint (when google-client-id (str "http://localhost:" port "/oauth2/google"))
-                        :owners owner-emails}]
-              (mu/log ::server-started info)
-              (closeable info
-                         #(do (mu/log ::server-stopping)
-                              (stop-fn)))))}))))
+   (let [{:keys [mode]} (cfg/prepare-cfg config)]
+     (case mode
+       :dev (make-dev-system config)
+       :dev-with-oauth2 (make-dev-oauth-system config)
+       (make-base-system config)))))
 
 ;;=============================================================================
 ;; REPL Convenience (stateful)
@@ -361,16 +423,14 @@
 (comment
   (require '[ring.mock.request :as mock])
 
-  ;; Create system with test config
-  (def sys (make-system {:mode :dev
-                         :server {:port 18766}
-                         :init {:seed? true}
-                         :auth {:owner-emails "test@example.com"}}))
+  ;; Create dev system with test config
+  (def sys (make-system (cfg/apply-defaults {:mode :dev
+                                             :server {:port 18766}
+                                             :init {:seed? true}
+                                             :auth {:owner-emails "test@example.com"}})))
 
   ;; Access components (lazy - starts on demand)
   (::port sys) ;=> 18766
-  (::mode sys) ;=> :dev
-  (::dev-mode? sys) ;=> true
 
   ;; Start server
   (::http-server sys) ;=>> map?
@@ -382,4 +442,30 @@
 
   ;; Stop
   (halt! sys) ;=> nil
+
+  ;; Test base system (production) - has secure cookies
+  ;; Note: prod mode requires google-client-id, google-client-secret, session secret
+  (def prod-sys (make-base-system (cfg/apply-defaults
+                                   {:mode :prod
+                                    :server {:port 18767}
+                                    :init {:seed? true}
+                                    :auth {:owner-emails "test@example.com"
+                                           :google-client-id "test-id"
+                                           :google-client-secret "test-secret"}
+                                    :session {:secret "0123456789abcdef0123456789abcdef"}})))
+  (::port prod-sys) ;=> 18767
+  (get-in (::session-config prod-sys) [:cookie-attrs :secure]) ;=> true
+  (halt! prod-sys) ;=> nil
+
+  ;; Test dev-with-oauth2 system - has insecure cookies but no dev-user
+  ;; Note: dev-with-oauth2 also requires OAuth credentials (it's testing the OAuth flow)
+  (def oauth-sys (make-system (cfg/apply-defaults {:mode :dev-with-oauth2
+                                                   :server {:port 18768}
+                                                   :init {:seed? true}
+                                                   :auth {:owner-emails "test@example.com"
+                                                          :google-client-id "test-id"
+                                                          :google-client-secret "test-secret"}})))
+  (::port oauth-sys) ;=> 18768
+  (get-in (::session-config oauth-sys) [:cookie-attrs :secure]) ;=> false
+  (halt! oauth-sys) ;=> nil
   )

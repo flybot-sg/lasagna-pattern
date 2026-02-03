@@ -415,8 +415,8 @@
 
 (defn create-user!
   "Create a new user. Auto-generates slug from name. Returns the created user."
-  [conn {:keys [user/id user/email user/name user/picture] :as user-data}]
-  (mu/log ::user-create :user-id id :email email)
+  [conn {:user/keys [name] :as user-data}]
+  (mu/log ::user-create :name name)
   (let [base-slug (slugify name)
         slug (generate-unique-slug conn base-slug)
         entity (-> (select-keys user-data user-attr-keys)
@@ -426,12 +426,12 @@
 
 (defn upsert-user!
   "Create user if not exists, or update if exists. Returns user."
-  [conn {:keys [user/id] :as user-data}]
+  [conn {:user/keys [id] :as user-data}]
   (if-let [existing (get-user conn id)]
     ;; Update existing user (name/email/picture may have changed, keep slug stable)
     (let [updates (-> (select-keys user-data user-attr-keys)
                       (assoc :user/slug (:user/slug existing)))]
-      (mu/log ::user-update :user-id id)
+      (mu/log ::user-update :name (:user/name user-data))
       (d/transact conn [updates])
       (get-user conn id))
     ;; Create new user
