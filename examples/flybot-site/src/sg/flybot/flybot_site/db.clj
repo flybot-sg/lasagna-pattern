@@ -36,7 +36,8 @@
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.flybot-site.markdown :as md]
    [com.brunobonacci.mulog :as mu]
-   [clojure.string :as str]))
+   [clojure.string :as str]
+   [pinyin4clj.core :as pinyin]))
 
 ;;=============================================================================
 ;; Schema
@@ -365,11 +366,13 @@
 ;;=============================================================================
 
 (defn slugify
-  "Convert a name to URL-safe slug.
-   'Bob Smith' -> 'bob-smith'"
+  "Convert a name to URL-safe slug. Handles Chinese via pinyin.
+   'Bob Smith' -> 'bob-smith'
+   '张伟' -> 'zhangwei'"
   [s]
   (when s
     (-> s
+        pinyin/ascii-pinyin
         str/lower-case
         (str/replace #"[^a-z0-9]+" "-")
         (str/replace #"^-|-$" ""))))
@@ -413,6 +416,37 @@
             :where [?e :user/slug ?slug]]
           @conn slug))))
 
+(defn get-user-by-name
+  "Get user by exact name match. Returns nil if not found."
+  [conn user-name]
+  (when user-name
+    (normalize-user
+     (d/q '[:find (pull ?e [*]) .
+            :in $ ?name
+            :where [?e :user/name ?name]]
+          @conn user-name))))
+
+(defn get-placeholder-by-name
+  "Get placeholder user by name. Returns nil if not a placeholder.
+   Placeholder users have user/id starting with 'placeholder:'."
+  [conn user-name]
+  (when-let [user (get-user-by-name conn user-name)]
+    (when (str/starts-with? (:user/id user) "placeholder:")
+      user)))
+
+(defn claim-placeholder!
+  "Claim a placeholder user by updating its user-id to the real Google sub.
+   Updates the entity in place, preserving posts that reference it."
+  [conn placeholder-user {:user/keys [id] :as user-data}]
+  (let [old-id (:user/id placeholder-user)
+        eid (d/q '[:find ?e . :in $ ?id :where [?e :user/id ?id]] @conn old-id)
+        slug (or (:user/slug placeholder-user) (slugify (:user/name user-data)))
+        updates (-> (select-keys user-data user-attr-keys)
+                    (assoc :db/id eid :user/slug slug))]
+    (d/transact conn [updates])
+    (mu/log ::placeholder-claimed :name (:user/name user-data) :old-id old-id :new-id id)
+    (get-user conn id)))
+
 (defn create-user!
   "Create a new user. Auto-generates slug from name. Returns the created user."
   [conn {:user/keys [name] :as user-data}]
@@ -425,8 +459,9 @@
     (normalize-user entity)))
 
 (defn upsert-user!
-  "Create user if not exists, or update if exists. Returns user."
-  [conn {:user/keys [id] :as user-data}]
+  "Create user if not exists, or update if exists. Returns user.
+   Also claims placeholder users with matching name on first login."
+  [conn {:user/keys [id name] :as user-data}]
   (if-let [existing (get-user conn id)]
     ;; Update existing user (name/email/picture may have changed, keep slug stable)
     (let [updates (-> (select-keys user-data user-attr-keys)
@@ -434,8 +469,11 @@
       (mu/log ::user-update :name (:user/name user-data))
       (d/transact conn [updates])
       (get-user conn id))
-    ;; Create new user
-    (create-user! conn user-data)))
+    ;; Check for placeholder to claim
+    (if-let [placeholder (get-placeholder-by-name conn name)]
+      (claim-placeholder! conn placeholder user-data)
+      ;; Create new user
+      (create-user! conn user-data))))
 
 (defn get-user-posts
   "Get all posts by a user ID."
@@ -540,6 +578,67 @@
 
   (release-conn! conn))
 
+^:rct/test
+(comment
+  ;; === Chinese name support via pinyin ===
+  (def conn (create-conn!))
+
+  ;; Slugify handles Chinese via pinyin (using generic test name)
+  (slugify "张伟") ;=> "zhangwei"
+  (slugify "李明") ;=> "liming"
+  (slugify "Bob Smith") ;=> "bob-smith"
+
+  ;; Create user with Chinese name
+  (create-user! conn #:user{:id "google-cn-123" :email "zhang@example.com" :name "张伟" :picture ""})
+  (:user/slug (get-user conn "google-cn-123")) ;=> "zhangwei"
+  (:user/name (get-user-by-slug conn "zhangwei")) ;=> "张伟"
+
+  ;; Get user by name
+  (:user/id (get-user-by-name conn "张伟")) ;=> "google-cn-123"
+  (get-user-by-name conn "Nonexistent") ;=> nil
+
+  (release-conn! conn))
+
+^:rct/test
+(comment
+  ;; === Placeholder user claiming ===
+  (def conn (create-conn!))
+
+  ;; Create a placeholder user (simulating import)
+  ;; Placeholder users have user/id starting with "placeholder:"
+  (d/transact conn [{:user/id "placeholder:zhangwei"
+                     :user/slug "zhangwei"
+                     :user/name "张伟"
+                     :user/email ""
+                     :user/picture ""}])
+
+  ;; Verify placeholder exists (detected by ID prefix)
+  (str/starts-with? (:user/id (get-user conn "placeholder:zhangwei")) "placeholder:") ;=> true
+  (some? (get-placeholder-by-name conn "张伟")) ;=> true
+
+  ;; Create a post by the placeholder user
+  (def p (posts conn))
+  (coll/mutate! p nil {:post/title "Chinese Post" :post/content "Hello" :post/author "placeholder:zhangwei"})
+  (:user/name (:post/author (get p {:post/id 1}))) ;=> "张伟"
+
+  ;; Now simulate Google login with same name - should claim placeholder
+  (upsert-user! conn #:user{:id "google-real-123" :email "zhang@flybot.sg" :name "张伟" :picture "http://pic"})
+
+  ;; Placeholder should be gone, real user should exist
+  (get-user conn "placeholder:zhangwei") ;=> nil
+  (:user/email (get-user conn "google-real-123")) ;=> "zhang@flybot.sg"
+  (str/starts-with? (:user/id (get-user conn "google-real-123")) "placeholder:") ;=> false
+
+  ;; Post should now link to the real user (same entity, updated user-id)
+  (:user/id (:post/author (get p {:post/id 1}))) ;=> "google-real-123"
+
+  ;; Subsequent logins should update normally (no claiming)
+  (upsert-user! conn #:user{:id "google-real-123" :email "zhang@flybot.sg" :name "张伟 Updated" :picture "http://pic2"})
+  (:user/name (get-user conn "google-real-123")) ;=> "张伟 Updated"
+  (:user/slug (get-user conn "google-real-123")) ;=> "zhangwei"
+
+  (release-conn! conn))
+
 ;;=============================================================================
 ;; Seed Data
 ;;=============================================================================
@@ -551,6 +650,7 @@
   ;; Create sample users (all @flybot.sg for consistent email pattern)
   (create-user! conn #:user{:id "sample-alice" :email "alice@flybot.sg" :name "Alice Johnson" :picture ""})
   (create-user! conn #:user{:id "sample-bob" :email "bob@flybot.sg" :name "Bob Smith" :picture ""})
+  (create-user! conn #:user{:id "sample-zhang" :email "zhang@flybot.sg" :name "张伟" :picture ""})
 
   (let [ds (->PostsDataSource conn)]
     ;; Home page content (featured = hero post)
@@ -659,4 +759,9 @@ Send your resume and a brief note about your favorite Clojure project to **caree
     (coll/create! ds {:post/title "REPL-Driven Development Tips"
                       :post/author "sample-alice"
                       :post/tags ["clojure" "workflow"]
-                      :post/content "Rich comment blocks (^:rct/test) combine documentation, examples, and tests in one place. They're evaluated during development but ignored in production."})))
+                      :post/content "Rich comment blocks (^:rct/test) combine documentation, examples, and tests in one place. They're evaluated during development but ignored in production."})
+
+    (coll/create! ds {:post/title "Clojure中的函数式编程"
+                      :post/author "sample-zhang"
+                      :post/tags ["clojure" "functional"]
+                      :post/content "Functional programming in Clojure emphasizes immutability and pure functions. This approach leads to code that is easier to test, reason about, and parallelize."})))
