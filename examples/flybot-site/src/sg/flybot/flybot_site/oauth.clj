@@ -29,6 +29,7 @@
   (:require
    [ring.middleware.oauth2 :refer [wrap-oauth2]]
    [clj-http.client :as http]
+   [sg.flybot.flybot-site.db :as db]
    [com.brunobonacci.mulog :as mu]))
 
 ;;=============================================================================
@@ -75,11 +76,12 @@
    :body ""})
 
 (defn- email-allowed?
-  "Check if email matches the allowed pattern."
+  "Check if email matches the allowed pattern. Pattern is required."
   [email allowed-pattern]
   (boolean
-   (or (nil? allowed-pattern)
-       (and email (re-matches allowed-pattern email)))))
+   (and allowed-pattern
+        email
+        (re-matches allowed-pattern email))))
 
 ;;=============================================================================
 ;; Middleware
@@ -146,14 +148,15 @@
 
    This middleware intercepts requests to /oauth2/google/success, fetches
    the Google profile using the access token from session, and:
-   - If email is allowed: stores user info in session, redirects to /
+   - If email is allowed: creates/updates user in DB, stores user info in session, redirects to /
    - If email not allowed: clears session, redirects with error
 
    Options:
    - :allowed-email-pattern - Regex pattern for allowed emails.
-   - :client-root-path - Where to redirect after success (default: \"/\")"
+   - :client-root-path - Where to redirect after success (default: \"/\")
+   - :conn - Datahike connection for user persistence"
   ([handler] (wrap-oauth-success handler {}))
-  ([handler {:keys [allowed-email-pattern client-root-path]
+  ([handler {:keys [allowed-email-pattern client-root-path conn]
              :or {client-root-path "/"}}]
    (fn [request]
      (if (= "/oauth2/google/success" (:uri request))
@@ -167,13 +170,19 @@
              (let [profile (fetch-google-profile access-token)
                    email (:email profile)]
                (if (email-allowed? email allowed-email-pattern)
-                 ;; Email allowed - store in session and redirect to app
-                 (let [session (-> (:session request)
-                                   (assoc :user-id (:id profile)
+                 ;; Email allowed - upsert user to DB, store in session, redirect
+                 (let [user-id (:id profile)
+                       _ (when conn
+                           (db/upsert-user! conn #:user{:id user-id
+                                                        :email email
+                                                        :name (:name profile)
+                                                        :picture (or (:picture profile) "")}))
+                       session (-> (:session request)
+                                   (assoc :user-id user-id
                                           :user-email email
                                           :user-name (:name profile)
                                           :user-picture (:picture profile)))]
-                   (mu/log ::user-logged-in :user-id (:id profile) :email email)
+                   (mu/log ::user-logged-in :user-id user-id :email email)
                    (-> (redirect-302 client-root-path)
                        (assoc :session session)))
                  ;; Email not allowed - clear session and show error
@@ -211,9 +220,9 @@
 
 ^:rct/test
 (comment
-  ;; email-allowed? returns true when no pattern
+  ;; email-allowed? returns false when no pattern (secure default)
   (email-allowed? "anyone@example.com" nil)
-  ;=> true
+  ;=> false
 
   ;; email-allowed? returns true when email matches pattern
   (email-allowed? "user@mycompany.com" #".*@mycompany\.com")
@@ -225,6 +234,10 @@
 
   ;; email-allowed? returns false for nil email with pattern
   (email-allowed? nil #".*@mycompany\.com")
+  ;=> false
+
+  ;; email-allowed? returns false for nil email and nil pattern
+  (email-allowed? nil nil)
   ;=> false
 
   ;; wrap-logout redirects on /logout

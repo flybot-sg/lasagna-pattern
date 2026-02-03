@@ -40,6 +40,7 @@
    :restore-confirmed state/restore-confirmed
    :navigate        state/navigate
    :filter-by-tag   state/filter-by-tag
+   :filter-by-author state/filter-by-author
    :error           state/set-error
    :clear-error     (fn [s _] (state/clear-error s))
    ;; User/Auth

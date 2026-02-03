@@ -20,8 +20,9 @@
    :history []
    :history-version nil
    :tag-filter nil    ; nil = show all, string = filter by tag (includes pages)
+   :author-filter nil ; nil = show all, {:slug "..." :name "..."} = filter by author
    :pages #{"Home" "About" "Apply"}  ; tags that are pages (get nav tabs, different styling)
-   :user nil})        ; {:email :name :picture :role} when logged in
+   :user nil})        ; {:email :name :picture :role :slug} when logged in
 
 ;;=============================================================================
 ;; Error Classification
@@ -66,16 +67,26 @@
 
 (defn filtered-posts
   "Filter posts for list view.
+   - When author-filter is set, show posts by that author
    - When tag-filter is set, show posts with that tag
-   - Otherwise, show posts that have at least one non-page tag
+   - Otherwise, show posts that have at least one non-page tag OR are featured
    - Results sorted by creation date (newest first)"
-  [{:keys [posts tag-filter pages]}]
+  [{:keys [posts tag-filter author-filter pages]}]
   (let [pages (or pages #{})]
-    (->> (if tag-filter
+    (->> (cond
+           ;; Author filter takes precedence
+           author-filter
+           (filter #(= (get-in % [:post/author :user/slug]) (:slug author-filter)) posts)
+
+           ;; Tag filter
+           tag-filter
            (filter #(some #{tag-filter} (:post/tags %)) posts)
-           ;; Show posts that have at least one non-page tag
+
+           ;; Default: show posts with non-page tags or featured
+           :else
            (filter #(let [tags (set (:post/tags %))]
                       (or (empty? tags)
+                          (:post/featured? %)
                           (not (every? pages tags))))
                    posts))
          sort-by-date)))
@@ -94,6 +105,11 @@
   "Is the current view showing a page (tag-filter is a page tag)?"
   [{:keys [tag-filter pages]}]
   (boolean (and tag-filter (contains? (or pages #{}) tag-filter))))
+
+(defn author-mode?
+  "Is the current view showing posts by a specific author?"
+  [{:keys [author-filter]}]
+  (some? author-filter))
 
 (defn- parse-tags
   "Parse comma-separated tags string into vector."
@@ -131,7 +147,8 @@
   (cond-> {:post/title (:title form)
            :post/content (demote-headings (:content form))
            :post/featured? (boolean (:featured? form))}
-    (:name user) (assoc :post/author (:name user))
+    ;; Use user ID for author reference (links to user entity in DB)
+    (:id user) (assoc :post/author (:id user))
     (seq (:tags form)) (assoc :post/tags (parse-tags (:tags form)))))
 
 (defn logged-in?
@@ -148,11 +165,13 @@
   "Can the current user edit this specific post?
    Returns true if user is an admin (owner) OR the post author."
   [state post]
-  (let [user (:user state)]
+  (let [user (:user state)
+        ;; Author is now a user map with :user/id
+        author-id (get-in post [:post/author :user/id])]
     (boolean
      (and user
           (or (= :owner (:role user))
-              (= (:post/author post) (:name user)))))))
+              (= author-id (:id user)))))))
 
 ;;=============================================================================
 ;; Effect Helpers
@@ -271,7 +290,13 @@
   "Filter posts by tag. Always navigates to list view with URL update.
    Pages go to /page/{tag}, regular tags go to /tag/{tag}."
   [state tag]
-  {:state (assoc state :view :list :tag-filter tag)
+  {:state (assoc state :view :list :tag-filter tag :author-filter nil)
+   :fx {:history :push}})
+
+(defn filter-by-author
+  "Filter posts by author. Navigates to /user/{slug}."
+  [state {:keys [slug name] :as author}]
+  {:state (assoc state :view :list :author-filter author :tag-filter nil)
    :fx {:history :push}})
 
 ;; --- History ---
@@ -301,9 +326,9 @@
 
 ;; --- Navigation (browser back/forward) ---
 
-(defn navigate [state {:keys [view id tag]}]
+(defn navigate [state {:keys [view id tag author]}]
   (case view
-    :list    {:state (assoc state :view :list :tag-filter tag)}
+    :list    {:state (assoc state :view :list :tag-filter tag :author-filter author)}
     :detail  {:state (assoc state :view :detail :selected-id id)
               :fx (api-fx {:posts/history {{:post/id id} '?versions}}
                           :history-fetched)}
@@ -417,6 +442,37 @@
     (:tag-filter state))
   ;=> nil
 
+  ;; --- Author Filter Tests ---
+
+  ;; author-mode? returns false when no author filter
+  (author-mode? {:author-filter nil})
+  ;=> false
+
+  ;; author-mode? returns true when author filter set
+  (author-mode? {:author-filter {:slug "bob-smith" :name "Bob Smith"}})
+  ;=> true
+
+  ;; filter-by-author sets author filter and clears tag filter
+  (let [{:keys [state]} (filter-by-author {:tag-filter "clojure"} {:slug "bob-smith" :name "Bob Smith"})]
+    [(:author-filter state) (:tag-filter state)])
+  ;=> [{:slug "bob-smith" :name "Bob Smith"} nil]
+
+  ;; filtered-posts with author filter
+  (filtered-posts {:posts [{:post/id 1 :post/author {:user/slug "bob-smith"}}
+                           {:post/id 2 :post/author {:user/slug "jane-doe"}}]
+                   :author-filter {:slug "bob-smith"}
+                   :tag-filter nil
+                   :pages #{}})
+  ;=> [{:post/id 1 :post/author {:user/slug "bob-smith"}}]
+
+  ;; author filter takes precedence over tag filter
+  (filtered-posts {:posts [{:post/id 1 :post/author {:user/slug "bob-smith"} :post/tags ["clojure"]}
+                           {:post/id 2 :post/author {:user/slug "jane-doe"} :post/tags ["clojure"]}]
+                   :author-filter {:slug "bob-smith"}
+                   :tag-filter "clojure"
+                   :pages #{}})
+  ;=> [{:post/id 1 :post/author {:user/slug "bob-smith"} :post/tags ["clojure"]}]
+
   ;; logged-in? returns false for nil user
   (logged-in? {:user nil})
   ;=> false
@@ -444,19 +500,19 @@
   ;=> [nil "/logout"]
 
   ;; can-edit-post? returns false when not logged in
-  (can-edit-post? {:user nil} {:post/author "Alice"})
+  (can-edit-post? {:user nil} {:post/author {:user/id "alice-123" :user/name "Alice"}})
   ;=> false
 
   ;; can-edit-post? returns true for owner role (admin)
-  (can-edit-post? {:user {:role :owner :name "Admin"}} {:post/author "Alice"})
+  (can-edit-post? {:user {:role :owner :id "admin-123"}} {:post/author {:user/id "alice-123"}})
   ;=> true
 
-  ;; can-edit-post? returns true when user is author
-  (can-edit-post? {:user {:role :viewer :name "Alice"}} {:post/author "Alice"})
+  ;; can-edit-post? returns true when user is author (matching user ID)
+  (can-edit-post? {:user {:role :viewer :id "alice-123"}} {:post/author {:user/id "alice-123"}})
   ;=> true
 
   ;; can-edit-post? returns false when viewer is not the author
-  (can-edit-post? {:user {:role :viewer :name "Bob"}} {:post/author "Alice"})
+  (can-edit-post? {:user {:role :viewer :id "bob-456"}} {:post/author {:user/id "alice-123"}})
   ;=> false
 
   ;; --- Error Classification Tests ---

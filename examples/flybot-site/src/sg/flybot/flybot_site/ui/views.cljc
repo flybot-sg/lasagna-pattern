@@ -29,7 +29,7 @@
       (for [tag tags
             :let [is-page? (contains? page-tags tag)]]
         [:span {:replicant/key tag
-                :class (if is-page? "tag tag-page" "tag")
+                :class (if is-page? ["tag" "tag-page"] "tag")
                 :style (when dispatch! {:cursor "pointer"})
                 :on (when dispatch!
                       {:click (fn [e]
@@ -231,6 +231,19 @@
      [:p [:a {:href "mailto:zhengliming@basecity.com"} "zhengliming@basecity.com"]]
      [:p [:a {:href "https://www.linkedin.com/company/flybot-pte-ltd" :target "_blank"} "LinkedIn"]]]]])
 
+(defn- author-link
+  "Clickable author name that links to /author/:slug."
+  [author dispatch!]
+  (let [{:user/keys [name slug]} author]
+    (if (and name slug dispatch!)
+      [:a.author-link {:href (str "/author/" slug)
+                       :on {:click (fn [e]
+                                     (.preventDefault e)
+                                     (.stopPropagation e)
+                                     (dispatch! [:filter-by-author {:slug slug :name name}]))}}
+       name]
+      [:span name])))
+
 (defn post-card
   "Post card. In page mode: minimal (no metadata, no height limit).
    Shows edit button for author/admin users."
@@ -257,7 +270,7 @@
                                            (.stopPropagation e)
                                            (dispatch! [:view-edit post]))}}
            (edit-icon)])]
-       [:div.post-meta "By " author " • " (format-date created-at)]
+       [:div.post-meta "By " (author-link author dispatch!) " • " (format-date created-at)]
        [:div.post-content (render-markdown content)]
        (tag-list tags dispatch!)])))
 
@@ -269,7 +282,7 @@
                       :on {:click #(dispatch! [:select-post id])}}
      [:h4 title]
      [:div.slide-preview (content-preview content 100)]
-     [:div.slide-meta "By " author " • " (format-date created-at)]]))
+     [:div.slide-meta "By " (author-link author dispatch!) " • " (format-date created-at)]]))
 
 (defn slideshow
   "Horizontal slideshow of posts with navigation."
@@ -295,20 +308,34 @@
       (for [post posts]
         (slide-card post dispatch!))]]))
 
-(defn post-list-view [{:keys [loading? error tag-filter] :as state} dispatch!]
+(defn post-list-view [{:keys [loading? error tag-filter author-filter] :as state} dispatch!]
   (let [posts (state/filtered-posts state)
         can-edit? (state/can-edit? state)
         page-mode? (state/page-mode? state)
+        author-mode? (state/author-mode? state)
+        ;; Derive author name from posts if not in filter (e.g., navigated via URL)
+        author-name (or (:name author-filter)
+                        (when author-mode?
+                          (get-in (first posts) [:post/author :user/name])))
         ;; In page mode: featured post is hero, rest go to slideshow (sorted by date)
         hero-post (when page-mode? (state/hero-post posts))
         slideshow-posts (when page-mode? (state/non-hero-posts posts))]
     [:div (cond-> {} page-mode? (assoc :class "page-view"))
      [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
-      [:h1.page-title (if page-mode? tag-filter "Blog Posts")]
+      [:h1.page-title (cond
+                        page-mode? tag-filter
+                        author-mode? (str "Posts by " (or author-name (:slug author-filter)))
+                        :else "Blog Posts")]
       (when can-edit?
         [:button {:on {:click #(dispatch! :view-new)}} "New Post"])]
+     ;; Show author filter chip
+     (when author-mode?
+       [:div.tag-filter {:style {:margin-bottom "1rem"}}
+        [:span.tag {:style {:cursor "pointer"}
+                    :on {:click #(dispatch! [:filter-by-author nil])}}
+         (or author-name (:slug author-filter)) " ×"]])
      ;; Show tag filter chip only for non-page filters
-     (when (and tag-filter (not page-mode?))
+     (when (and tag-filter (not page-mode?) (not author-mode?))
        [:div.tag-filter {:style {:margin-bottom "1rem"}}
         [:span.tag {:style {:cursor "pointer"}
                     :on {:click #(dispatch! [:filter-by-tag nil])}}
@@ -356,7 +383,7 @@
                                  :font-size "0.85em"}}
             history-count])]]
        [:h1 (:post/title post)]
-       [:div.post-meta "By " (:post/author post) " • " (format-date (:post/created-at post))]
+       [:div.post-meta "By " (author-link (:post/author post) dispatch!) " • " (format-date (:post/created-at post))]
        (tag-list (:post/tags post) dispatch!)
        [:div.post-body (render-markdown (:post/content post))]
        (when can-edit?
@@ -446,7 +473,7 @@
       "← Back to history"]
      [:h1 (:post/title version)
       [:span.version-label (if is-current? "(Current)" (str "(from " (format-date (:version/timestamp version)) ")"))]]
-     [:div.post-meta "By " (:post/author version) " • " (format-date (:version/timestamp version))]
+     [:div.post-meta "By " (author-link (:post/author version) dispatch!) " • " (format-date (:version/timestamp version))]
      (tag-list (:post/tags version))
      [:div.post-body.history-content (render-markdown (:post/content version))]
      (when (and can-edit? (not is-current?))
@@ -478,7 +505,7 @@
   (strip-frontmatter "Just content") ;=> "Just content"
   (strip-frontmatter nil) ;=> ""
   ;; post-card normal mode
-  (first (post-card {:post/id 1 :post/title "Test" :post/author "Me" :post/content "Hello"} identity {})) ;=> :div.post-card
+  (first (post-card {:post/id 1 :post/title "Test" :post/author {:user/name "Me"} :post/content "Hello"} identity {})) ;=> :div.post-card
   ;; post-card page mode
   (first (post-card {:post/id 1 :post/title "Test" :post/content "Hello"} identity {} true)) ;=> :div.page-card
   (tag-list []) ;=> nil
@@ -491,7 +518,7 @@
   ;; error-banner returns nil when no error
   (error-banner {:error nil} identity) ;=> nil
   ;; slide-card renders compact card
-  (first (slide-card {:post/id 1 :post/title "Test" :post/content "Hello" :post/author "Me"} identity)) ;=> :div.slide-card
+  (first (slide-card {:post/id 1 :post/title "Test" :post/content "Hello" :post/author {:user/name "Me"}} identity)) ;=> :div.slide-card
   ;; slideshow renders container
   (first (slideshow [{:post/id 1 :post/title "Test"}] identity)) ;=> :div.slideshow-container
   ;; slideshow returns nil for empty posts

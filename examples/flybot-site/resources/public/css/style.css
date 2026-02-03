@@ -257,6 +257,16 @@ h2 { font-size: 1.25rem; margin: 0 0 0.5rem 0; }
   margin-bottom: 0.5rem;
 }
 
+.author-link {
+  color: var(--accent);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.author-link:hover {
+  color: var(--accent-gold);
+  text-decoration: underline;
+}
+
 .post-content {
   color: var(--text-muted);
   max-height: 120px;
