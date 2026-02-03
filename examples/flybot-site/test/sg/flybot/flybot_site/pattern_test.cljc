@@ -53,7 +53,7 @@
     (let [info (impl/get-schema-info api/post-schema)]
       (is (= :map (:type info)))
       (is (= #{:post/id :post/title :post/content :post/author
-               :post/tags :post/created-at :post/updated-at}
+               :post/tags :post/created-at :post/updated-at :post/featured?}
              (:valid-keys info))))))
 
 ;;=============================================================================

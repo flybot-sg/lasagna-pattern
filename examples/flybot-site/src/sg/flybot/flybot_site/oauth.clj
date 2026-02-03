@@ -182,7 +182,7 @@
                                           :user-email email
                                           :user-name (:name profile)
                                           :user-picture (:picture profile)))]
-                   (mu/log ::user-logged-in :user-id user-id :email email)
+                   (mu/log ::user-logged-in :name (:name profile))
                    (-> (redirect-302 client-root-path)
                        (assoc :session session)))
                  ;; Email not allowed - clear session and show error
@@ -208,7 +208,7 @@
   (fn [request]
     (if (= "/logout" (:uri request))
       (do
-        (mu/log ::user-logout :email (get-in request [:session :user-email]))
+        (mu/log ::user-logout :name (get-in request [:session :user-name]))
         {:status 302
          :headers {"Location" "/"}
          :session nil})
