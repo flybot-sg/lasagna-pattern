@@ -168,6 +168,68 @@
     (vec (seq coll))))
 
 ;;=============================================================================
+;; Read-Only Wrapper
+;;=============================================================================
+
+(deftype ReadOnly [coll]
+  #?@(:clj
+      [clojure.lang.ILookup
+       (valAt [_ query]
+              (get coll query))
+       (valAt [_ query not-found]
+              (get coll query not-found))
+
+       clojure.lang.Seqable
+       (seq [_]
+            (seq coll))
+
+       clojure.lang.Counted
+       (count [_]
+              (count coll))]
+
+      :cljs
+      [ILookup
+       (-lookup [_ query]
+                (get coll query))
+       (-lookup [_ query not-found]
+                (get coll query not-found))
+
+       ISeqable
+       (-seq [_]
+             (seq coll))
+
+       ICounted
+       (-count [_]
+               (count coll))]))
+
+(extend-type ReadOnly
+  Wireable
+  (->wire [this]
+    (->wire (.-coll this))))
+
+(defn read-only
+  "Wrap a collection to make it read-only.
+
+   The returned collection supports ILookup, Seqable, Counted, and Wireable,
+   but NOT Mutable. Attempts to mutate via pattern will fail with
+   'collection not mutable' error.
+
+   Use this for public API endpoints where reads are allowed but writes
+   should be gated behind authentication.
+
+   Example:
+   ```clojure
+   (def posts (collection (atom-source)))
+   (def public-posts (read-only posts))
+
+   (seq public-posts)           ; works
+   (get public-posts {:id 1})   ; works
+   (mutate! public-posts ...)   ; throws - Mutable not implemented
+   ```"
+  [coll]
+  (->ReadOnly coll))
+
+;;=============================================================================
 ;; Constructor
 ;;=============================================================================
 
@@ -432,4 +494,28 @@
   (ex-message
    (try (get custom-coll {:id 1})
         (catch Exception e e))) ;=> "No index for query"
+
+  ;;---------------------------------------------------------------------------
+  ;; Read-Only Wrapper
+  ;;---------------------------------------------------------------------------
+
+  (def ro-src (atom-source))
+  (def ro-coll (collection ro-src {:indexes #{#{:id} #{:name}}}))
+  (mutate! ro-coll nil {:name "Alice"})
+  (mutate! ro-coll nil {:name "Bob"})
+
+  (def ro (read-only ro-coll))
+
+  ;; Read operations work
+  (count ro) ;=> 2
+  (count (seq ro)) ;=> 2
+  (:name (get ro {:id 1})) ;=> "Alice"
+  (:name (get ro {:name "Bob"})) ;=> "Bob"
+
+  ;; Wireable works
+  (->wire ro) ;=>> vector?
+  (count (->wire ro)) ;=> 2
+
+  ;; Mutable protocol NOT satisfied
+  (satisfies? Mutable ro) ;=> false
   )
