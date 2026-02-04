@@ -1,5 +1,5 @@
-(ns sg.flybot.flybot-site.oauth
-  "Google OAuth middleware for blog authentication.
+(ns sg.flybot.flybot-site.server.system.auth
+  "Authentication middleware: Google OAuth and role initialization.
 
    Endpoints created:
    - GET /oauth2/google - Start OAuth flow (handled by ring-oauth2)
@@ -13,12 +13,23 @@
    3. Google redirects back to /oauth2/google/callback
    4. ring-oauth2 exchanges code for token, stores in session
    5. ring-oauth2 redirects to /oauth2/google/success (landing-uri)
-   6. Our success handler fetches profile, stores user info, redirects to /
+   6. Our success handler fetches profile, initializes roles, stores user info, redirects to /
+
+   ## Role Initialization
+
+   On first login, users are granted initial roles based on owner-emails config:
+   - If email in owner-emails: granted #{:member :admin :owner}
+   - Otherwise: granted #{:member}
+
+   Returning users get their existing roles from the database.
+   Roles are stored in the session cookie (no DB lookup on each request).
 
    Usage:
    (-> handler
        wrap-logout
-       (wrap-oauth-success {:allowed-email-pattern #\".*@mycompany\\\\.com\"})
+       (wrap-oauth-success {:allowed-email-pattern #\".*@mycompany\\\\.com\"
+                            :owner-emails #{\"admin@mycompany.com\"}
+                            :conn conn})
        (wrap-google-auth {:client-id \"...\"
                           :client-secret \"...\"
                           :redirect-uri \"http://localhost:8080/oauth2/google/callback\"})
@@ -29,7 +40,7 @@
   (:require
    [ring.middleware.oauth2 :refer [wrap-oauth2]]
    [clj-http.client :as http]
-   [sg.flybot.flybot-site.db :as db]
+   [sg.flybot.flybot-site.server.system.db :as db]
    [com.brunobonacci.mulog :as mu]))
 
 ;;=============================================================================
@@ -82,6 +93,39 @@
    (and allowed-pattern
         email
         (re-matches allowed-pattern email))))
+
+;;=============================================================================
+;; Role Initialization
+;;=============================================================================
+
+(defn- initialize-roles!
+  "Initialize roles for a user on login.
+
+   On first login, grants initial roles based on owner-emails config:
+   - If email in owner-emails: grants #{:member :admin :owner}
+   - Otherwise: grants #{:member}
+
+   Returning users get their existing roles from the database.
+   Returns the set of role keywords to store in session."
+  [conn user-id email owner-emails]
+  (let [existing-roles (db/get-user-roles conn user-id)]
+    (if (empty? existing-roles)
+      ;; First login - grant initial roles
+      (let [is-owner? (contains? (or owner-emails #{}) email)]
+        (if is-owner?
+          ;; Owner gets all 3 roles
+          (do (db/grant-role! conn user-id :member)
+              (db/grant-role! conn user-id :admin)
+              (db/grant-role! conn user-id :owner)
+              (mu/log ::initial-roles-granted :user-id user-id :roles #{:member :admin :owner} :reason :owner-email)
+              #{:member :admin :owner})
+          ;; Regular user gets member only
+          (do (db/grant-role! conn user-id :member)
+              (mu/log ::initial-roles-granted :user-id user-id :roles #{:member} :reason :first-login)
+              #{:member})))
+      ;; Returning user - use existing roles
+      (do (mu/log ::existing-roles-loaded :user-id user-id :roles existing-roles)
+          existing-roles))))
 
 ;;=============================================================================
 ;; Middleware
@@ -148,16 +192,17 @@
 
    This middleware intercepts requests to /oauth2/google/success, fetches
    the Google profile using the access token from session, and:
-   - If email is allowed: creates/updates user in DB, stores user info in session, redirects to /
+   - If email is allowed: creates/updates user in DB, initializes roles, stores user info in session, redirects to /
    - If email not allowed: clears session, redirects with error
 
    Options:
    - :allowed-email-pattern - Regex pattern for allowed emails.
+   - :owner-emails - Set of owner email addresses (for initial role grants).
    - :client-root-path - Where to redirect after success (default: \"/\")
    - :conn - Datahike connection for user persistence"
   ([handler] (wrap-oauth-success handler {}))
-  ([handler {:keys [allowed-email-pattern client-root-path conn]
-             :or {client-root-path "/"}}]
+  ([handler {:keys [allowed-email-pattern owner-emails client-root-path conn]
+             :or {client-root-path "/" owner-emails #{}}}]
    (fn [request]
      (if (= "/oauth2/google/success" (:uri request))
        ;; Handle OAuth success - fetch profile and redirect
@@ -170,19 +215,24 @@
              (let [profile (fetch-google-profile access-token)
                    email (:email profile)]
                (if (email-allowed? email allowed-email-pattern)
-                 ;; Email allowed - upsert user to DB, store in session, redirect
+                 ;; Email allowed - upsert user to DB, initialize roles, store in session, redirect
                  (let [user-id (:id profile)
                        _ (when conn
                            (db/upsert-user! conn #:user{:id user-id
                                                         :email email
                                                         :name (:name profile)
                                                         :picture (or (:picture profile) "")}))
+                       ;; Initialize roles (grants initial roles on first login)
+                       roles (if conn
+                               (initialize-roles! conn user-id email owner-emails)
+                               #{:member})
                        session (-> (:session request)
                                    (assoc :user-id user-id
                                           :user-email email
                                           :user-name (:name profile)
-                                          :user-picture (:picture profile)))]
-                   (mu/log ::user-logged-in :name (:name profile))
+                                          :user-picture (:picture profile)
+                                          :roles roles))]
+                   (mu/log ::user-logged-in :name (:name profile) :roles roles)
                    (-> (redirect-302 client-root-path)
                        (assoc :session session)))
                  ;; Email not allowed - clear session and show error
@@ -270,3 +320,36 @@
     [(:status response) (get-in response [:headers "Location"])])
   ;=> [302 "/?error=no-token"]
   )
+
+^:rct/test
+(comment
+  ;; === Role initialization tests ===
+  (def conn (db/create-conn!))
+
+  ;; Create a regular user (not in owner-emails)
+  (db/create-user! conn #:user{:id "user-1" :email "user@example.com" :name "User" :picture ""})
+
+  ;; First login grants :member role
+  (#'initialize-roles! conn "user-1" "user@example.com" #{})
+  ;=> #{:member}
+
+  (db/get-user-roles conn "user-1") ;=> #{:member}
+
+  ;; Subsequent logins return existing roles
+  (#'initialize-roles! conn "user-1" "user@example.com" #{})
+  ;=> #{:member}
+
+  ;; Create an owner user
+  (db/create-user! conn #:user{:id "owner-1" :email "owner@example.com" :name "Owner" :picture ""})
+
+  ;; First login as owner grants all roles
+  (#'initialize-roles! conn "owner-1" "owner@example.com" #{"owner@example.com"})
+  ;=> #{:member :admin :owner}
+
+  (db/get-user-roles conn "owner-1") ;=> #{:member :admin :owner}
+
+  ;; Subsequent logins return existing roles
+  (#'initialize-roles! conn "owner-1" "owner@example.com" #{"owner@example.com"})
+  ;=> #{:member :admin :owner}
+
+  (db/release-conn! conn))

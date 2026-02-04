@@ -1,4 +1,4 @@
-(ns sg.flybot.flybot-site.db
+(ns sg.flybot.flybot-site.server.system.db
   "Datahike-backed blog database.
 
    Implements DataSource for CRUD operations using Datahike.
@@ -34,7 +34,7 @@
    [datahike.api :as d]
    [datahike-s3.core] ; registers :s3 backend
    [sg.flybot.pullable.collection :as coll]
-   [sg.flybot.flybot-site.markdown :as md]
+   [sg.flybot.flybot-site.server.system.db.markdown :as markdown]
    [com.brunobonacci.mulog :as mu]
    [clojure.string :as str]
    [pinyin4clj.core :as pinyin]))
@@ -65,6 +65,22 @@
     :db/unique :db.unique/identity}
    {:db/ident :user/picture
     :db/valueType :db.type/string
+    :db/cardinality :db.cardinality/one}
+   {:db/ident :user/roles
+    :db/valueType :db.type/ref
+    :db/cardinality :db.cardinality/many
+    :db/isComponent true}])
+
+(def role-schema
+  "Datahike schema for user roles.
+
+   Roles are component entities owned by users. Each role has a name keyword
+   and a grant timestamp. Valid role names: :member, :admin, :owner."
+  [{:db/ident :role/name
+    :db/valueType :db.type/keyword
+    :db/cardinality :db.cardinality/one}
+   {:db/ident :role/granted-at
+    :db/valueType :db.type/instant
     :db/cardinality :db.cardinality/one}])
 
 (def post-schema
@@ -100,7 +116,7 @@
 
 (def db-schema
   "Combined schema for all entities."
-  (concat user-schema post-schema))
+  (concat user-schema role-schema post-schema))
 
 (def ^:private user-attr-keys
   "User attribute keys (namespaced)."
@@ -204,25 +220,6 @@
                   :else v)])))
 
 ;;=============================================================================
-;; Markdown Content Handling
-;;=============================================================================
-
-(defn- extract-frontmatter
-  "Extract properties from markdown frontmatter in content.
-   Converts :author/:tags from frontmatter to :post/author/:post/tags.
-   Strips frontmatter from content, keeping only the body."
-  [data]
-  (if-let [content (:post/content data)]
-    (let [parsed (md/parse content)]
-      (cond-> data
-        ;; Strip frontmatter from content, keep only body
-        (:content parsed) (assoc :post/content (:content parsed))
-        ;; Extract author/tags to dedicated fields
-        (:author parsed) (assoc :post/author (:author parsed))
-        (:tags parsed) (assoc :post/tags (:tags parsed))))
-    data))
-
-;;=============================================================================
 ;; DataSource Implementation
 ;;=============================================================================
 
@@ -261,7 +258,7 @@
   (create! [_ data]
     (try
       (let [ts (now)
-            entity (merge (prepare-post-for-db (extract-frontmatter data))
+            entity (merge (prepare-post-for-db (markdown/extract-frontmatter data))
                           {:post/id (next-id conn)
                            :post/created-at ts
                            :post/updated-at ts})]
@@ -276,7 +273,7 @@
   (update! [this query data]
     (try
       (when-let [post (coll/fetch this query)]
-        (let [updates (merge (prepare-post-for-db (extract-frontmatter data))
+        (let [updates (merge (prepare-post-for-db (markdown/extract-frontmatter data))
                              {:post/id (:post/id post)
                               :post/updated-at (now)})]
           (d/transact conn [updates])
@@ -502,6 +499,62 @@
          (sort-by :post/created-at #(compare %2 %1)))))
 
 ;;=============================================================================
+;; Role Operations
+;;=============================================================================
+
+(defn get-user-roles
+  "Get set of role keywords for user. Returns empty set if no roles."
+  [conn user-id]
+  (when user-id
+    (->> (d/q '[:find [?role-name ...]
+                :in $ ?uid
+                :where [?u :user/id ?uid]
+                [?u :user/roles ?r]
+                [?r :role/name ?role-name]]
+              @conn user-id)
+         set)))
+
+(defn grant-role!
+  "Add a role to user with grant timestamp.
+   Uses explicit :db/add to ensure accumulative behavior (not replace).
+   No-op if user already has the role."
+  [conn user-id role]
+  (when (and user-id role)
+    (let [existing-roles (get-user-roles conn user-id)]
+      (when-not (contains? existing-roles role)
+        (let [temp-id (str "role-" (random-uuid))]
+          (d/transact conn [{:db/id temp-id
+                             :role/name role
+                             :role/granted-at (java.util.Date.)}
+                            [:db/add [:user/id user-id] :user/roles temp-id]])
+          (mu/log ::role-granted :user-id user-id :role role))))))
+
+(defn revoke-role!
+  "Remove a role from user.
+   Queries for the role entity, then retracts it entirely (component cleanup)."
+  [conn user-id role]
+  (when-let [role-eid (d/q '[:find ?r .
+                             :in $ ?uid ?role-name
+                             :where [?u :user/id ?uid]
+                             [?u :user/roles ?r]
+                             [?r :role/name ?role-name]]
+                           @conn user-id role)]
+    (d/transact conn [[:db/retractEntity role-eid]])
+    (mu/log ::role-revoked :user-id user-id :role role)))
+
+(defn list-users
+  "List all users with their roles."
+  [conn]
+  (->> (d/q '[:find [(pull ?u [* {:user/roles [*]}]) ...]
+              :where [?u :user/id _]]
+            @conn)
+       (map (fn [user]
+              (-> user
+                  (select-keys user-attr-keys)
+                  (assoc :user/roles
+                         (set (map :role/name (:user/roles user)))))))))
+
+;;=============================================================================
 ;; Collection Constructor
 ;;=============================================================================
 
@@ -636,6 +689,48 @@
   (upsert-user! conn #:user{:id "google-real-123" :email "zhang@flybot.sg" :name "张伟 Updated" :picture "http://pic2"})
   (:user/name (get-user conn "google-real-123")) ;=> "张伟 Updated"
   (:user/slug (get-user conn "google-real-123")) ;=> "zhangwei"
+
+  (release-conn! conn))
+
+^:rct/test
+(comment
+  ;; === Role management ===
+  (def conn (create-conn!))
+
+  ;; Create a user
+  (create-user! conn #:user{:id "role-test-user" :email "role@example.com" :name "Role User" :picture ""})
+
+  ;; Initially no roles
+  (get-user-roles conn "role-test-user") ;=> #{}
+
+  ;; Grant member role
+  (grant-role! conn "role-test-user" :member)
+  (get-user-roles conn "role-test-user") ;=> #{:member}
+
+  ;; Grant admin role (accumulates)
+  (grant-role! conn "role-test-user" :admin)
+  (get-user-roles conn "role-test-user") ;=> #{:member :admin}
+
+  ;; Grant owner role
+  (grant-role! conn "role-test-user" :owner)
+  (get-user-roles conn "role-test-user") ;=> #{:member :admin :owner}
+
+  ;; Granting same role again is no-op
+  (grant-role! conn "role-test-user" :member)
+  (get-user-roles conn "role-test-user") ;=> #{:member :admin :owner}
+
+  ;; Revoke admin role
+  (revoke-role! conn "role-test-user" :admin)
+  (get-user-roles conn "role-test-user") ;=> #{:member :owner}
+
+  ;; List users includes roles
+  (let [users (list-users conn)]
+    (some #(and (= (:user/id %) "role-test-user")
+                (= (:user/roles %) #{:member :owner}))
+          users)) ;=> true
+
+  ;; Non-existent user returns empty set (since query returns empty collection)
+  (get-user-roles conn "nonexistent") ;=> #{}
 
   (release-conn! conn))
 

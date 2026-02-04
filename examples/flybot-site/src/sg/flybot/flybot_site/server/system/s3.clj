@@ -1,4 +1,4 @@
-(ns sg.flybot.flybot-site.s3
+(ns sg.flybot.flybot-site.server.system.s3
   "S3 operations for image uploads.
 
    Uses cognitect aws-api for streaming uploads to S3.

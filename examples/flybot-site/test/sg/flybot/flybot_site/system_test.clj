@@ -4,7 +4,7 @@
    Goals:
    - All system components initialize correctly
    - API endpoints work (schema, CRUD operations)
-   - Auth/role-based access works
+   - Auth/role-based access works (collection-based)
    - Upload handler works (local mode)
 
    Uses in-memory Datahike and local uploads for isolation."
@@ -13,8 +13,9 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [clj-http.client :as http]
-   [sg.flybot.flybot-site.system :as system]
-   [sg.flybot.flybot-site.db :as db]
+   [sg.flybot.flybot-site.server.system :as system]
+   [sg.flybot.flybot-site.server.system.db :as db]
+   [sg.flybot.pullable.collection :as coll]
    [robertluo.fun-map :refer [halt! touch]]))
 
 ;;=============================================================================
@@ -37,7 +38,11 @@
    :uploads {:type :local
              :dir "/tmp/flybot-test-uploads"}
    :log {:publishers [{:type :console}]
-         :context {:app "flybot-test"}}})
+         :context {:app "flybot-test"}}
+   ;; Auto-login as owner for CRUD tests (dev mode grants all roles)
+   :dev {:user {:id "owner"
+                :email "owner@test.com"
+                :name "Test Owner"}}})
 
 ;;=============================================================================
 ;; HTTP Helpers
@@ -88,12 +93,14 @@
     (try
       (touch sys) ; Start all components
       (Thread/sleep 500) ; Wait for server to be ready
-      ;; Create test user for posts
+      ;; Note: dev-user is auto-created by make-dev-user-component with all roles
+      ;; Create additional test user for member-level tests
       (let [conn (:conn (::system/db sys))]
         (db/create-user! conn #:user{:id "tester"
                                      :email "tester@test.com"
                                      :name "Test User"
-                                     :picture ""}))
+                                     :picture ""})
+        (db/grant-role! conn "tester" :member))
       (binding [*sys* sys]
         (f))
       (finally
@@ -120,67 +127,153 @@
       (is (contains? body :sample) "Response has :sample data"))))
 
 (deftest posts-crud-test
-  (testing "Create post"
+  (testing "Create post via :member :posts collection"
+    ;; Dev mode has all roles, so :member :posts is available
+    ;; CRUD via pattern: {nil data} = create
     (let [new-post {:post/title "Test Post"
-                    :post/content "---\nauthor: tester\ntags:\n  - test\n---\n\n# Hello\n\nThis is test content."
-                    :post/author "tester"
+                    :post/content "---\ntags:\n  - test\n---\n\n# Hello\n\nThis is test content."
                     :post/tags ["test"]}
-          {:keys [status body]} (api-request {:posts {nil new-post}})]
+          {:keys [status body]} (api-request {:member {:posts {nil new-post}}})]
       (is (= 200 status))
-      ;; Create returns the created post bound to the nil key pattern
       (is (map? body) "Returns a bindings map")))
 
   (testing "List posts"
-    (let [{:keys [status body]} (api-request '{:posts ?all})]
+    ;; :guest :posts is read-only, can list without role
+    (let [{:keys [status body]} (api-request '{:guest {:posts ?all}})]
       (is (= 200 status))
       (is (seq (get body 'all)) "Posts list bound to all")))
 
   (testing "Read single post by ID"
-    ;; First get the ID from list
-    (let [{body1 :body} (api-request '{:posts ?all})
+    ;; :guest :posts supports reads
+    (let [{body1 :body} (api-request '{:guest {:posts ?all}})
           post-id (-> body1 (get 'all) first :post/id)
-          {:keys [status body]} (api-request {:posts {{:post/id post-id} '?post}})]
+          {:keys [status body]} (api-request {:guest {:posts {{:post/id post-id} '?post}}})]
       (is (= 200 status))
       (is (= "Test Post" (:post/title (get body 'post))))))
 
-  (testing "Update post"
-    (let [{body1 :body} (api-request '{:posts ?all})
+  (testing "Update post via :member :posts"
+    (let [{body1 :body} (api-request '{:guest {:posts ?all}})
           post-id (-> body1 (get 'all) first :post/id)
           {:keys [status]} (api-request
-                            {:posts {{:post/id post-id}
-                                     {:post/title "Updated Title"}}})]
+                            {:member {:posts {{:post/id post-id}
+                                              {:post/title "Updated Title"}}}})]
       (is (= 200 status))
-      ;; Verify update
-      (let [{:keys [body]} (api-request {:posts {{:post/id post-id} '?post}})]
+      ;; Verify update via guest read
+      (let [{:keys [body]} (api-request {:guest {:posts {{:post/id post-id} '?post}}})]
         (is (= "Updated Title" (:post/title (get body 'post)))))))
 
-  (testing "Delete post"
-    (let [{body1 :body} (api-request '{:posts ?all})
+  (testing "Delete post via :member :posts"
+    (let [{body1 :body} (api-request '{:guest {:posts ?all}})
           post-id (-> body1 (get 'all) first :post/id)
           initial-count (count (get body1 'all))
-          {:keys [status]} (api-request {:posts {{:post/id post-id} nil}})]
+          {:keys [status]} (api-request {:member {:posts {{:post/id post-id} nil}}})]
       (is (= 200 status))
-      ;; Verify deletion
-      (let [{:keys [body]} (api-request '{:posts ?all})]
+      ;; Verify deletion via guest read
+      (let [{:keys [body]} (api-request '{:guest {:posts ?all}})]
         (is (= (dec initial-count) (count (get body 'all))))))))
 
 (deftest post-history-test
   (testing "Post history tracks changes"
-    ;; Create a post - need frontmatter for author/tags extraction
-    (let [{body1 :body} (api-request {:posts {nil {:post/title "History Test"
-                                                   :post/content "---\nauthor: tester\ntags:\n  - test\n---\n\nv1"}}})
-          ;; Get the created post's ID from list
-          {body2 :body} (api-request '{:posts ?all})
-          post-id (-> body2 (get 'all) last :post/id)]
-      ;; Update it twice
-      (api-request {:posts {{:post/id post-id} {:post/content "---\nauthor: tester\ntags:\n  - test\n---\n\nv2"}}})
-      (api-request {:posts {{:post/id post-id} {:post/content "---\nauthor: tester\ntags:\n  - test\n---\n\nv3"}}})
-      ;; Check history
+    ;; Create a post via :member :posts - the created post is returned in bindings
+    (let [{:keys [body]} (api-request {:member {:posts {nil {:post/title "History Test"
+                                                             :post/content "---\ntags:\n  - test\n---\n\nv1"}}}})
+          ;; Extract post-id from the create response (mutation result bound to 'posts symbol)
+          created-post (get body 'posts)
+          post-id (:post/id created-post)]
+      (is (some? post-id) "Post was created with an ID")
+      ;; Update it twice via :member :posts
+      (api-request {:member {:posts {{:post/id post-id} {:post/content "---\ntags:\n  - test\n---\n\nv2"}}}})
+      (api-request {:member {:posts {{:post/id post-id} {:post/content "---\ntags:\n  - test\n---\n\nv3"}}}})
+      ;; Check history via :member :posts/history (history requires member role)
       (let [{:keys [status body]} (api-request
-                                   {:posts/history {{:post/id post-id} '?versions}})]
+                                   {:member {:posts/history {{:post/id post-id} '?versions}}})]
         (is (= 200 status))
         (is (>= (count (get body 'versions)) 3)
             "History contains multiple versions")))))
+
+(deftest collection-based-api-test
+  (testing "Guest has :guest with :posts (read-only), other roles nil"
+    (let [api-fn (::system/api-fn *sys*)
+          {:keys [data]} (api-fn {})]  ; No session = guest
+      (is (some? (:guest data)) "Guest has :guest")
+      (is (some? (get-in data [:guest :posts])) "Guest has :guest :posts")
+      (is (nil? (:member data)) "Guest has no :member")
+      (is (nil? (:admin data)) "Guest has no :admin")
+      (is (nil? (:owner data)) "Guest has no :owner")))
+
+  (testing "Member has :member with :posts and :me"
+    (let [api-fn (::system/api-fn *sys*)
+          {:keys [data]} (api-fn {:session {:user-id "tester"
+                                            :user-email "tester@test.com"
+                                            :user-name "Test User"
+                                            :roles #{:member}}})]
+      (is (some? (:member data)) "Member has :member")
+      (is (some? (get-in data [:member :posts])) "Member has :member :posts")
+      (is (some? (get-in data [:member :me])) "Member has :member :me")
+      (is (= "tester@test.com" (get-in data [:member :me :email])))))
+
+  (testing "Admin has :admin with :posts"
+    (let [api-fn (::system/api-fn *sys*)
+          {:keys [data]} (api-fn {:session {:user-id "owner"
+                                            :user-email "owner@test.com"
+                                            :roles #{:member :admin}}})]
+      (is (some? (:admin data)) "Admin has :admin")
+      (is (some? (get-in data [:admin :posts])) "Admin has :admin :posts")))
+
+  (testing "Owner has :owner with :users"
+    (let [api-fn (::system/api-fn *sys*)
+          {:keys [data]} (api-fn {:session {:user-id "owner"
+                                            :user-email "owner@test.com"
+                                            :roles #{:member :admin :owner}}})]
+      (is (some? (:owner data)) "Owner has :owner")
+      (is (some? (get-in data [:owner :users])) "Owner has :owner :users")
+      (is (seq (seq (get-in data [:owner :users]))) "Users collection has data")))
+
+  (testing "Member can create post via :member :posts collection"
+    (let [api-fn (::system/api-fn *sys*)
+          {:keys [data]} (api-fn {:session {:user-id "tester"
+                                            :user-email "tester@test.com"
+                                            :roles #{:member}}})
+          result (coll/mutate! (get-in data [:member :posts]) nil
+                               {:post/title "Collection Test"
+                                :post/content "test"
+                                :post/tags []})]
+      (is (= "Collection Test" (:post/title result)))
+      (is (= "tester" (get-in result [:post/author :user/id])) "Author auto-set")))
+
+  (testing "Ownership enforcement - member cannot update other's post"
+    ;; First, create a post as owner
+    (let [api-fn (::system/api-fn *sys*)
+          {:keys [data]} (api-fn {:session {:user-id "owner"
+                                            :user-email "owner@test.com"
+                                            :roles #{:member}}})
+          owner-post (coll/mutate! (get-in data [:member :posts]) nil
+                                   {:post/title "Owner's Post"
+                                    :post/content "test"
+                                    :post/tags []})
+          owner-post-id (:post/id owner-post)]
+      ;; Now try to update it as tester (different user)
+      (let [{data2 :data} (api-fn {:session {:user-id "tester"
+                                             :user-email "tester@test.com"
+                                             :roles #{:member}}})
+            result (coll/mutate! (get-in data2 [:member :posts])
+                                 {:post/id owner-post-id}
+                                 {:post/title "Hacked!"})]
+        (is (= :forbidden (:type (:error result))) "Cannot update other's post"))))
+
+  (testing "Admin can update any post via :admin :posts"
+    ;; Get the owner's post we just created
+    (let [api-fn (::system/api-fn *sys*)
+          {:keys [data]} (api-fn {:session {:user-id "tester"
+                                            :user-email "tester@test.com"
+                                            :roles #{:member :admin}}})
+          posts (seq (get-in data [:member :posts]))
+          owner-post (first (filter #(= "Owner's Post" (:post/title %)) posts))
+          owner-post-id (:post/id owner-post)
+          result (coll/mutate! (get-in data [:admin :posts])
+                               {:post/id owner-post-id}
+                               {:post/title "Admin Override"})]
+      (is (= "Admin Override" (:post/title result)) "Admin can update any post"))))
 
 (deftest upload-handler-test
   (testing "Local upload handler works"
@@ -210,4 +303,5 @@
 
   ;; Run single test
   (with-system #(system-startup-test))
-  (with-system #(posts-crud-test)))
+  (with-system #(posts-crud-test))
+  (with-system #(collection-based-api-test)))

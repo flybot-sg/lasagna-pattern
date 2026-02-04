@@ -123,7 +123,11 @@
              (fn [{:keys [replicant/node replicant/remember]}]
                (remember {:editor (init-editor! node content
                                                 #(dispatch! [:update-form :content %]))
-                          :content content}))}]))
+                          :content content}))
+             :replicant/on-unmount
+             (fn [{:keys [replicant/remembered]}]
+               (when-let [editor (:editor remembered)]
+                 (.destroy editor)))}]))
 
 ;;=============================================================================
 ;; Components
@@ -360,7 +364,8 @@
 (defn post-detail-view [state dispatch!]
   (let [post (state/selected-post state)
         history-count (count (:history state))
-        can-edit? (state/can-edit? state)]
+        can-edit? (state/can-edit? state)
+        logged-in? (state/logged-in? state)]
     (if post
       [:div.post-detail
        [:div.detail-header
@@ -369,19 +374,21 @@
                                      (.preventDefault e)
                                      (dispatch! [:view-back :list]))}}
          "← Back to posts"]
-        [:button.secondary
-         (cond-> {:on {:click #(dispatch! :view-history)}}
-           (zero? history-count) (assoc :disabled true
-                                        :style {:opacity 0.5 :cursor "not-allowed"}))
-         "View History"
-         (when (pos? history-count)
-           [:span.badge {:style {:margin-left "0.5em"
-                                 :background "#666"
-                                 :color "#fff"
-                                 :padding "0.1em 0.5em"
-                                 :border-radius "10px"
-                                 :font-size "0.85em"}}
-            history-count])]]
+        ;; History requires member role
+        (when logged-in?
+          [:button.secondary
+           (cond-> {:on {:click #(dispatch! :view-history)}}
+             (zero? history-count) (assoc :disabled true
+                                          :style {:opacity 0.5 :cursor "not-allowed"}))
+           "View History"
+           (when (pos? history-count)
+             [:span.badge {:style {:margin-left "0.5em"
+                                   :background "#666"
+                                   :color "#fff"
+                                   :padding "0.1em 0.5em"
+                                   :border-radius "10px"
+                                   :font-size "0.85em"}}
+              history-count])])]
        [:h1 (:post/title post)]
        [:div.post-meta "By " (author-link (:post/author post) dispatch!) " • " (format-date (:post/created-at post))]
        (tag-list (:post/tags post) dispatch!)

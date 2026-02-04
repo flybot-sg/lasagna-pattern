@@ -46,6 +46,7 @@
    ;; User/Auth
    :fetch-me        (fn [s _] (state/fetch-me s))
    :me-fetched      state/me-fetched
+   :me-fetch-failed state/me-fetch-failed
    :logout          (fn [s _] (state/logout s))})
 
 (defn- apply-handler [state event]
