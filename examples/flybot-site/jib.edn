@@ -2,8 +2,9 @@
  :user         "root"
  :base-image   {:image-name "eclipse-temurin:21-jre"
                 :type       :registry}
- :target-image {:type       :registry
-                :tagger     {:fn jibbit/tagger}
+ :target-image {:image-name "$ECR_REPO"
+                :type       :registry
+                :tagger     {:fn jibbit.tagger/tag}
                 :authorizer {:fn   jibbit.aws-ecr/ecr-auth
                              :args {:type   :environment
                                     :region "ap-southeast-1"}}}
