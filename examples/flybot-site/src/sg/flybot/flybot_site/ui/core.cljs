@@ -149,6 +149,17 @@
     (when (= saved "dark")
       (.setAttribute (.-body js/document) "data-theme" "dark"))))
 
+;; Dev helper - test error display from browser console: testError("forbidden")
+(defn ^:export test-error!
+  "Show a test error banner. Types: forbidden, not-found, network, unknown"
+  ([] (test-error! "forbidden"))
+  ([error-type]
+   (let [errors {"forbidden" {:code :forbidden :reason "You don't own this post" :status 403}
+                 "not-found" {:code :not-found :reason "Post not found" :status 404}
+                 "network"   {:code :network :reason "Failed to fetch" :status 0}
+                 "unknown"   {:code :unknown :reason "Something went wrong" :status 500}}]
+     (dispatch! [:error (get errors error-type (get errors "unknown"))]))))
+
 (defn ^:export init! []
   (log/info "Flybot site initializing...")
   (reset! root-el (js/document.getElementById "app"))

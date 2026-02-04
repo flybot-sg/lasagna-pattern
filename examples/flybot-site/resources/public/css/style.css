@@ -444,7 +444,111 @@ button.danger { background: var(--danger); }
 .loading { text-align: center; color: var(--text-muted); padding: 2rem; }
 .error { background: #fee; color: var(--danger); padding: 1rem; border-radius: 4px; margin-bottom: 1rem; }
 
-/* Error Banners */
+/* Alert Box (hibou-style) */
+.alert-box {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.875rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  border: 1px solid transparent;
+}
+
+.alert-content {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 1;
+}
+
+.alert-content svg { flex-shrink: 0; }
+
+.alert-message { flex: 1; }
+
+.alert-action {
+  padding: 0.25rem 0.75rem;
+  font-size: 0.85rem;
+  background: transparent;
+  border: 1px solid currentColor;
+  color: inherit;
+  border-radius: 4px;
+}
+
+.alert-action:hover {
+  background: rgba(255, 255, 255, 0.2);
+  filter: none;
+}
+
+.alert-dismiss {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 1.25rem;
+  line-height: 1;
+  background: transparent;
+  border: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+}
+
+.alert-dismiss:hover {
+  opacity: 1;
+  filter: none;
+}
+
+/* Alert variants */
+.alert-box.alert-danger {
+  background: #f8d7da;
+  border-color: #f5c6cb;
+  color: #721c24;
+}
+
+.alert-box.alert-warning {
+  background: #fff3cd;
+  border-color: #ffeeba;
+  color: #856404;
+}
+
+.alert-box.alert-info {
+  background: #d1ecf1;
+  border-color: #bee5eb;
+  color: #0c5460;
+}
+
+.alert-box.alert-success {
+  background: #d4edda;
+  border-color: #c3e6cb;
+  color: #155724;
+}
+
+/* Dark mode variants */
+[data-theme="dark"] .alert-box.alert-danger {
+  background: #2c1215;
+  border-color: #5c2a2e;
+  color: #f8d7da;
+}
+
+[data-theme="dark"] .alert-box.alert-warning {
+  background: #332701;
+  border-color: #5c4a03;
+  color: #ffc107;
+}
+
+[data-theme="dark"] .alert-box.alert-info {
+  background: #0c2329;
+  border-color: #1a4a5a;
+  color: #89d9e8;
+}
+
+[data-theme="dark"] .alert-box.alert-success {
+  background: #0d2818;
+  border-color: #1e5631;
+  color: #8fd9a8;
+}
+
+/* Legacy error-banner (deprecated, kept for compat) */
 .error-banner {
   display: flex;
   align-items: center;

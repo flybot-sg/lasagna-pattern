@@ -84,17 +84,57 @@
    [:line {:x1 "12" :y1 "9" :x2 "12" :y2 "13"}]
    [:line {:x1 "12" :y1 "17" :x2 "12.01" :y2 "17"}]])
 
+(defn- lock-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:rect {:x "3" :y "11" :width "18" :height "11" :rx "2" :ry "2"}]
+   [:path {:d "M7 11V7a5 5 0 0 1 10 0v4"}]])
+
+(defn- x-circle-icon []
+  [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:circle {:cx "12" :cy "12" :r "10"}]
+   [:line {:x1 "15" :y1 "9" :x2 "9" :y2 "15"}]
+   [:line {:x1 "9" :y1 "9" :x2 "15" :y2 "15"}]])
+
+(defn- alert-icon
+  "Select appropriate icon based on error type."
+  [error-type]
+  (case error-type
+    :forbidden (lock-icon)
+    :not-found (x-circle-icon)
+    (warning-icon)))
+
+(defn- alert-class
+  "Determine CSS class based on error type."
+  [error]
+  (let [{:keys [type retryable?]} error]
+    (cond
+      retryable? "alert-warning"
+      (= type :forbidden) "alert-danger"
+      (= type :not-found) "alert-warning"
+      (#{:invalid-mutation :schema-violation} type) "alert-warning"
+      :else "alert-danger")))
+
 (defn error-banner
-  "Display an error banner with retry button for retryable errors."
+  "Display an error banner with appropriate styling based on error type.
+
+   Error types:
+   - :forbidden → danger (red) with lock icon
+   - :not-found → warning (yellow) with X icon
+   - :network, :execution-error → warning with retry button
+   - other → danger (red) with warning icon"
   [state dispatch!]
   (when-let [error (:error state)]
-    [:div.error-banner {:class (if (:retryable? error) "retryable" "error")}
-     (warning-icon)
-     [:span (:message error)]
+    [:div.alert-box {:class (alert-class error)}
+     [:div.alert-content
+      (alert-icon (:type error))
+      [:span.alert-message (:message error)]]
      (when (:retryable? error)
-       [:button {:on {:click #(do (dispatch! :clear-error)
-                                  (dispatch! :fetch-posts))}}
-        "Retry"])]))
+       [:button.alert-action {:on {:click #(do (dispatch! :clear-error)
+                                               (dispatch! :fetch-posts))}}
+        "Retry"])
+     [:button.alert-dismiss {:on {:click #(dispatch! :clear-error)}
+                             :title "Dismiss"}
+      "×"]]))
 
 ;;=============================================================================
 ;; Markdown Editor
@@ -521,9 +561,13 @@
   (first (tag-list ["a" "b"] identity)) ;=> :div.tags
   (first (app-view {:view :list :posts [] :loading? false :user nil :pages #{}} identity)) ;=> :div.app-container
   ;; error-banner renders when error present
-  (first (error-banner {:error {:message "Test" :retryable? true}} identity)) ;=> :div.error-banner
+  (first (error-banner {:error {:message "Test" :retryable? true :type :network}} identity)) ;=> :div.alert-box
   ;; error-banner returns nil when no error
   (error-banner {:error nil} identity) ;=> nil
+  ;; error-banner shows danger style for forbidden
+  (second (error-banner {:error {:message "Forbidden" :retryable? false :type :forbidden}} identity)) ;=> {:class "alert-danger"}
+  ;; error-banner shows warning style for retryable
+  (second (error-banner {:error {:message "Network error" :retryable? true :type :network}} identity)) ;=> {:class "alert-warning"}
   ;; slide-card renders compact card
   (first (slide-card {:post/id 1 :post/title "Test" :post/content "Hello" :post/author {:user/name "Me"}} identity)) ;=> :div.slide-card
   ;; slideshow renders container
