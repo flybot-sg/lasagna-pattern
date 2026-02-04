@@ -1,0 +1,10 @@
+{:main         sg.flybot.flybot-site.server.system
+ :user         "root"
+ :base-image   {:image-name "eclipse-temurin:21-jre"
+                :type       :registry}
+ :target-image {:type       :registry
+                :tagger     {:fn jibbit/tagger}
+                :authorizer {:fn   jibbit.aws-ecr/ecr-auth
+                             :args {:type   :environment
+                                    :region "ap-southeast-1"}}}
+ :entry-point  jibbit/entry-point}
