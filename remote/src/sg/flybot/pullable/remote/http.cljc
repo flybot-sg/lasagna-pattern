@@ -258,23 +258,31 @@
   (resolve-params '{:user {:id $id}} nil)
   ;=> '{:user {:id $id}}
 
-  ;; parse-mutation: detects CREATE pattern
+  ;; parse-mutation: flat CREATE
   (parse-mutation '{:posts {nil {:title "New"}}})
-  ;=> {:coll-key :posts, :query nil, :value {:title "New"}}
+  ;=> {:path [:posts], :query nil, :value {:title "New"}}
 
-  ;; parse-mutation: detects UPDATE pattern
+  ;; parse-mutation: flat UPDATE
   (parse-mutation '{:posts {{:id 3} {:title "Updated"}}})
-  ;=> {:coll-key :posts, :query {:id 3}, :value {:title "Updated"}}
+  ;=> {:path [:posts], :query {:id 3}, :value {:title "Updated"}}
 
-  ;; parse-mutation: detects DELETE pattern
+  ;; parse-mutation: flat DELETE
   (parse-mutation '{:posts {{:id 3} nil}})
-  ;=> {:coll-key :posts, :query {:id 3}, :value nil}
+  ;=> {:path [:posts], :query {:id 3}, :value nil}
+
+  ;; parse-mutation: nested CREATE (role-based)
+  (parse-mutation '{:member {:posts {nil {:title "New"}}}})
+  ;=> {:path [:member :posts], :query nil, :value {:title "New"}}
+
+  ;; parse-mutation: nested UPDATE (role-based)
+  (parse-mutation '{:admin {:posts {{:id 1} {:title "X"}}}})
+  ;=> {:path [:admin :posts], :query {:id 1}, :value {:title "X"}}
 
   ;; parse-mutation: returns nil for read patterns
   (parse-mutation '{:posts ?all})
   ;=> nil
 
-  (parse-mutation '{:posts {{:id 3} ?post}}))
+  (parse-mutation '{:member {:me ?user}}))
   ;=> nil
 
 ;;=============================================================================
@@ -363,37 +371,68 @@
   {:body (encode (prepare-for-wire response) format)
    :content-type (get content-types format)})
 
+(defn- variable?
+  "Check if value is a ?-prefixed symbol (pattern variable)."
+  [v]
+  (and (symbol? v) (= \? (first (name v)))))
+
 (defn- parse-mutation
-  "Detect if pattern is a mutation. Returns {:coll-key :query :value} or nil.
+  "Detect if pattern is a mutation. Returns {:path :query :value} or nil.
 
-   Mutation patterns:
-   - {:posts {nil data}}         -> CREATE (query=nil, value=data)
-   - {:posts {{:id 3} data}}     -> UPDATE (query={:id 3}, value=data)
-   - {:posts {{:id 3} nil}}      -> DELETE (query={:id 3}, value=nil)
+   Flat mutation patterns:
+   - {:posts {nil data}}         -> CREATE (path=[:posts])
+   - {:posts {{:id 3} data}}     -> UPDATE (path=[:posts])
+   - {:posts {{:id 3} nil}}      -> DELETE (path=[:posts])
 
-   Read patterns return nil (value is ?-prefixed symbol):
-   - {:posts ?all}               -> list all
-   - {:posts {{:id 3} ?post}}    -> get by query"
+   Nested mutation patterns (role-based):
+   - {:role/member {:posts {nil data}}}     -> CREATE (path=[:role/member :posts])
+   - {:role/admin {:posts {{:id 1} data}}}  -> UPDATE (path=[:role/admin :posts])
+
+   Read patterns return nil (value is ?-prefixed symbol)."
   [pattern]
   (when (and (map? pattern) (= 1 (count pattern)))
-    (let [[coll-key inner] (first pattern)]
-      (when (and (keyword? coll-key) (map? inner) (= 1 (count inner)))
-        (let [[query value] (first inner)
-              variable? (and (symbol? value) (= \? (first (name value))))]
-          (when-not variable?
-            {:coll-key coll-key :query query :value value}))))))
+    (let [[k1 v1] (first pattern)]
+      (when (keyword? k1)
+        (cond
+          ;; Nested: {:role/member {:posts {query value}}}
+          (and (map? v1)
+               (= 1 (count v1))
+               (keyword? (ffirst v1))
+               (map? (val (first v1)))
+               (= 1 (count (val (first v1)))))
+          (let [[k2 v2] (first v1)
+                [query value] (first v2)]
+            (when-not (variable? value)
+              {:path [k1 k2] :query query :value value}))
+
+          ;; Flat: {:posts {query value}}
+          (and (map? v1) (= 1 (count v1)))
+          (let [[query value] (first v1)]
+            (when-not (variable? value)
+              {:path [k1] :query query :value value}))
+
+          :else nil)))))
+
+(defn- keyword->symbol
+  "Convert keyword to symbol, preserving namespace."
+  [k]
+  (if (namespace k)
+    (symbol (namespace k) (name k))
+    (symbol (name k))))
 
 (defn- execute-mutation
-  "Execute a mutation against the API collection."
-  [api-fn ring-request {:keys [coll-key query value]}]
+  "Execute a mutation against the API collection.
+   Path can be flat [:posts] or nested [:member :posts]."
+  [api-fn ring-request {:keys [path query value]}]
   (try
     (let [{:keys [data]} (api-fn ring-request)
-          coll (get data coll-key)]
+          coll (get-in data path)
+          result-key (last path)]
       (if (and coll (satisfies? coll/Mutable coll))
         (let [result (coll/mutate! coll query value)]
-          (success {coll-key result} {(symbol (name coll-key)) result}))
+          (success {result-key result} {(keyword->symbol result-key) result}))
         (failure (error :invalid-collection
-                        (str "Collection " coll-key " not found or unavailable")))))
+                        (str "Collection " (pr-str path) " not found or unavailable")))))
     (catch #?(:clj Exception :cljs js/Error) e
       (failure (error :execution-error
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
