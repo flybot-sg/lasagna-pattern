@@ -65,9 +65,8 @@ jobs:
 
       - name: Tag image as latest
         run: |
-          # Get the tag jibbit created (git tag without prefix)
-          # flybot-site-v0.1.0 -> v0.1.0
-          IMAGE_TAG="${GITHUB_REF_NAME#flybot-site-}"
+          # jibbit uses the full git tag as image tag
+          IMAGE_TAG="${GITHUB_REF_NAME}"
 
           # Get manifest and tag as latest for App Runner
           MANIFEST=$(aws ecr batch-get-image \
