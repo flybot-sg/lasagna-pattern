@@ -1,15 +1,53 @@
 # Flybot Site
 
-Migration of [flybot.sg](https://flybot.sg) company site. Internal portal with blog-based content for company updates, announcements, and knowledge sharing.
+Migration of [flybot.sg](https://flybot.sg) company site. Public company blog with employee-authored content.
 
 ## Purpose
 
 This is the new flybot.sg site built with the pull-pattern toolbox:
 
-- **Audience**: Company employees only
-- **Content**: Internal announcements, technical posts, team updates
-- **Authentication**: Google OAuth restricted to company domain
-- **Roles**: Admin (full access), Author (create/edit own posts), Reader (view only)
+- **Public access**: Anyone can read posts (no login required)
+- **Employee authoring**: Only employees can log in and create posts
+- **Authentication**: Google OAuth with email pattern restriction
+
+## Access Model
+
+Roles are stored as a set in the session and DB (e.g., `#{:member :admin}`).
+
+| Role | Who | Permissions |
+|------|-----|-------------|
+| `:guest` | No session | Read all posts |
+| `:member` | Logged-in employees | Read + Create/Edit/Delete **own** posts |
+| `:admin` | Granted by owner | Read + Create/Edit/Delete **any** post |
+| `:owner` | `BLOG_OWNER_EMAILS` | All above + grant/revoke admin role |
+
+**Role Storage:**
+- Roles stored in DB with grant timestamps
+- On first login: auto-grants `:member` (or all 3 for owner emails)
+- Roles cached in session cookie (no DB lookup per request)
+- User gets new roles on **next login** after grant/revoke
+
+**Configuration:**
+- `BLOG_ALLOWED_EMAILS` - Regex for who can log in (e.g., `.*@company\.com$`)
+- `BLOG_OWNER_EMAILS` - Comma-separated admin emails (get all roles on first login)
+
+**API Structure (role as top-level keys):**
+```clojure
+{:guest  {:posts read-only}
+ :member {:posts member-crud, :posts/history lookup, :me user-info}
+ :admin  {:posts admin-crud}
+ :owner  {:users users-collection}}
+```
+
+Role keys are nil if session lacks the required role. Patterns:
+```clojure
+'{:guest {:posts ?all}}                           ; guest list
+{:member {:posts {nil {:post/title ...}}}}        ; member create
+{:member {:posts {{:post/id 1} nil}}}             ; member delete own
+'{:member {:posts/history {{:post/id 1} ?v}}}     ; member history
+{:admin {:posts {{:post/id 1} {...}}}}            ; admin update any
+'{:owner {:users ?all}}                           ; owner list users
+```
 
 ## Tech Stack
 
@@ -182,24 +220,35 @@ Uses Datahike with in-memory store by default.
 
 ## API Patterns
 
+Role is always the top-level key. Each role contains the resources it can access.
+
 ```clojure
-;; List all posts
-'{:posts ?all}
+;; List all posts (guest/public)
+'{:guest {:posts ?all}}
 
-;; Get single post by ID
-'{:posts {{:post/id 3} ?post}}
+;; Get single post by ID (guest/public)
+'{:guest {:posts {{:post/id 3} ?post}}}
 
-;; Create (nil key = new)
-{:posts {nil {:post/title "New" :post/content "..."}}}
+;; Create (member - nil key = new)
+{:member {:posts {nil {:post/title "New" :post/content "..."}}}}
 
-;; Update
-{:posts {{:post/id 3} {:post/title "Updated"}}}
+;; Update own post (member)
+{:member {:posts {{:post/id 3} {:post/title "Updated"}}}}
 
-;; Delete (nil value = delete)
-{:posts {{:post/id 3} nil}}
+;; Delete own post (member - nil value = delete)
+{:member {:posts {{:post/id 3} nil}}}
 
-;; History
-'{:posts/history {{:post/id 3} ?versions}}
+;; Update any post (admin)
+{:admin {:posts {{:post/id 3} {:post/title "Admin Edit"}}}}
+
+;; Get current user info (member)
+'{:member {:me ?user}}
+
+;; List users (owner)
+'{:owner {:users ?all}}
+
+;; History (public via guest)
+'{:guest {:posts/history {{:post/id 3} ?versions}}}
 ```
 
 ## Pages

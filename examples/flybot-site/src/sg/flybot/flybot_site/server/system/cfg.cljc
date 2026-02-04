@@ -1,4 +1,4 @@
-(ns sg.flybot.flybot-site.cfg
+(ns sg.flybot.flybot-site.server.system.cfg
   "Configuration schema and validation using Malli.
 
    Modes:

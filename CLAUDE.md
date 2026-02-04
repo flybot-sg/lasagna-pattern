@@ -48,7 +48,7 @@ Components are auto-discovered (any directory with `deps.edn`).
 | `pattern/` | Core pattern DSL for matching/transforming Clojure data | Active |
 | `collection/` | CRUD collection abstraction with DataSource protocol | Active |
 | `remote/` | Remote protocol (GraphQL-like) using pattern language | Active |
-| `examples/flybot-site/` | Flybot.sg site migration - internal company portal | Active |
+| `examples/flybot-site/` | Flybot.sg site - public blog, employee authoring | Active |
 
 ### Adding a New Component
 
@@ -106,100 +106,44 @@ Core pattern DSL enabling declarative matching and transformation of Clojure dat
 
 ## Flybot Site (examples/flybot-site)
 
-Migration of flybot.sg company site. Internal portal with blog-based content for company updates, announcements, and knowledge sharing. Demonstrates noun-only API design with pattern-based CRUD.
+Public company blog with employee-authored content. Demonstrates role-based API with pattern CRUD.
+
+**Access model (role-as-top-level):**
+
+| Role | Who | Permissions |
+|------|-----|-------------|
+| `:guest` | Anonymous | Read posts |
+| `:member` | Logged-in | Read + CRUD own posts + view history |
+| `:admin` | Granted | CRUD any post |
+| `:owner` | Config | All above + manage users/roles |
 
 **Stack:** Clojure + ClojureScript, Datahike, http-kit, Replicant SPA, Google OAuth
 
-**Source:** `examples/flybot-site/src/sg/flybot/flybot_site/`
+**Source:** `examples/flybot-site/src/sg/flybot/flybot_site/server/`
 
 **Run:**
 ```bash
-cd examples/flybot-site
-clj -M:dev:cljs  # Compile ClojureScript
-clj -M:run       # Start server at localhost:8080
+bb dev examples/flybot-site  # Start nREPL
+# Then in REPL: (user/start!)
 ```
 
-**API design (noun-only):**
+**API design (role-as-top-level):**
 ```clojure
-;; Schema defines nouns, not verbs
-{:posts [:union [post-schema] {post-query post-schema}]}
-
-;; CRUD via pattern syntax:
-{:posts ?all}                    ; LIST
-{:posts {{:post/id 3} ?post}}    ; READ (indexed lookup)
-{:posts {nil {:post/title ...}}} ; CREATE
-{:posts {{:post/id 3} {...}}}    ; UPDATE
-{:posts {{:post/id 3} nil}}      ; DELETE
+;; Each role key contains its accessible resources
+'{:guest {:posts ?all}}                           ; guest list
+'{:guest {:posts {{:post/id 1} ?post}}}           ; guest read
+{:member {:posts {nil {:post/title "New"}}}}      ; member create
+{:member {:posts {{:post/id 1} {:post/title "X"}}}} ; member update own
+{:member {:posts {{:post/id 1} nil}}}             ; member delete own
+'{:member {:posts/history {{:post/id 1} ?v}}}     ; member history
+{:admin {:posts {{:post/id 1} {:post/title "X"}}}} ; admin update any
+'{:owner {:users ?all}}                           ; owner list users
 ```
 
 **Key patterns demonstrated:**
+- Role-as-top-level authorization (nil if session lacks role)
 - ILookup-based collections for lazy data access
-- Schema-driven output filtering
-- Frontmatter extraction from markdown content
-
-### Portal Logging
-
-The portal has a unified logging system for both frontend and backend.
-
-**Backend:** `examples/flybot-site/src/sg/flybot/flybot_site/log.clj`
-- Uses Timbre (included via Datahike)
-- Levels: `:trace` `:debug` `:info` `:warn` `:error` `:fatal`
-
-```clojure
-(require '[sg.flybot.flybot-site.log :as log])
-
-;; Basic logging
-(log/debug "value:" x)
-(log/info "Server started")
-(log/error "Failed:" err)
-
-;; Set level (e.g., for production)
-(log/set-level! :info)
-
-;; Domain-specific (prefer these for consistency)
-(log/log-api-request pattern)
-(log/log-api-response response)
-(log/log-api-error err pattern)
-(log/log-db-op :fetch :post id)
-(log/log-db-create :post entity)
-(log/log-db-update :post id)
-(log/log-db-delete :post id)
-(log/log-startup port)
-(log/log-shutdown)
-
-;; Ring middleware for request timing
-(-> handler (log/wrap-request-logging))
-```
-
-**Frontend:** `examples/flybot-site/src/sg/flybot/flybot_site/ui/log.cljc`
-- Cross-platform (.cljc) for JVM testability
-- Browser: uses `console.debug/info/warn/error`
-- JVM: uses `println`
-- Levels: `:debug` `:info` `:warn` `:error` `:off`
-
-```clojure
-(require '[sg.flybot.flybot-site.ui.log :as log])
-
-;; Basic logging
-(log/debug "value:" x)
-(log/info "User action")
-(log/warn "Deprecation")
-(log/error "Failed:" err)
-
-;; Configure
-(log/set-level! :warn)  ; Only warn and error
-(log/set-prefix! "[myapp]")
-
-;; Domain-specific
-(log/log-api-request pattern)
-(log/log-api-response response)
-(log/log-api-error err pattern)
-(log/log-state-change "action" old-state new-state)
-```
-
-**Integration points:**
-- Backend: `server.clj`, `db.clj`, `system.clj`
-- Frontend: `api.cljs`, `core.cljs`
+- Ownership enforcement via collection wrappers
 
 ## Testing
 

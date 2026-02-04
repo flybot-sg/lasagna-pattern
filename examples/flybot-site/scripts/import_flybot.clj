@@ -1,9 +1,7 @@
 #!/usr/bin/env bb
 ;; Script to clear database and import posts from flybot.sg
 
-(ns import-flybot
-  (:require [clojure.java.io :as io]
-            [clojure.string :as str]))
+(ns import-flybot)
 
 ;; This script needs to be run in a Clojure REPL with the project deps loaded
 ;; Usage: clj -M:dev -e "(load-file \"scripts/import_flybot.clj\")"
@@ -11,8 +9,8 @@
 (println "Import script loaded. Run (import-all!) from a REPL with project deps.")
 
 (defn import-all! []
-  (require '[sg.flybot.flybot-site.db :as db])
-  (require '[sg.flybot.flybot-site.backup :as backup])
+  (require '[sg.flybot.flybot-site.server.system.db :as db])
+  (require '[sg.flybot.flybot-site.server.system.backup :as backup])
   (require '[datahike.api :as d])
 
   (let [cfg db/default-cfg

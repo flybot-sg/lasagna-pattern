@@ -1,4 +1,4 @@
-(ns sg.flybot.flybot-site.system
+(ns sg.flybot.flybot-site.server.system
   "System lifecycle using fun-map life-cycle-map.
 
    ## Key Concepts
@@ -37,13 +37,12 @@
       :init {:seed? true}
       :dev {:user {:id \"...\" :name \"...\" :email \"...\"}}}"
   (:require
-   [sg.flybot.flybot-site.api :as api]
-   [sg.flybot.flybot-site.auth :as auth]
-   [sg.flybot.flybot-site.backup :as backup]
-   [sg.flybot.flybot-site.cfg :as cfg]
-   [sg.flybot.flybot-site.db :as db]
-   [sg.flybot.flybot-site.oauth :as oauth]
-   [sg.flybot.flybot-site.s3 :as s3]
+   [sg.flybot.flybot-site.server.system.api :as api]
+   [sg.flybot.flybot-site.server.system.backup :as backup]
+   [sg.flybot.flybot-site.server.system.cfg :as cfg]
+   [sg.flybot.flybot-site.server.system.db :as db]
+   [sg.flybot.flybot-site.server.system.auth :as auth]
+   [sg.flybot.flybot-site.server.system.s3 :as s3]
    [sg.flybot.pullable.remote :as remote]
    [com.brunobonacci.mulog :as mu]
    [org.httpkit.server :as http-kit]
@@ -131,7 +130,8 @@
       (handler request))))
 
 (defn- wrap-dev-user
-  "Inject fake session for dev mode."
+  "Inject fake session for dev mode.
+   Includes roles from the dev-user map (defaults to all roles for dev convenience)."
   [handler dev-user]
   (if dev-user
     (fn [request]
@@ -139,7 +139,8 @@
                            {:user-id (:id dev-user)
                             :user-email (:email dev-user)
                             :user-name (:name dev-user)
-                            :user-picture (:picture dev-user)})]
+                            :user-picture (:picture dev-user)
+                            :roles (or (:roles dev-user) #{:member :admin :owner})})]
         (handler (assoc request :session session))))
     handler))
 
@@ -234,15 +235,14 @@
 
       ;;-----------------------------------------------------------------------
       ;; API Function (request -> {:data :schema})
+      ;; Roles are now stored in session (initialized at OAuth login).
+      ;; The api-fn reads roles from session, no owner-emails needed here.
       ;;-----------------------------------------------------------------------
       ::api-fn
-      (fnk [::db ::owner-emails ::logger]
+      (fnk [::db ::logger]
            (mu/log ::api-fn-init)
            (let [conn (:conn db)]
-             (if (seq owner-emails)
-               (do (mu/log ::role-auth-enabled :owner-emails owner-emails)
-                   (auth/make-api {:owner-emails owner-emails :conn conn}))
-               (fn [_] {:data (api/make-api conn) :schema api/schema}))))
+             (api/make-api {:conn conn})))
 
       ;;-----------------------------------------------------------------------
       ;; Session Configuration (production: secure cookies)
@@ -278,7 +278,7 @@
       ;; Note: wrap-dev-user is a no-op when dev-user is nil
       ;;-----------------------------------------------------------------------
       ::ring-app
-      (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger ::db]
+      (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger ::db ::owner-emails]
            (mu/log ::ring-app-building)
            (-> (fn [_] (-> (resp/resource-response "index.html" {:root "public"})
                            (resp/content-type "text/html")))
@@ -287,12 +287,13 @@
                (remote/wrap-api api-fn {:path "/api"})
                (wrap-upload-route upload-handler)
                wrap-multipart-params
-               oauth/wrap-logout
-               (oauth/wrap-oauth-success {:allowed-email-pattern email-pattern
-                                          :conn (:conn db)})
-               (oauth/wrap-google-auth {:client-id google-client-id
-                                        :client-secret google-client-secret
-                                        :base-url base-url})
+               auth/wrap-logout
+               (auth/wrap-oauth-success {:allowed-email-pattern email-pattern
+                                         :owner-emails owner-emails
+                                         :conn (:conn db)})
+               (auth/wrap-google-auth {:client-id google-client-id
+                                       :client-secret google-client-secret
+                                       :base-url base-url})
                (wrap-dev-user dev-user)
                (wrap-idle-session-timeout {:timeout timeout
                                            :timeout-handler session-timeout-handler})
@@ -332,21 +333,27 @@
                          :secure false}})))
 
 (defn- make-dev-user-component
-  "Create dev-user component that auto-logs in a configured user."
+  "Create dev-user component that auto-logs in a configured user.
+   Uses :roles from config, defaults to all roles for convenience."
   [dev-user-cfg]
   (fnk [::db ::logger]
        (when dev-user-cfg
          (let [conn (:conn db)
-               {:keys [id name email]} dev-user-cfg]
-           (mu/log ::dev-mode-auto-login :name name)
+               {:keys [id name email roles]} dev-user-cfg
+               roles (or roles #{:member :admin :owner})]
+           (mu/log ::dev-mode-auto-login :name name :roles roles)
            (db/upsert-user! conn #:user{:id id
                                         :email email
                                         :name name
                                         :picture ""})
+           ;; Grant configured roles
+           (doseq [role roles]
+             (db/grant-role! conn id role))
            {:id id
             :email email
             :name name
-            :picture nil}))))
+            :picture nil
+            :roles roles}))))
 
 (defn make-dev-system
   "Create dev system with auto-login user and insecure cookies.

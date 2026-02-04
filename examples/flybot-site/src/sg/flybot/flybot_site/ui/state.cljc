@@ -22,7 +22,7 @@
    :tag-filter nil    ; nil = show all, string = filter by tag (includes pages)
    :author-filter nil ; nil = show all, {:slug "..." :name "..."} = filter by author
    :pages #{"Home" "About" "Apply"}  ; tags that are pages (get nav tabs, different styling)
-   :user nil})        ; {:email :name :picture :role :slug} when logged in
+   :user nil})        ; {:id :email :name :picture :roles :slug} when logged in
 
 ;;=============================================================================
 ;; Error Classification
@@ -159,18 +159,19 @@
 (defn can-edit?
   "Can the current user edit/create/delete posts?"
   [{:keys [user]}]
-  (= :owner (:role user)))
+  (boolean (some #{:member :admin :owner} (:roles user))))
 
 (defn can-edit-post?
   "Can the current user edit this specific post?
-   Returns true if user is an admin (owner) OR the post author."
+   Returns true if user is admin/owner OR the post author."
   [state post]
   (let [user (:user state)
+        roles (or (:roles user) #{})
         ;; Author is now a user map with :user/id
         author-id (get-in post [:post/author :user/id])]
     (boolean
      (and user
-          (or (= :owner (:role user))
+          (or (some #{:admin :owner} roles)
               (= author-id (:id user)))))))
 
 ;;=============================================================================
@@ -178,7 +179,7 @@
 ;;=============================================================================
 
 (def ^:private fetch-posts-fx
-  {:api {:pattern '{:posts ?posts}
+  {:api {:pattern '{:guest {:posts ?posts}}
          :on-success :posts-fetched
          :on-error :error}})
 
@@ -220,19 +221,26 @@
               (cond-> (not= id (:selected-id state))
                 (assoc :history [])))
    :fx (merge {:history :push}
-              (api-fx {:posts/history {{:post/id id} '?versions}}
-                      :history-fetched))})
+              ;; Only fetch history for logged-in users (requires member role)
+              (when (logged-in? state)
+                (api-fx {:member {:posts/history {{:post/id id} '?versions}}}
+                        :history-fetched)))})
 
 ;; --- CRUD ---
 
 (defn create-post [state]
   {:state (assoc state :loading? true :error nil)
-   :fx (api-fx {:posts {nil (form->post-data state)}} :post-saved)})
+   :fx (api-fx {:member {:posts {nil (form->post-data state)}}} :post-saved)})
+
+(defn- admin-or-owner? [{:keys [user]}]
+  (boolean (some #{:admin :owner} (:roles user))))
 
 (defn update-post [state]
-  (let [id (:selected-id state)]
+  (let [id (:selected-id state)
+        ;; Admins/owners use :admin path (can edit any), members use :member (own only)
+        role-key (if (admin-or-owner? state) :admin :member)]
     {:state (assoc state :loading? true :error nil)
-     :fx (api-fx {:posts {{:post/id id} (form->post-data state)}} :post-saved)}))
+     :fx (api-fx {role-key {:posts {{:post/id id} (form->post-data state)}}} :post-saved)}))
 
 (defn post-saved [state _]
   {:state (assoc state :loading? false :view :list :form {:title "" :content "" :tags "" :featured? false})
@@ -243,8 +251,9 @@
    :fx (confirm-fx "Delete this post?" [:delete-confirmed id])})
 
 (defn delete-confirmed [state id]
-  {:state (assoc state :loading? true :error nil)
-   :fx (api-fx {:posts {{:post/id id} nil}} :post-deleted)})
+  (let [role-key (if (admin-or-owner? state) :admin :member)]
+    {:state (assoc state :loading? true :error nil)
+     :fx (api-fx {role-key {:posts {{:post/id id} nil}}} :post-deleted)}))
 
 (defn post-deleted [state _]
   {:state (assoc state :loading? false :view :list)
@@ -319,10 +328,11 @@
 
 (defn restore-confirmed [state version]
   (let [id (:post/id version)
+        role-key (if (admin-or-owner? state) :admin :member)
         data {:post/title (:post/title version)
               :post/content (:post/content version)}]
     {:state (assoc state :loading? true :error nil)
-     :fx (api-fx {:posts {{:post/id id} data}} :post-saved)}))
+     :fx (api-fx {role-key {:posts {{:post/id id} data}}} :post-saved)}))
 
 ;; --- Navigation (browser back/forward) ---
 
@@ -330,29 +340,38 @@
   (case view
     :list    {:state (assoc state :view :list :tag-filter tag :author-filter author)}
     :detail  {:state (assoc state :view :detail :selected-id id)
-              :fx (api-fx {:posts/history {{:post/id id} '?versions}}
-                          :history-fetched)}
+              :fx (when (logged-in? state)
+                    (api-fx {:member {:posts/history {{:post/id id} '?versions}}}
+                            :history-fetched))}
     :edit    (let [post (selected-post (assoc state :selected-id id))]
                {:state (cond-> (assoc state :view :edit :selected-id id)
                          post (assoc :form {:title (:post/title post "")
                                             :content (:post/content post "")}))})
     :new     {:state (assoc state :view :new :form {:title "" :content ""})}
     :history {:state (assoc state :view :history :selected-id id)
-              :fx (api-fx {:posts/history {{:post/id id} '?versions}}
-                          :history-fetched)}
+              :fx (when (logged-in? state)
+                    (api-fx {:member {:posts/history {{:post/id id} '?versions}}}
+                            :history-fetched))}
     :history-detail {:state (assoc state :view :history-detail :selected-id id)}
     {:state state}))
 
 ;; --- User/Auth ---
 
 (defn fetch-me [state]
-  "Fetch current user from :me endpoint."
+  "Fetch current user from :me endpoint.
+   Fails silently - guests get 422 which is expected."
   {:state state
-   :fx (api-fx '{:me ?user} :me-fetched)})
+   :fx {:api {:pattern '{:member {:me ?user}}
+              :on-success :me-fetched
+              :on-error :me-fetch-failed}}})
 
 (defn me-fetched [state user]
   "Store user data from :me endpoint response."
   {:state (assoc state :user user)})
+
+(defn me-fetch-failed [state _]
+  "Silent handler for auth check failure (expected for guests)."
+  {:state state})
 
 (defn logout [state]
   "Clear user and navigate to /logout endpoint."
@@ -368,7 +387,7 @@
   ;; fetch-posts sets loading and returns api effect
   (let [{:keys [state fx]} (fetch-posts initial-state)]
     [(:loading? state) (get-in fx [:api :pattern])])
-  ;=> [true {:posts ?posts}]
+  ;=> [true {:guest {:posts ?posts}}]
 
   ;; posts-fetched clears loading
   (let [{:keys [state]} (posts-fetched (assoc initial-state :loading? true)
@@ -481,16 +500,16 @@
   (logged-in? {:user {:email "test@example.com"}})
   ;=> true
 
-  ;; can-edit? returns false for viewer role
-  (can-edit? {:user {:role :viewer}})
+  ;; can-edit? returns false for no roles
+  (can-edit? {:user {:roles #{}}})
   ;=> false
 
-  ;; can-edit? returns true for owner role
-  (can-edit? {:user {:role :owner}})
+  ;; can-edit? returns true for member role
+  (can-edit? {:user {:roles #{:member}}})
   ;=> true
 
   ;; me-fetched stores user data
-  (let [{:keys [state]} (me-fetched initial-state {:email "test@example.com" :role :owner})]
+  (let [{:keys [state]} (me-fetched initial-state {:email "test@example.com" :roles #{:owner}})]
     (:email (:user state)))
   ;=> "test@example.com"
 
@@ -503,16 +522,16 @@
   (can-edit-post? {:user nil} {:post/author {:user/id "alice-123" :user/name "Alice"}})
   ;=> false
 
-  ;; can-edit-post? returns true for owner role (admin)
-  (can-edit-post? {:user {:role :owner :id "admin-123"}} {:post/author {:user/id "alice-123"}})
+  ;; can-edit-post? returns true for admin role
+  (can-edit-post? {:user {:roles #{:admin} :id "admin-123"}} {:post/author {:user/id "alice-123"}})
   ;=> true
 
   ;; can-edit-post? returns true when user is author (matching user ID)
-  (can-edit-post? {:user {:role :viewer :id "alice-123"}} {:post/author {:user/id "alice-123"}})
+  (can-edit-post? {:user {:roles #{:member} :id "alice-123"}} {:post/author {:user/id "alice-123"}})
   ;=> true
 
-  ;; can-edit-post? returns false when viewer is not the author
-  (can-edit-post? {:user {:role :viewer :id "bob-456"}} {:post/author {:user/id "alice-123"}})
+  ;; can-edit-post? returns false when member is not the author
+  (can-edit-post? {:user {:roles #{:member} :id "bob-456"}} {:post/author {:user/id "alice-123"}})
   ;=> false
 
   ;; --- Error Classification Tests ---

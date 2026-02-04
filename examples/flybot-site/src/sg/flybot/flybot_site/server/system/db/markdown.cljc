@@ -1,5 +1,5 @@
-(ns sg.flybot.flybot-site.markdown
-  "Markdown with YAML frontmatter parsing.
+(ns sg.flybot.flybot-site.server.system.db.markdown
+  "Markdown with YAML frontmatter parsing for post content.
 
    Posts are stored as markdown with YAML frontmatter:
 
@@ -47,6 +47,23 @@
               (cond-> (:tags frontmatter)
                 (update :tags #(->> % (remove nil?) (remove str/blank?) vec)))))))))
 
+(defn extract-frontmatter
+  "Extract properties from markdown frontmatter in post data.
+
+   Parses :post/content markdown, converts frontmatter fields to post keys:
+   - :author → :post/author
+   - :tags → :post/tags
+
+   Strips frontmatter from content, keeping only the body."
+  [data]
+  (if-let [content (:post/content data)]
+    (let [parsed (parse content)]
+      (cond-> data
+        (:content parsed) (assoc :post/content (:content parsed))
+        (:author parsed) (assoc :post/author (:author parsed))
+        (:tags parsed) (assoc :post/tags (:tags parsed))))
+    data))
+
 ^:rct/test
 (comment
   (parse nil) ;=> {}
@@ -56,5 +73,17 @@
   ;=> {:content "Hello world" :author "Alice" :tags ["clojure" "test"]}
 
   ;; Empty tags are filtered out
-  (parse "---\nauthor: dev\ntags:\n  - \n---\n\n"))
-  ;=> {:author "dev" :tags [] :content ""})
+  (parse "---\nauthor: dev\ntags:\n  - \n---\n\n")
+  ;=> {:author "dev" :tags [] :content ""}
+
+  ;; extract-frontmatter converts to post fields
+  (extract-frontmatter {:post/title "Test" :post/content "---\nauthor: Alice\ntags:\n  - clj\n---\n\nHello"})
+  ;=> {:post/title "Test", :post/content "Hello", :post/author "Alice", :post/tags ["clj"]}
+
+  ;; No content, returns data unchanged
+  (extract-frontmatter {:post/title "Test"})
+  ;=> {:post/title "Test"}
+
+  ;; Content without frontmatter
+  (extract-frontmatter {:post/title "Test" :post/content "Hello world"}))
+  ;=> {:post/title "Test", :post/content "Hello world"})
