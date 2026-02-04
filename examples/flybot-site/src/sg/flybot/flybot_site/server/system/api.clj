@@ -167,16 +167,16 @@
       (and (some? query) (nil? value))
       (if (owns-post? posts user-id query)
         (coll/mutate! posts query nil)
-        {:error {:type :forbidden :reason :not-owner}})
+        {:error {:type :forbidden :message "You don't own this post"}})
 
       ;; UPDATE: some query, some value -> check ownership
       (and (some? query) (some? value))
       (if (owns-post? posts user-id query)
         (coll/mutate! posts query value)
-        {:error {:type :forbidden :reason :not-owner}})
+        {:error {:type :forbidden :message "You don't own this post"}})
 
       :else
-      {:error {:type :invalid-mutation}}))
+      {:error {:type :invalid-mutation :message "Invalid mutation operation"}}))
 
   coll/Wireable
   (->wire [_] (coll/->wire posts)))
@@ -237,7 +237,7 @@
       (let [role (:role/name value)
             existing (db/get-user-roles conn user-id)]
         (if (contains? existing role)
-          {:error {:type :already-granted :role role}}
+          {:error {:type :already-granted :message (str "Role already granted: " (name role))}}
           (do (db/grant-role! conn user-id role)
               {:role/name role :granted true})))
 
@@ -248,10 +248,10 @@
         (if (contains? existing role)
           (do (db/revoke-role! conn user-id role)
               {:role/name role :revoked true})
-          {:error {:type :not-found :role role}}))
+          {:error {:type :not-found :message (str "Role not found: " (name role))}}))
 
       :else
-      {:error {:type :invalid-mutation}}))
+      {:error {:type :invalid-mutation :message "Invalid mutation operation"}}))
 
   coll/Wireable
   (->wire [this] (vec (seq this))))
@@ -272,13 +272,23 @@
    :picture (:user-picture session)
    :roles (or (:roles session) #{})})
 
+(def ^:private error-config
+  "Error handling config for remote layer.
+   - :detect - how to detect errors in mutation results
+   - :codes  - map error types to HTTP status codes"
+  {:detect :error
+   :codes {:forbidden 403
+           :not-found 404
+           :invalid-mutation 422
+           :already-granted 422}})
+
 (defn make-api
   "Create API function for wrap-api middleware.
 
-   Returns (fn [ring-request] {:data ... :schema ... :sample ...})
+   Returns (fn [ring-request] {:data ... :schema ... :errors ... :sample ...})
 
    Data structure (role as top-level, nil if session lacks role):
-   - :guest  - always available: {:posts, :posts/history}
+   - :guest  - always available: {:posts}
    - :member - requires :member: {:posts, :posts/history, :me}
    - :admin  - requires :admin: {:posts}
    - :owner  - requires :owner: {:users}"
@@ -308,6 +318,7 @@
                  {:users (users-collection conn)})}
 
        :schema schema
+       :errors error-config
        :sample sample-data})))
 
 ;;=============================================================================

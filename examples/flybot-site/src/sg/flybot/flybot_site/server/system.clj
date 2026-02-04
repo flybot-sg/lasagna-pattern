@@ -88,7 +88,8 @@
             (assoc-in [:headers "Access-Control-Allow-Credentials"] "true"))))))
 
 (defn- wrap-error-handler
-  "Catch unhandled exceptions, return JSON/HTML error."
+  "Safety net for unhandled exceptions. Returns generic error response.
+   Normal errors flow as data through remote layer."
   [handler]
   (fn [request]
     (try

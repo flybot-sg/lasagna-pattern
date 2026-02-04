@@ -317,8 +317,8 @@
 (defn- success? [response]
   (not (contains? response :errors)))
 
-(def ^:private error-code->http-status
-  "Map error codes to HTTP status codes per spec."
+(def ^:private protocol-error-codes
+  "HTTP status codes for protocol-level errors (not app-specific)."
   {:invalid-request    400
    :decode-error       400
    :schema-violation   403
@@ -331,12 +331,15 @@
 
 (defn- response->http-status
   "Determine HTTP status code from response.
-   Success returns 200, errors return code based on error type."
-  [response]
-  (if (success? response)
-    200
-    (let [error-code (get-in response [:errors 0 :code])]
-      (get error-code->http-status error-code 400))))
+   Success returns 200, errors return code based on error type.
+   Uses protocol-error-codes merged with app-provided error-codes."
+  ([response] (response->http-status response nil))
+  ([response error-codes]
+   (if (success? response)
+     200
+     (let [code (get-in response [:errors 0 :code])
+           all-codes (merge protocol-error-codes error-codes)]
+       (get all-codes code 400)))))
 
 (defn- match-failure->error
   "Convert pattern MatchFailure to response error."
@@ -422,15 +425,23 @@
 
 (defn- execute-mutation
   "Execute a mutation against the API collection.
-   Path can be flat [:posts] or nested [:member :posts]."
+   Path can be flat [:posts] or nested [:member :posts].
+
+   errors: {:detect fn, :codes map} from api-fn response
+   If detect returns truthy, treats result as error with :type and :message."
   [api-fn ring-request {:keys [path query value]}]
   (try
-    (let [{:keys [data]} (api-fn ring-request)
+    (let [{:keys [data errors]} (api-fn ring-request)
+          {:keys [detect]} errors
+          detect-fn (when detect
+                      (if (keyword? detect) #(get % detect) detect))
           coll (get-in data path)
           result-key (last path)]
       (if (and coll (satisfies? coll/Mutable coll))
         (let [result (coll/mutate! coll query value)]
-          (success {result-key result} {(keyword->symbol result-key) result}))
+          (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
+            (failure (error type (or message (name type)) (vec path)))
+            (success {result-key result} {(keyword->symbol result-key) result})))
         (failure (error :invalid-collection
                         (str "Collection " (pr-str path) " not found or unavailable")))))
     (catch #?(:clj Exception :cljs js/Error) e
@@ -442,6 +453,8 @@
    Params in pull-request are used for:
    1. Pattern parameterization: $key in pattern replaced with value
    2. Ring request params: merged into ring-request :params
+
+   api-fn returns {:data ... :schema ... :errors {:detect fn :codes map}}
 
    Security: Patterns are compiled with sandboxed resolve/eval to prevent
    arbitrary code execution. Only whitelisted predicates are allowed."
@@ -478,6 +491,8 @@
                     :transit-json)
         res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
         body (read-body (:body ring-request))
+        ;; Get error codes from api-fn (call it to get :errors config)
+        error-codes (get-in (api-fn ring-request) [:errors :codes])
         response (cond
                    (nil? body)
                    (failure (error :invalid-request "Request body required"))
@@ -493,7 +508,7 @@
                                        (str "Failed to decode: "
                                             #?(:clj (.getMessage e) :cljs (.-message e))))))))
         {:keys [body content-type]} (encode-response response res-fmt)]
-    (ring-response (response->http-status response) body content-type)))
+    (ring-response (response->http-status response error-codes) body content-type)))
 
 (defn- handle-schema [api-fn ring-request]
   (let [res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
@@ -528,7 +543,13 @@
 (defn make-handler
   "Create Ring handler for pull API.
 
-   api-fn: (ring-request) -> {:data lazy-map, :schema schema-map}
+   api-fn: (ring-request) -> {:data lazy-map, :schema schema-map, :errors errors-config}
+
+   The :errors key in api-fn response configures error handling:
+   - :detect - keyword or (fn [result] error-map-or-nil) to detect mutation errors
+   - :codes  - Map of error-type to HTTP status (merged with protocol defaults)
+
+   Collections return errors as data: {:error {:type :forbidden :message \"...\"}}
 
    Options:
    - :path - Base path (default \"/api\")"
@@ -564,5 +585,16 @@
   (try (safe-eval '(fn [x] x)) (catch Exception e (:form (ex-data e)))) ;=> '(fn [x] x)
 
   ;; Security: pattern depth validation
-  (pattern-depth '{:a {:b {:c 1}}})) ;=> 3
+  (pattern-depth '{:a {:b {:c 1}}}) ;=> 3
+
+  ;; Protocol error codes
+  (get protocol-error-codes :invalid-request) ;=> 400
+  (get protocol-error-codes :not-found) ;=> 404
+  (get protocol-error-codes :execution-error) ;=> 500
+
+  ;; response->http-status with custom codes
+  (response->http-status {:errors [{:code :forbidden}]} {:forbidden 403}) ;=> 403
+  (response->http-status {:errors [{:code :custom}]} {:custom 418}) ;=> 418
+  (response->http-status {:errors [{:code :unknown}]} nil) ;=> 400
+  )
 

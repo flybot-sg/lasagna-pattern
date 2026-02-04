@@ -55,7 +55,13 @@
   "Create a Ring handler for pull-based API.
 
    Arguments:
-   - api-fn: Function (ring-request) → {:data lazy-map, :schema schema-map}
+   - api-fn: Function (ring-request) → {:data lazy-map, :schema schema-map, :errors errors-config}
+
+   The api-fn returns :errors config for error handling:
+   - :detect - keyword or fn to detect errors in mutation results
+   - :codes  - Map of error-type to HTTP status
+
+   Collections return errors as data: {:error {:type :forbidden :message \"...\"}}
 
    Options:
    - :path - Base path for API (default \"/api\")
@@ -66,7 +72,9 @@
      (make-handler
        (fn [req]
          {:data (build-api (:session req))
-          :schema (schema-for-role (:role req))})))
+          :schema my-schema
+          :errors {:detect :error
+                   :codes {:forbidden 403}}})))
    ```"
   http/make-handler)
 
@@ -75,6 +83,9 @@
 
    Delegates non-API requests to the wrapped handler.
 
+   Options:
+   - :path - Base path for API (default \"/api\")
+
    ```clojure
    (def app
      (-> my-handler
@@ -82,8 +93,8 @@
    ```"
   ([handler api-fn]
    (wrap-api handler api-fn {}))
-  ([next-handler api-fn {:keys [path] :or {path "/api"}}]
-   (let [pull-handler (make-handler api-fn {:path path})
+  ([next-handler api-fn {:keys [path] :or {path "/api"} :as opts}]
+   (let [pull-handler (make-handler api-fn opts)
          schema-path (str path "/_schema")]
      (fn [request]
        (if (or (= (:uri request) path)
