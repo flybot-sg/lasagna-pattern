@@ -252,7 +252,7 @@
                                     :post/content "test"
                                     :post/tags []})
           owner-post-id (:post/id owner-post)]
-      ;; Now try to update it as tester (different user)
+      ;; Now try to update it as tester (different user) - returns error
       (let [{data2 :data} (api-fn {:session {:user-id "tester"
                                              :user-email "tester@test.com"
                                              :roles #{:member}}})
