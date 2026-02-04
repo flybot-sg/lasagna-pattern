@@ -30,7 +30,7 @@
 
    pattern - Pull pattern like '{:posts ?posts}
    on-success - fn of response data
-   on-error - fn of error string"
+   on-error - fn of error map {:code :forbidden :reason \"...\" :status 403} or string"
   [pattern on-success on-error]
   (log/log-api-request pattern)
   (-> (js/fetch api-url
@@ -40,17 +40,26 @@
                      :credentials "include"
                      :body (encode {:pattern pattern})})
       (.then (fn [resp]
-               (if (.-ok resp)
-                 (.text resp)
-                 (throw (js/Error. (str "HTTP " (.-status resp)))))))
-      (.then (fn [text]
-               (let [response (decode text)]
-                 (log/log-api-response response)
-                 (on-success response))))
+               ;; Always read body - errors have structured data
+               (-> (.text resp)
+                   (.then (fn [text]
+                            {:status (.-status resp)
+                             :ok (.-ok resp)
+                             :body (when (seq text) (decode text))})))))
+      (.then (fn [{:keys [status ok body]}]
+               (if ok
+                 (do (log/log-api-response body)
+                     (on-success body))
+                 ;; Extract structured error from response
+                 (let [error (if-let [err (first (:errors body))]
+                               (assoc err :status status)
+                               {:code :unknown :reason (str "HTTP " status) :status status})]
+                   (log/log-api-error error pattern)
+                   (on-error error)))))
       (.catch (fn [err]
                 (let [msg (error->string err)]
                   (log/log-api-error msg pattern)
-                  (on-error msg))))))
+                  (on-error {:code :network :reason msg :status 0}))))))
 
 (defn upload-image!
   "Upload image blob to server. Returns promise resolving to image URL."

@@ -28,6 +28,25 @@
 ;; Error Classification
 ;;=============================================================================
 
+(def ^:private error-messages
+  "Human-readable messages for error codes."
+  {:forbidden "You don't have permission to do that."
+   :not-found "The requested item was not found."
+   :invalid-mutation "Invalid operation."
+   :already-granted "Role is already assigned."
+   :schema-violation "Invalid data format."
+   :network "Unable to connect. Please check your connection."
+   :unknown "An unexpected error occurred."})
+
+(def ^:private retryable-codes
+  "Error codes that indicate retryable errors."
+  #{:network :execution-error})
+
+(defn- retryable-status?
+  "Check if HTTP status indicates a retryable error."
+  [status]
+  (and (number? status) (>= status 500)))
+
 (defn- retryable-error-pattern?
   "Check if error string indicates a retryable error (network/server issues)."
   [s]
@@ -41,17 +60,47 @@
               (str/includes? lc "500"))))))
 
 (defn classify-error
-  "Classify error into {:message ... :retryable? ...}"
+  "Classify error into {:message ... :retryable? ... :type ...}
+
+   Accepts:
+   - Structured error: {:code :forbidden :reason \"...\" :status 403}
+   - String: \"Failed to fetch\"
+   - Legacy map: {:message \"...\"} or {:error \"...\"}"
   [error]
-  (let [raw (cond
-              (string? error) error
-              (map? error) (or (:message error) (:error error) (str error))
-              :else (str error))
-        retryable? (retryable-error-pattern? raw)]
-    {:message (if retryable?
-                "Unable to connect. Please try again."
-                (or raw "An error occurred."))
-     :retryable? retryable?}))
+  (cond
+    ;; Structured API error (from backend)
+    (and (map? error) (:code error))
+    (let [{:keys [code reason status]} error
+          retryable? (or (contains? retryable-codes code)
+                         (retryable-status? status))]
+      {:message (or reason (get error-messages code) (name code))
+       :retryable? retryable?
+       :type code})
+
+    ;; String error
+    (string? error)
+    (let [retryable? (retryable-error-pattern? error)]
+      {:message (if retryable?
+                  "Unable to connect. Please try again."
+                  error)
+       :retryable? retryable?
+       :type (if retryable? :network :unknown)})
+
+    ;; Legacy map format
+    (map? error)
+    (let [raw (or (:message error) (:error error) (str error))
+          retryable? (retryable-error-pattern? raw)]
+      {:message (if retryable?
+                  "Unable to connect. Please try again."
+                  (or raw "An error occurred."))
+       :retryable? retryable?
+       :type (if retryable? :network :unknown)})
+
+    ;; Fallback
+    :else
+    {:message "An error occurred."
+     :retryable? false
+     :type :unknown}))
 
 ;;=============================================================================
 ;; Selectors
@@ -554,5 +603,27 @@
 
   ;; set-error uses classification
   (let [{:keys [state]} (set-error initial-state "Failed to fetch")]
-    (:retryable? (:error state))))
-  ;=> true)
+    (:retryable? (:error state)))
+  ;=> true
+
+  ;; --- Structured API Error Tests ---
+
+  ;; classify-error handles structured error from backend
+  (classify-error {:code :forbidden :reason "You don't own this post" :status 403})
+  ;=> {:message "You don't own this post" :retryable? false :type :forbidden}
+
+  ;; classify-error uses default message when no reason provided
+  (:message (classify-error {:code :forbidden :status 403}))
+  ;=> "You don't have permission to do that."
+
+  ;; classify-error marks network errors as retryable
+  (classify-error {:code :network :reason "Failed to fetch" :status 0})
+  ;=> {:message "Failed to fetch" :retryable? true :type :network}
+
+  ;; classify-error marks 5xx errors as retryable
+  (:retryable? (classify-error {:code :execution-error :reason "Server error" :status 500}))
+  ;=> true
+
+  ;; classify-error preserves error type
+  (:type (classify-error {:code :not-found :reason "Post not found" :status 404})))
+  ;=> :not-found)
