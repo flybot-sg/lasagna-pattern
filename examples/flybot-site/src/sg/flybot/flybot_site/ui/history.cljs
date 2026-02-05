@@ -13,14 +13,17 @@
             ;; Author filter -> /author/bob-smith
             author-filter
             (str "/author/" (js/encodeURIComponent (:slug author-filter)))
-            ;; Page tag -> /page/Home
+            ;; Home page -> / (landing page)
+            (= tag-filter "Home")
+            "/"
+            ;; Other page tags -> /page/About
             (and tag-filter (contains? (or pages #{}) tag-filter))
             (str "/page/" (js/encodeURIComponent tag-filter))
             ;; Regular tag -> /tag/clojure
             tag-filter
             (str "/tag/" (js/encodeURIComponent tag-filter))
-            ;; No filter -> /
-            :else "/")
+            ;; No filter (Posts) -> /posts
+            :else "/posts")
     :detail (str "/posts/" selected-id)
     :edit (str "/posts/" selected-id "/edit")
     :new "/posts/new"
@@ -72,13 +75,17 @@
       (let [[_ id] (re-matches #"/posts/(\d+)" path)]
         {:view :detail :id (js/parseInt id 10)})
 
-      ;; / or empty
-      (or (= path "/") (= path ""))
+      ;; /posts - blog posts list
+      (= path "/posts")
       {:view :list :id nil :tag nil}
 
-      ;; Unknown path - default to list
+      ;; / or empty - Home page (landing)
+      (or (= path "/") (= path ""))
+      {:view :list :id nil :tag "Home"}
+
+      ;; Unknown path - default to Home
       :else
-      {:view :list :id nil :tag nil})))
+      {:view :list :id nil :tag "Home"})))
 
 ;;=============================================================================
 ;; Browser History API

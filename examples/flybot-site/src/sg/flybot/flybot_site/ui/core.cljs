@@ -47,7 +47,10 @@
    :fetch-me        (fn [s _] (state/fetch-me s))
    :me-fetched      state/me-fetched
    :me-fetch-failed state/me-fetch-failed
-   :logout          (fn [s _] (state/logout s))})
+   :logout          (fn [s _] (state/logout s))
+   ;; Mobile Navigation
+   :toggle-mobile-nav (fn [s _] (state/toggle-mobile-nav s))
+   :close-mobile-nav  (fn [s _] (state/close-mobile-nav s))})
 
 (defn- apply-handler [state event]
   (let [[event-type & args] (if (vector? event) event [event])
