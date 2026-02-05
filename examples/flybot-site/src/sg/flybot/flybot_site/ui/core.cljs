@@ -101,6 +101,14 @@
 ;; Dispatch
 ;;=============================================================================
 
+(defn- should-scroll-top?
+  "Check if navigation warrants scrolling to top."
+  [old-state new-state]
+  (or (not= (:view old-state) (:view new-state))
+      (not= (:tag-filter old-state) (:tag-filter new-state))
+      (not= (:author-filter old-state) (:author-filter new-state))
+      (not= (:selected-id old-state) (:selected-id new-state))))
+
 (defn dispatch!
   "Dispatch an event: :keyword or [:keyword arg1 arg2 ...]"
   [event]
@@ -111,6 +119,8 @@
     (when (not= (:view old-state) (:view state))
       (log/log-state-change (str (if (vector? event) (first event) event))
                             old-state state))
+    (when (should-scroll-top? old-state state)
+      (js/window.scrollTo 0 0))
     (when fx (execute-effects! state fx))))
 
 ;;=============================================================================
