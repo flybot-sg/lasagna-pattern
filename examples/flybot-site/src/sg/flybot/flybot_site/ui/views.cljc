@@ -107,6 +107,17 @@
    [:line {:x1 "15" :y1 "9" :x2 "9" :y2 "15"}]
    [:line {:x1 "9" :y1 "9" :x2 "15" :y2 "15"}]])
 
+(defn- check-circle-icon []
+  [:svg.toast-icon {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:path {:d "M22 11.08V12a10 10 0 1 1-5.93-9.14"}]
+   [:polyline {:points "22 4 12 14.01 9 11.01"}]])
+
+(defn- info-icon []
+  [:svg.toast-icon {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:circle {:cx "12" :cy "12" :r "10"}]
+   [:line {:x1 "12" :y1 "16" :x2 "12" :y2 "12"}]
+   [:line {:x1 "12" :y1 "8" :x2 "12.01" :y2 "8"}]])
+
 (defn- alert-icon
   "Select appropriate icon based on error type."
   [error-type]
@@ -594,6 +605,36 @@
        [:div.button-group {:style {:margin-top "2rem"}}
         [:button {:on {:click #(dispatch! [:restore-version version])}} "Restore This Version"]])]))
 
+;;=============================================================================
+;; Toast Notifications
+;;=============================================================================
+
+(defn- toast-icon [type]
+  (case type
+    :success (check-circle-icon)
+    :error [:span.toast-icon (x-circle-icon)]
+    :warning [:span.toast-icon (warning-icon)]
+    :info (info-icon)
+    (info-icon)))
+
+(defn- toast-item [{:keys [id type title message]}]
+  [:div.toast {:replicant/key id :class (name type)}
+   (toast-icon type)
+   [:div.toast-content
+    [:div.toast-title title]
+    (when message
+      [:div.toast-message message])]])
+
+(defn- toast-container [toasts]
+  (when (seq toasts)
+    [:div.toast-container
+     (for [toast toasts]
+       (toast-item toast))]))
+
+;;=============================================================================
+;; App Root
+;;=============================================================================
+
 (defn app-view [state dispatch!]
   [:div.app-container
    (site-header state dispatch!)
@@ -608,7 +649,8 @@
       :history (post-history-view state dispatch!)
       :history-detail (post-history-detail-view state dispatch!)
       (post-list-view state dispatch!))]
-   (site-footer)])
+   (site-footer)
+   (toast-container (:toasts state))])
 
 ;;=============================================================================
 ;; Tests
