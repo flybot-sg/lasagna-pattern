@@ -769,12 +769,30 @@ At Flybot, we're passionate about creating elegant solutions using **functional 
     (coll/create! ds {:post/title "Latest News: Q1 2026 Update"
                       :post/author "sample-bob"
                       :post/tags ["Home" "news"]
-                      :post/content "We're excited to announce several new client partnerships and the release of our open-source pull-pattern library!"})
+                      :post/content "We're excited to announce **several new client partnerships** and the release of our open-source [pull-pattern library](https://github.com/flybot-sg/pull-pattern)!
+
+## Highlights
+
+- Signed contracts with *3 major enterprises*
+- Open-sourced our core pattern matching library
+- Expanded the team with 2 new engineers"})
 
     (coll/create! ds {:post/title "Featured Project: Data Pipeline"
                       :post/author "sample-alice"
                       :post/tags ["Home" "projects" "tech" "clojure"]
-                      :post/content "Check out our latest case study on building high-performance data pipelines with Clojure and Kafka."})
+                      :post/content "Check out our latest case study on building **high-performance data pipelines** with Clojure and Kafka.
+
+## Architecture
+
+```clojure
+(defn process-event [event]
+  (-> event
+      validate-schema
+      transform-data
+      persist!))
+```
+
+The pipeline handles *10,000 events/second* with sub-millisecond latency."})
 
     ;; About page content (featured = hero post)
     (coll/create! ds {:post/title "About Flybot"
@@ -802,7 +820,18 @@ Our engineers bring decades of combined experience from top tech companies, unit
     (coll/create! ds {:post/title "Our Tech Stack"
                       :post/author "sample-bob"
                       :post/tags ["About" "tech" "clojure"]
-                      :post/content "We work primarily with Clojure/ClojureScript, Datomic, and modern cloud infrastructure. Our tooling philosophy emphasizes composability and data-driven configuration."})
+                      :post/content "We work primarily with **Clojure/ClojureScript**, Datomic, and modern cloud infrastructure.
+
+## Core Technologies
+
+| Layer | Technology |
+|-------|------------|
+| Backend | Clojure, Ring, Reitit |
+| Frontend | ClojureScript, Replicant |
+| Database | Datomic, Datahike |
+| Infra | AWS, Docker, Terraform |
+
+Our tooling philosophy emphasizes *composability* and data-driven configuration."})
 
     ;; Apply page content (featured = hero post)
     (coll/create! ds {:post/title "Join Our Team"
@@ -838,25 +867,81 @@ Send your resume and a brief note about your favorite Clojure project to **caree
     (coll/create! ds {:post/title "Internship Program"
                       :post/author "sample-alice"
                       :post/tags ["Apply" "internship"]
-                      :post/content "Our 3-month internship program is designed for students and early-career developers eager to learn functional programming. Interns work on real projects alongside senior engineers."})
+                      :post/content "Our **3-month internship program** is designed for students and early-career developers eager to learn functional programming.
+
+## What You'll Learn
+
+1. REPL-driven development workflow
+2. Functional programming fundamentals
+3. Building production-grade APIs
+4. Testing with `clojure.test` and RCT
+
+Interns work on *real projects* alongside senior engineers. [Apply now](mailto:careers@flybot.sg)!"})
 
     ;; Regular blog posts
     (coll/create! ds {:post/title "Understanding Pull Patterns"
                       :post/author "sample-alice"
                       :post/tags ["clojure" "patterns"]
-                      :post/content "Pull patterns let you declaratively specify what data you want from nested data structures. Instead of writing imperative traversal code, you describe the shape of data you need and let the pattern engine do the work."})
+                      :post/content "Pull patterns let you **declaratively specify** what data you want from nested data structures.
+
+## The Problem
+
+Instead of writing imperative traversal code:
+
+```clojure
+(get-in data [:user :address :city])
+```
+
+You describe the *shape of data* you need:
+
+```clojure
+'{:user {:address {:city ?city}}}
+```
+
+> Let the pattern engine do the work."})
 
     (coll/create! ds {:post/title "Building APIs with Lazy Data"
                       :post/author "sample-bob"
                       :post/tags ["clojure" "api"]
-                      :post/content "The key insight is that your API is just a lazy data structure. By implementing ILookup, you can create collections that fetch data on-demand, making your API both flexible and efficient."})
+                      :post/content "The key insight is that your API is just a **lazy data structure**.
+
+## ILookup Protocol
+
+By implementing `ILookup`, you can create collections that fetch data *on-demand*:
+
+```clojure
+(defrecord LazyCollection [fetch-fn]
+  ILookup
+  (valAt [_ k] (fetch-fn k)))
+```
+
+This makes your API both flexible and efficient."})
 
     (coll/create! ds {:post/title "REPL-Driven Development Tips"
                       :post/author "sample-alice"
                       :post/tags ["clojure" "workflow"]
-                      :post/content "Rich comment blocks (^:rct/test) combine documentation, examples, and tests in one place. They're evaluated during development but ignored in production."})
+                      :post/content "Rich comment blocks (`^:rct/test`) combine **documentation**, **examples**, and **tests** in one place.
+
+## Example
+
+```clojure
+^:rct/test
+(comment
+  (add 1 2) ;=> 3
+  (add -1 1) ;=> 0)
+```
+
+They're evaluated during development but *ignored in production*."})
 
     (coll/create! ds {:post/title "Clojure中的函数式编程"
                       :post/author "sample-zhang"
                       :post/tags ["clojure" "functional"]
-                      :post/content "Functional programming in Clojure emphasizes immutability and pure functions. This approach leads to code that is easier to test, reason about, and parallelize."})))
+                      :post/content "Functional programming in Clojure emphasizes **immutability** and **pure functions**.
+
+## 核心概念
+
+- 不可变数据结构 (*Immutable data*)
+- 纯函数 (*Pure functions*)
+- 高阶函数 (*Higher-order functions*)
+
+This approach leads to code that is easier to test, reason about, and parallelize."})))

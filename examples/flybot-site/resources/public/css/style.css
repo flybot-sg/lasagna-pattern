@@ -106,6 +106,16 @@ a:hover { text-decoration: underline; }
   border-radius: 50%;
 }
 
+.avatar-initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
 .user-name {
   font-size: 0.9rem;
   color: var(--text);
@@ -623,6 +633,84 @@ button.danger { background: var(--danger); }
   color: var(--accent);
 }
 
+/* Mobile Navigation */
+.mobile-menu-btn {
+  display: none;
+}
+
+.mobile-nav-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 200;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+
+.mobile-nav-overlay.open {
+  opacity: 1;
+  visibility: visible;
+}
+
+.mobile-nav-drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 280px;
+  max-width: 80vw;
+  height: 100%;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border);
+  z-index: 300;
+  transform: translateX(100%);
+  transition: transform 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.mobile-nav-drawer.open {
+  transform: translateX(0);
+}
+
+.mobile-nav-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  color: var(--text);
+}
+
+.mobile-nav-links {
+  display: flex;
+  flex-direction: column;
+  padding: 0.5rem 0;
+}
+
+.mobile-nav-link {
+  padding: 1rem 1.25rem;
+  color: var(--text);
+  font-size: 1.1rem;
+  font-weight: 500;
+  border-bottom: 1px solid var(--border);
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.mobile-nav-link:hover {
+  background: var(--bg);
+  text-decoration: none;
+}
+
+.mobile-nav-link.active {
+  color: var(--accent);
+  background: var(--tag-bg);
+}
+
 /* Responsive */
 @media (max-width: 768px) {
   .footer-content {
@@ -630,6 +718,7 @@ button.danger { background: var(--danger); }
     gap: 1.5rem;
   }
   .header-nav { display: none; }
+  .mobile-menu-btn { display: flex; }
 }
 
 @media (max-width: 600px) {

@@ -2,7 +2,8 @@
   "UI views - pure functions returning hiccup.
 
    Views emit events by calling (dispatch! :event) or (dispatch! [:event arg])."
-  (:require [sg.flybot.flybot-site.ui.state :as state]
+  (:require [clojure.string :as str]
+            [sg.flybot.flybot-site.ui.state :as state]
             #?(:cljs [sg.flybot.flybot-site.ui.api :as api])
             #?(:cljs ["marked" :refer [marked]])
             #?(:cljs ["@toast-ui/editor" :as toastui])))
@@ -56,8 +57,19 @@
        :cljs (when (seq body)
                [:div {:innerHTML (marked body)}]))))
 
+(defn- markdown->text
+  "Convert markdown to plain text by rendering to HTML then extracting text.
+   Uses DOM to properly decode HTML entities."
+  [s]
+  #?(:clj s
+     :cljs (let [div (js/document.createElement "div")]
+             (set! (.-innerHTML div) (marked s))
+             (-> (.-textContent div)
+                 (str/replace #"\s+" " ")
+                 str/trim))))
+
 (defn- content-preview [content n]
-  (let [body (strip-frontmatter (or content ""))]
+  (let [body (-> (or content "") strip-frontmatter markdown->text)]
     (if (> (count body) n)
       (str (subs body 0 n) "...")
       body)))
@@ -201,12 +213,59 @@
   [:svg {:width "20" :height "20" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
    [:path {:d "M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"}]])
 
+(defn- menu-icon []
+  [:svg {:width "24" :height "24" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:line {:x1 "3" :y1 "12" :x2 "21" :y2 "12"}]
+   [:line {:x1 "3" :y1 "6" :x2 "21" :y2 "6"}]
+   [:line {:x1 "3" :y1 "18" :x2 "21" :y2 "18"}]])
+
+(defn- close-icon []
+  [:svg {:width "24" :height "24" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:line {:x1 "18" :y1 "6" :x2 "6" :y2 "18"}]
+   [:line {:x1 "6" :y1 "6" :x2 "18" :y2 "18"}]])
+
 (defn- edit-icon []
   [:svg {:width "16" :height "16" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
    [:path {:d "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"}]
    [:path {:d "M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"}]])
 
 (def ^:private page-order ["Home" "About" "Apply"])
+
+(defn- mobile-nav-drawer
+  "Mobile navigation drawer - slides in from right on mobile."
+  [{:keys [tag-filter pages mobile-nav-open?] :as state} dispatch!]
+  (let [pages-set (or pages #{})
+        page-mode? (state/page-mode? state)]
+    [:div.mobile-nav-drawer {:class (when mobile-nav-open? "open")}
+     [:div.mobile-nav-header
+      [:span "Menu"]
+      [:button.icon-btn {:title "Close menu"
+                         :on {:click #(dispatch! :close-mobile-nav)}}
+       (close-icon)]]
+     [:nav.mobile-nav-links
+      ;; Pages in defined order
+      (for [p page-order
+            :when (contains? pages-set p)]
+        [:a.mobile-nav-link {:replicant/key p
+                             :class (when (and page-mode? (= tag-filter p)) "active")
+                             :href "#"
+                             :on {:click (fn [e]
+                                           (.preventDefault e)
+                                           (dispatch! [:filter-by-tag p]))}}
+         p])
+      ;; Posts tab
+      [:a.mobile-nav-link {:class (when (not page-mode?) "active")
+                           :href "#"
+                           :on {:click (fn [e]
+                                         (.preventDefault e)
+                                         (dispatch! [:filter-by-tag nil]))}}
+       "Posts"]]]))
+
+(defn- mobile-nav-overlay
+  "Overlay behind mobile nav drawer - click to close."
+  [{:keys [mobile-nav-open?]} dispatch!]
+  [:div.mobile-nav-overlay {:class (when mobile-nav-open? "open")
+                            :on {:click #(dispatch! :close-mobile-nav)}}])
 
 (defn- header-nav
   "Navigation in header - pages in order, then Posts."
@@ -248,14 +307,22 @@
        [:span.show-dark (sun-icon)]]
       (if user
         [:div.user-info
-         (when-let [picture (:picture user)]
-           [:img.avatar {:src picture :alt (:name user)}])
+         (if-let [picture (:picture user)]
+           [:img.avatar {:src picture :alt (:name user)}]
+           ;; Fallback: show initials when no picture
+           [:div.avatar.avatar-initials
+            (let [name (:name user "?")]
+              (-> name (subs 0 1) .toUpperCase))])
          [:span.user-name (:name user)]
          [:button.icon-btn {:title "Sign out"
                             :on {:click #(dispatch! :logout)}}
           (logout-icon)]]
         [:a.icon-btn {:href "/oauth2/google" :title "Sign in with Google"}
-         (login-icon)])]]))
+         (login-icon)])
+      ;; Mobile menu button (visible only on mobile via CSS)
+      [:button.icon-btn.mobile-menu-btn {:title "Open menu"
+                                         :on {:click #(dispatch! :toggle-mobile-nav)}}
+       (menu-icon)]]]))
 
 (defn site-footer []
   [:footer.site-footer
@@ -530,6 +597,8 @@
 (defn app-view [state dispatch!]
   [:div.app-container
    (site-header state dispatch!)
+   (mobile-nav-overlay state dispatch!)
+   (mobile-nav-drawer state dispatch!)
    [:main.main-content
     (case (:view state)
       :list (post-list-view state dispatch!)

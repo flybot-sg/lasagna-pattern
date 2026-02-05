@@ -19,10 +19,11 @@
    :form {:title "" :content "" :tags "" :featured? false}
    :history []
    :history-version nil
-   :tag-filter nil    ; nil = show all, string = filter by tag (includes pages)
+   :tag-filter "Home" ; nil = show all posts, string = filter by tag (includes pages)
    :author-filter nil ; nil = show all, {:slug "..." :name "..."} = filter by author
    :pages #{"Home" "About" "Apply"}  ; tags that are pages (get nav tabs, different styling)
-   :user nil})        ; {:id :email :name :picture :roles :slug} when logged in
+   :user nil          ; {:id :email :name :picture :roles :slug} when logged in
+   :mobile-nav-open? false})  ; mobile navigation drawer state
 
 ;;=============================================================================
 ;; Error Classification
@@ -342,18 +343,27 @@
 (defn update-form [state field value]
   {:state (assoc-in state [:form field] value)})
 
+;; --- Mobile Navigation ---
+
+(defn toggle-mobile-nav [state]
+  {:state (update state :mobile-nav-open? not)})
+
+(defn close-mobile-nav [state]
+  {:state (assoc state :mobile-nav-open? false)})
+
 ;; --- Tag Filter / Pages ---
 
 (defn filter-by-tag
   "Filter posts by tag. Always navigates to list view with URL update.
-   Pages go to /page/{tag}, regular tags go to /tag/{tag}."
+   Pages go to /page/{tag}, regular tags go to /tag/{tag}.
+   Closes mobile nav when navigating."
   [state tag]
-  {:state (assoc state :view :list :tag-filter tag :author-filter nil)
+  {:state (assoc state :view :list :tag-filter tag :author-filter nil :mobile-nav-open? false)
    :fx {:history :push}})
 
 (defn filter-by-author
   "Filter posts by author. Navigates to /user/{slug}."
-  [state {:keys [slug name] :as author}]
+  [state author]
   {:state (assoc state :view :list :author-filter author :tag-filter nil)
    :fx {:history :push}})
 
@@ -625,5 +635,23 @@
   ;=> true
 
   ;; classify-error preserves error type
-  (:type (classify-error {:code :not-found :reason "Post not found" :status 404})))
-  ;=> :not-found)
+  (:type (classify-error {:code :not-found :reason "Post not found" :status 404}))
+  ;=> :not-found
+
+  ;; --- Mobile Navigation Tests ---
+
+  ;; toggle-mobile-nav flips the state
+  (:mobile-nav-open? (:state (toggle-mobile-nav {:mobile-nav-open? false})))
+  ;=> true
+
+  ;; toggle-mobile-nav flips back
+  (:mobile-nav-open? (:state (toggle-mobile-nav {:mobile-nav-open? true})))
+  ;=> false
+
+  ;; close-mobile-nav always sets to false
+  (:mobile-nav-open? (:state (close-mobile-nav {:mobile-nav-open? true})))
+  ;=> false
+
+  ;; filter-by-tag closes mobile nav
+  (:mobile-nav-open? (:state (filter-by-tag {:mobile-nav-open? true} "Home"))))
+  ;=> false)
