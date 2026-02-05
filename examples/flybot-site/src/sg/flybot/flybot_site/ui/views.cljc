@@ -179,10 +179,11 @@
        (.on editor "change" #(on-change (.getMarkdown editor)))
        editor)))
 
-(defn markdown-editor [content dispatch!]
+(defn markdown-editor [content dispatch! editor-key]
   #?(:clj [:textarea {:value content}]
      :cljs [:div.editor-container
-            {:replicant/on-mount
+            {:replicant/key editor-key
+             :replicant/on-mount
              (fn [{:keys [replicant/node replicant/remember]}]
                (remember {:editor (init-editor! node content
                                                 #(dispatch! [:update-form :content %]))
@@ -525,8 +526,10 @@
         "← Back to posts"]
        [:p "Post not found"]])))
 
-(defn post-form-view [{:keys [form error view] :as state} dispatch!]
-  (let [editing? (= view :edit)]
+(defn post-form-view [{:keys [form error view selected-id] :as state} dispatch!]
+  (let [editing? (= view :edit)
+        ;; Unique key per view+post ensures editor remounts on navigation
+        editor-key (if editing? (str "edit-" selected-id) "new")]
     [:div.post-form
      [:a.back-link {:href "#"
                     :on {:click (fn [e]
@@ -555,7 +558,7 @@
        "Featured (hero post on page)"]]
      [:div.form-group
       [:label "Content"]
-      (markdown-editor (:content form) dispatch!)]
+      (markdown-editor (:content form) dispatch! editor-key)]
      [:button {:on {:click #(dispatch! (if editing? :update-post :create-post))}}
       (if editing? "Save Changes" "Create Post")]]))
 
