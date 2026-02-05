@@ -11,7 +11,6 @@
                      ring/ring-mock {:mvn/version "0.4.0"}
                      io.github.robertluo/fun-map {:mvn/version "0.5.124"}
                      metosin/malli {:mvn/version "0.16.4"}}}
-  ;; Run Kaocha (picks up clojure.test and RCT wrapper)
-  :test {:extra-paths ["test"]
-         :exec-fn kaocha.runner/exec-fn
-         :exec-args {}}}}
+  :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
+        :exec-args {:dirs #{"src"}}}
+  :kaocha {:main-opts ["-m" "kaocha.runner"]}}}

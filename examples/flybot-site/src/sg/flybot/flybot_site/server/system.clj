@@ -172,7 +172,7 @@
         {:keys [owner-emails allowed-email-pattern
                 google-client-id google-client-secret]} auth
         {:keys [secret timeout]} session
-        {:keys [seed? backup-dir]} init
+        {:keys [seed?]} init
         {:keys [publishers context]} log
         ;; Build Datahike config
         ;; Note: S3 backend uses :store-id, mem/file use :id
@@ -222,14 +222,9 @@
            (let [conn (db/create-conn! db-cfg)
                  empty-db? (db/database-empty? conn)]
              (mu/log ::db-connected :backend (:backend db-cfg))
-             (when empty-db?
-               (cond
-                 backup-dir
-                 (let [result (backup/import-all! conn backup-dir)]
-                   (mu/log ::db-imported :count (:count result) :from backup-dir))
-                 seed?
-                 (do (db/seed! conn)
-                     (mu/log ::db-seeded :posts 10))))
+             (when (and empty-db? seed?)
+               (db/seed! conn)
+               (mu/log ::db-seeded :posts 10))
              (closeable {:conn conn :cfg db-cfg}
                         #(do (mu/log ::db-releasing)
                              (db/release-conn! conn db-cfg)))))
