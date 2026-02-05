@@ -50,7 +50,10 @@
    :logout          (fn [s _] (state/logout s))
    ;; Mobile Navigation
    :toggle-mobile-nav (fn [s _] (state/toggle-mobile-nav s))
-   :close-mobile-nav  (fn [s _] (state/close-mobile-nav s))})
+   :close-mobile-nav  (fn [s _] (state/close-mobile-nav s))
+   ;; Toast Notifications
+   :add-toast      state/add-toast
+   :remove-toast   state/remove-toast})
 
 (defn- apply-handler [state event]
   (let [[event-type & args] (if (vector? event) event [event])
@@ -80,11 +83,19 @@
 (defn- execute-navigate! [url]
   (set! (.-location js/window) url))
 
-(defn- execute-effects! [state {:keys [api confirm history navigate]}]
+(defn- execute-toast! [{:keys [type title message]}]
+  (dispatch! [:add-toast type title message]))
+
+(defn- execute-toast-timeout! [{:keys [id delay]}]
+  (js/setTimeout #(dispatch! [:remove-toast id]) delay))
+
+(defn- execute-effects! [state {:keys [api confirm history navigate toast toast-timeout]}]
   (when api (execute-api! api))
   (when confirm (execute-confirm! confirm))
   (when (= history :push) (history/push-state! state))
-  (when navigate (execute-navigate! navigate)))
+  (when navigate (execute-navigate! navigate))
+  (when toast (execute-toast! toast))
+  (when toast-timeout (execute-toast-timeout! toast-timeout)))
 
 ;;=============================================================================
 ;; Dispatch
@@ -162,6 +173,15 @@
                  "network"   {:code :network :reason "Failed to fetch" :status 0}
                  "unknown"   {:code :unknown :reason "Something went wrong" :status 500}}]
      (dispatch! [:error (get errors error-type (get errors "unknown"))]))))
+
+;; Dev helper - test toast from browser console: testToast("success", "Done!")
+(defn ^:export test-toast!
+  "Show a test toast. Types: success, error, warning, info"
+  ([] (test-toast! "success" "Test Toast"))
+  ([toast-type title] (test-toast! toast-type title nil))
+  ([toast-type title message]
+   (let [type-kw (keyword toast-type)]
+     (dispatch! [:add-toast type-kw title message]))))
 
 (defn ^:export init! []
   (log/info "Flybot site initializing...")

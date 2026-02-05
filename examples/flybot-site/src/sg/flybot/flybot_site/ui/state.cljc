@@ -23,7 +23,9 @@
    :author-filter nil ; nil = show all, {:slug "..." :name "..."} = filter by author
    :pages #{"Home" "About" "Apply"}  ; tags that are pages (get nav tabs, different styling)
    :user nil          ; {:id :email :name :picture :roles :slug} when logged in
-   :mobile-nav-open? false})  ; mobile navigation drawer state
+   :mobile-nav-open? false  ; mobile navigation drawer state
+   :toasts []         ; [{:id :type :title :message} ...] active toast notifications
+   :toast-counter 0}) ; auto-increment ID for toasts
 
 ;;=============================================================================
 ;; Error Classification
@@ -294,7 +296,7 @@
 
 (defn post-saved [state _]
   {:state (assoc state :loading? false :view :list :form {:title "" :content "" :tags "" :featured? false})
-   :fx (merge {:history :push} fetch-posts-fx)})
+   :fx (merge {:history :push :toast {:type :success :title "Post saved"}} fetch-posts-fx)})
 
 (defn delete-post [state id]
   {:state state
@@ -307,7 +309,7 @@
 
 (defn post-deleted [state _]
   {:state (assoc state :loading? false :view :list)
-   :fx (merge {:history :push} fetch-posts-fx)})
+   :fx (merge {:history :push :toast {:type :success :title "Post deleted"}} fetch-posts-fx)})
 
 ;; --- Views ---
 
@@ -436,6 +438,26 @@
   "Clear user and navigate to /logout endpoint."
   {:state (assoc state :user nil)
    :fx {:navigate "/logout"}})
+
+;;=============================================================================
+;; Toast Notifications
+;;=============================================================================
+
+(defn add-toast
+  "Add a toast notification. Types: :success :error :warning :info
+   Returns effect to auto-dismiss after timeout (default 4000ms)."
+  [state type title & [message]]
+  (let [id (inc (:toast-counter state))
+        toast {:id id :type type :title title :message message}]
+    {:state (-> state
+                (update :toasts conj toast)
+                (assoc :toast-counter id))
+     :fx {:toast-timeout {:id id :delay 4000}}}))
+
+(defn remove-toast
+  "Remove a toast by ID."
+  [state id]
+  {:state (update state :toasts (fn [ts] (filterv #(not= (:id %) id) ts)))})
 
 ;;=============================================================================
 ;; Tests
@@ -653,5 +675,27 @@
   ;=> false
 
   ;; filter-by-tag closes mobile nav
-  (:mobile-nav-open? (:state (filter-by-tag {:mobile-nav-open? true} "Home"))))
-  ;=> false)
+  (:mobile-nav-open? (:state (filter-by-tag {:mobile-nav-open? true} "Home")))
+  ;=> false
+
+  ;; --- Toast Notification Tests ---
+
+  ;; add-toast creates toast with incrementing ID
+  (let [{:keys [state fx]} (add-toast {:toasts [] :toast-counter 0} :success "Saved")]
+    [(count (:toasts state)) (:id (first (:toasts state))) (:toast-counter state)])
+  ;=> [1 1 1]
+
+  ;; add-toast returns timeout effect
+  (let [{:keys [fx]} (add-toast {:toasts [] :toast-counter 5} :success "Done")]
+    [(:id (:toast-timeout fx)) (:delay (:toast-timeout fx))])
+  ;=> [6 4000]
+
+  ;; remove-toast removes by ID
+  (let [{:keys [state]} (remove-toast {:toasts [{:id 1} {:id 2} {:id 3}]} 2)]
+    (mapv :id (:toasts state)))
+  ;=> [1 3]
+
+  ;; remove-toast handles non-existent ID
+  (let [{:keys [state]} (remove-toast {:toasts [{:id 1}]} 99)]
+    (count (:toasts state))))
+  ;=> 1)
