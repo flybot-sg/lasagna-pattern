@@ -262,7 +262,8 @@
       - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
       - BLOG_OWNER_EMAILS, BLOG_ALLOWED_EMAILS
       - SESSION_SECRET, SESSION_TIMEOUT
-      - BLOG_SEED"
+      - BLOG_SEED
+      - LOG_PUBLISHER (console or file) - defaults to file"
      []
      (cond->
       {:server {:port (some-> (get-env "BLOG_PORT") parse-long)
@@ -279,6 +280,8 @@
        :session {:secret (get-env "SESSION_SECRET")
                  :timeout (some-> (get-env "SESSION_TIMEOUT") parse-long)}
        :init {:seed? (= "true" (get-env "BLOG_SEED"))}
+       :log (when (= "console" (get-env "LOG_PUBLISHER"))
+              {:publishers [{:type :console}]})
        :uploads (if-let [bucket (get-env "S3_UPLOADS_BUCKET")]
                   {:type :s3
                    :bucket bucket
