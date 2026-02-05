@@ -1,19 +1,15 @@
-{:paths ["src"],
- :deps {org.clojure/clojure {:mvn/version "1.12.4"}},
+{:paths ["src"]
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}}
  :aliases
- {:dev
-  {:extra-paths ["notebook"]
-   :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
-                io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
-                ;; Optional: SCI for sandboxed eval (also enables CLJS support)
-                org.babashka/sci {:mvn/version "0.8.43"}
-                ;; Optional: Malli for schema validation (require sg.flybot.pullable.malli to enable)
-                metosin/malli {:mvn/version "0.16.4"}}}
-  :test
-  {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
-   :exec-args {:dirs #{"src"}}}
-  :cljs
-  {:extra-paths ["test"]
-   :extra-deps {thheller/shadow-cljs {:mvn/version "2.28.22"}
-                org.babashka/sci {:mvn/version "0.8.43"}
-                metosin/malli {:mvn/version "0.16.4"}}}}}
+ {:dev {:extra-paths ["notebook"]
+        :extra-deps {io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
+                     ;; Optional: SCI for sandboxed eval (also enables CLJS support)
+                     org.babashka/sci {:mvn/version "0.8.43"}
+                     ;; Optional: Malli for schema validation (require sg.flybot.pullable.malli to enable)
+                     metosin/malli {:mvn/version "0.16.4"}}}
+  :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
+        :exec-args {:dirs #{"src"}}}
+  :cljs {:extra-paths ["test"]
+         :extra-deps {thheller/shadow-cljs {:mvn/version "2.28.22"}
+                      org.babashka/sci {:mvn/version "0.8.43"}
+                      metosin/malli {:mvn/version "0.16.4"}}}}}

@@ -1,14 +1,13 @@
 {:min-bb-version "1.0.0"
  :tasks
  {:requires [[babashka.fs :as fs]
-             [clojure.string :as str]
-             [clojure.edn :as edn]]
+             [clojure.string :as str]]
 
   -comp-task?
   {:task (fn [dir task]
-           (let [file (fs/file dir "bb.edn")]
-             (when (fs/exists? file)
-               (contains? (:tasks (edn/read-string (slurp file))) (symbol task)))))}
+           (let [{:keys [out]} (shell {:dir dir :out :string :continue true} "bb" "tasks")
+                 pattern (re-pattern (str "^" task "\\s"))]
+             (some (fn [line] (re-find pattern line)) (str/split-lines out))))}
 
   -load-env
   {:task (fn [dir]
@@ -46,7 +45,7 @@
    :task (doseq [c -components] (println c))}
 
   rct
-  {:doc "Run RCT tests: bb rct [component]"
+  {:doc "Run RCT: bb rct [component]"
    :depends [-components -comp-task?]
    :task (let [target (first *command-line-args*)
                components (if target [target] -components)]
@@ -54,18 +53,18 @@
              (println (str "\n=== " c " ==="))
              (if (-comp-task? c "rct")
                (shell {:dir c} "bb" "rct")
-               (clojure {:dir c} "-X:dev:test"))))}
+               (clojure {:dir c} "-X:dev:rct"))))}
 
   test
-  {:doc "Run tests (kaocha): bb test [component] [args...]"
+  {:doc "Run tests (kaocha): bb test [component]"
    :depends [-components -comp-task?]
-   :task (let [[target & args] *command-line-args*
+   :task (let [target (first *command-line-args*)
                components (if target [target] -components)]
            (doseq [c components]
              (println (str "\n=== " c " ==="))
              (if (-comp-task? c "test")
-               (apply shell {:dir c} "bb" "test" args)
-               (apply clojure {:dir c} "-M:dev:kaocha" args))))}
+               (shell {:dir c} "bb" "test")
+               (clojure {:dir c} "-M:dev:kaocha"))))}
 
   dev
   {:doc "Start REPL: bb dev <component>"
@@ -118,4 +117,28 @@
              (if (-comp-task? component "server")
                (shell {:dir component} "bb" "server")
                (println (str "Component " component " has no 'server' task")))
-             (println "Usage: bb server <component>")))}}}
+             (println "Usage: bb server <component>")))}
+
+  deploy
+  {:doc "Deploy component: bb deploy <component>"
+   :depends [-comp-task? -load-env]
+   :task (if-let [component (first *command-line-args*)]
+           (if (-comp-task? component "deploy")
+             (shell {:dir component :env (-load-env component)} "bb" "deploy")
+             (println (str "Component " component " has no 'deploy' task")))
+           (println "Usage: bb deploy <component>"))}
+
+  tag
+  {:doc "Create release tag: bb tag <component> <version>"
+   :task (let [[component version] *command-line-args*]
+           (if (and component version)
+             (let [comp-name (last (str/split component (re-pattern "/")))
+                   tag (str comp-name "-v" version)]
+               (println "Creating tag:" tag)
+               (shell "git" "tag" "-a" tag "-m" (str "Release " comp-name " " version))
+               (println "Pushing tag to origin...")
+               (shell "git" "push" "origin" tag)
+               (println (str "Done! CI/CD will deploy " component " with tag " tag)))
+             (do
+               (println "Usage: bb tag <component> <version>")
+               (println "Example: bb tag examples/flybot-site 0.1.0"))))}}}

@@ -29,12 +29,12 @@
   {:doc "Clean build artifacts"
    :task (shell "rm -rf target .shadow-cljs .cpcache")}
 
-  tag
-  {:doc "Create and push git tag from project.edn version (triggers deploy)"
-   :task (let [version (-> (slurp "project.edn") edn/read-string :version)
-               tag (str "v" version)]
-           (println "Creating tag:" tag)
-           (shell "git" "tag" "-a" tag "-m" (str "Release " tag))
-           (println "Pushing tag to origin...")
-           (shell "git" "push" "origin" tag)
-           (println "Done! CI/CD will deploy" tag))}}}
+  deploy
+  {:doc "Build and push container image to ECR (called by CI or manually)"
+   :depends [clean]
+   :task (do
+           ;; Build frontend
+           (shell "npm install")
+           (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
+           ;; Build and push container
+           (clojure "-T:jib build"))}}}

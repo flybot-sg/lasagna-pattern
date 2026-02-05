@@ -63,8 +63,7 @@
 (def init-registry
   {::init
    [:map
-    [:seed? {:optional true} [:maybe :boolean]]
-    [:backup-dir {:optional true} [:maybe :string]]]})
+    [:seed? {:optional true} [:maybe :boolean]]]})
 
 (def log-registry
   {::log
@@ -263,7 +262,7 @@
       - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
       - BLOG_OWNER_EMAILS, BLOG_ALLOWED_EMAILS
       - SESSION_SECRET, SESSION_TIMEOUT
-      - BLOG_SEED, BLOG_BACKUP_DIR"
+      - BLOG_SEED"
      []
      (cond->
       {:server {:port (some-> (get-env "BLOG_PORT") parse-long)
@@ -279,8 +278,7 @@
               :allowed-email-pattern (get-env "BLOG_ALLOWED_EMAILS")}
        :session {:secret (get-env "SESSION_SECRET")
                  :timeout (some-> (get-env "SESSION_TIMEOUT") parse-long)}
-       :init {:seed? (= "true" (get-env "BLOG_SEED"))
-              :backup-dir (get-env "BLOG_BACKUP_DIR")}
+       :init {:seed? (= "true" (get-env "BLOG_SEED"))}
        :uploads (if-let [bucket (get-env "S3_UPLOADS_BUCKET")]
                   {:type :s3
                    :bucket bucket
