@@ -148,13 +148,15 @@
   "Create or connect to a Datahike database with blog schema.
 
    For :mem backend, always creates fresh database.
-   For :file/:s3 backends, connects to existing or creates new."
+   For :file/:s3 backends, connects to existing and ensures schema is up to date."
   ([] (create-conn! default-cfg))
   ([cfg]
    (if (d/database-exists? cfg)
      ;; Database exists - connect (for persistent) or recreate (for mem)
      (if (persistent-backend? cfg)
-       (d/connect cfg)
+       (let [conn (d/connect cfg)]
+         (d/transact conn db-schema)
+         conn)
        (do
          (d/delete-database cfg)
          (d/create-database cfg)
