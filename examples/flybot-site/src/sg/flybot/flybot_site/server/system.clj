@@ -38,7 +38,7 @@
       :dev {:user {:id \"...\" :name \"...\" :email \"...\"}}}"
   (:require
    [sg.flybot.flybot-site.server.system.api :as api]
-   [sg.flybot.flybot-site.server.system.backup :as backup]
+
    [sg.flybot.flybot-site.server.system.cfg :as cfg]
    [sg.flybot.flybot-site.server.system.db :as db]
    [sg.flybot.flybot-site.server.system.auth :as auth]
@@ -51,14 +51,14 @@
    [ring.middleware.multipart-params :refer [wrap-multipart-params]]
    [ring.middleware.resource :refer [wrap-resource]]
    [ring.middleware.content-type :refer [wrap-content-type]]
+   [ring.middleware.not-modified :refer [wrap-not-modified]]
    [ring.middleware.session :refer [wrap-session]]
    [ring.middleware.session.cookie :refer [cookie-store]]
    [ring.middleware.session-timeout :refer [wrap-idle-session-timeout]]
    [ring.util.response :as resp]
    [robertluo.fun-map :refer [fnk life-cycle-map closeable halt!]]
    [clojure.java.io :as io]
-   [clojure.string :as str])
-  (:import [java.util UUID]))
+   [clojure.string :as str]))
 
 (defn- generate-session-key
   "Generate random 16-byte key for dev mode."
@@ -87,6 +87,18 @@
             (assoc-in [:headers "Access-Control-Allow-Origin"] origin)
             (assoc-in [:headers "Access-Control-Allow-Credentials"] "true"))))))
 
+(defn- wrap-cache-control
+  "Set Cache-Control headers to prevent stale content after redeploy.
+   HTML gets no-store (always fetch fresh), other assets get no-cache
+   (revalidate via If-Modified-Since / wrap-not-modified)."
+  [handler]
+  (fn [request]
+    (when-let [response (handler request)]
+      (let [ct (get-in response [:headers "Content-Type"] "")]
+        (if (str/includes? ct "text/html")
+          (assoc-in response [:headers "Cache-Control"] "no-store")
+          (assoc-in response [:headers "Cache-Control"] "no-cache"))))))
+
 (defn- wrap-error-handler
   "Safety net for unhandled exceptions. Returns generic error response.
    Normal errors flow as data through remote layer."
@@ -104,8 +116,6 @@
             (-> (resp/response "<html><body><h1>500 - Server Error</h1></body></html>")
                 (resp/status 500)
                 (resp/content-type "text/html"))))))))
-
-(def ^:private uploads-dir "resources/public/uploads")
 
 (defn- wrap-upload-route
   "Handle image uploads at /api/upload.
@@ -280,6 +290,8 @@
                            (resp/content-type "text/html")))
                (wrap-resource "public")
                wrap-content-type
+               wrap-not-modified
+               wrap-cache-control
                (remote/wrap-api api-fn {:path "/api"})
                (wrap-upload-route upload-handler)
                wrap-multipart-params
