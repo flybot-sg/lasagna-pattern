@@ -395,7 +395,10 @@
                                            (.stopPropagation e)
                                            (dispatch! [:view-edit post]))}}
            (edit-icon)])]
-       [:div.page-content (render-markdown content)]]
+       [:div.page-content (render-markdown content)]
+       [:div.post-tags-row
+        (tag-list tags dispatch!)
+        (page-badges pages dispatch!)]]
       [:div.post-card {:on {:click #(dispatch! [:select-post id])}}
        [:div.card-header
         [:h2.post-title title]

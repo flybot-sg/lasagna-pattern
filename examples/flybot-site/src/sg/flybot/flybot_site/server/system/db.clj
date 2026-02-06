@@ -301,8 +301,14 @@
       (when-let [post (coll/fetch this query)]
         (let [updates (merge (prepare-post-for-db (markdown/extract-frontmatter data))
                              {:post/id (:post/id post)
-                              :post/updated-at (now)})]
-          (d/transact conn [updates])
+                              :post/updated-at (now)})
+              eid (d/q '[:find ?e . :in $ ?id :where [?e :post/id ?id]]
+                       @conn (:post/id post))
+              ;; Retract old cardinality-many values so updates replace (not accumulate)
+              retractions (concat
+                           (for [t (:post/tags post)] [:db/retract eid :post/tags t])
+                           (for [p (:post/pages post)] [:db/retract eid :post/pages p]))]
+          (d/transact conn (into (vec retractions) [updates]))
           (when (:post/featured? updates)
             (unfeature-siblings! conn (:post/id post)
                                  (or (:post/pages updates) (:post/pages post))))
