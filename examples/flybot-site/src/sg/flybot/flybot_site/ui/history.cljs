@@ -95,7 +95,7 @@
   "Push a new history entry for the given app state."
   [state]
   (let [path (state->path state)]
-    (when (not= path (.-pathname js/location))
+    (when-not (= path (.-pathname js/location))
       (.pushState js/history (clj->js {:view (:view state)
                                        :id (:selected-id state)
                                        :tag (:tag-filter state)
