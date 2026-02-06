@@ -101,13 +101,13 @@
 ;; Dispatch
 ;;=============================================================================
 
+(def ^:private scroll-keys [:view :tag-filter :author-filter :selected-id])
+
 (defn- should-scroll-top?
   "Check if navigation warrants scrolling to top."
   [old-state new-state]
-  (or (not= (:view old-state) (:view new-state))
-      (not= (:tag-filter old-state) (:tag-filter new-state))
-      (not= (:author-filter old-state) (:author-filter new-state))
-      (not= (:selected-id old-state) (:selected-id new-state))))
+  (not= (select-keys old-state scroll-keys)
+        (select-keys new-state scroll-keys)))
 
 (defn dispatch!
   "Dispatch an event: :keyword or [:keyword arg1 arg2 ...]"
@@ -116,7 +116,7 @@
   (let [old-state @app-state
         {:keys [state fx]} (apply-handler old-state event)]
     (reset! app-state state)
-    (when (not= (:view old-state) (:view state))
+    (when-not (= (:view old-state) (:view state))
       (log/log-state-change (str (if (vector? event) (first event) event))
                             old-state state))
     (when (should-scroll-top? old-state state)

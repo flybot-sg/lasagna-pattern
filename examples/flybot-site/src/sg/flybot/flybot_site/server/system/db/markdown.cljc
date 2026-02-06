@@ -28,7 +28,7 @@
   (if (or (nil? markdown) (str/blank? markdown))
     {}
     (let [lines (str/split-lines markdown)]
-      (if (not= (first lines) "---")
+      (if-not (= (first lines) "---")
         {:content markdown}
         (let [end-idx (->> (rest lines)
                            (take-while #(not= % "---"))

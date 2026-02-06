@@ -69,26 +69,24 @@
   dev
   {:doc "Start REPL: bb dev <component>"
    :depends [-comp-task? -load-env]
-   :task (let [component (first *command-line-args*)]
-           (if component
-             (let [env (-load-env component)]
-               (if (-comp-task? component "dev")
-                 (shell {:dir component :env env} "bb" "dev")
-                 (clojure {:dir component :env env} "-M:dev")))
-             (println "Usage: bb dev <component>")))}
+   :task (if-let [component (first *command-line-args*)]
+           (let [env (-load-env component)]
+             (if (-comp-task? component "dev")
+               (shell {:dir component :env env} "bb" "dev")
+               (clojure {:dir component :env env} "-M:dev")))
+           (println "Usage: bb dev <component>"))}
 
   nrepl
   {:doc "Start nREPL: bb nrepl <component>"
    :depends [-comp-task? -load-env]
-   :task (let [component (first *command-line-args*)]
-           (if component
-             (let [env (-load-env component)]
-               (if (-comp-task? component "dev")
-                 (shell {:dir component :env env} "bb" "dev")
-                 (clojure {:dir component :env env}
-                          "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}"
-                          "-M" "-m" "nrepl.cmdline")))
-             (println "Usage: bb nrepl <component>")))}
+   :task (if-let [component (first *command-line-args*)]
+           (let [env (-load-env component)]
+             (if (-comp-task? component "dev")
+               (shell {:dir component :env env} "bb" "dev")
+               (clojure {:dir component :env env}
+                        "-Sdeps" "{:deps {nrepl/nrepl {:mvn/version \"1.3.0\"}}}"
+                        "-M" "-m" "nrepl.cmdline")))
+           (println "Usage: bb nrepl <component>"))}
 
   clean
   {:doc "Clean: bb clean [component]"
@@ -102,22 +100,20 @@
   serve
   {:doc "Serve static UI: bb serve <component>"
    :depends [-comp-task?]
-   :task (let [component (first *command-line-args*)]
-           (if component
-             (if (-comp-task? component "serve")
-               (shell {:dir component} "bb" "serve")
-               (println (str "Component " component " has no 'serve' task")))
-             (println "Usage: bb serve <component>")))}
+   :task (if-let [component (first *command-line-args*)]
+           (if (-comp-task? component "serve")
+             (shell {:dir component} "bb" "serve")
+             (println (str "Component " component " has no 'serve' task")))
+           (println "Usage: bb serve <component>"))}
 
   server
   {:doc "Start backend server: bb server <component>"
    :depends [-comp-task?]
-   :task (let [component (first *command-line-args*)]
-           (if component
-             (if (-comp-task? component "server")
-               (shell {:dir component} "bb" "server")
-               (println (str "Component " component " has no 'server' task")))
-             (println "Usage: bb server <component>")))}
+   :task (if-let [component (first *command-line-args*)]
+           (if (-comp-task? component "server")
+             (shell {:dir component} "bb" "server")
+             (println (str "Component " component " has no 'server' task")))
+           (println "Usage: bb server <component>"))}
 
   deploy
   {:doc "Deploy component: bb deploy <component>"

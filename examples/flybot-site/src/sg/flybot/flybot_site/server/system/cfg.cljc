@@ -203,7 +203,7 @@
      [s]
      (when (and s (not (str/blank? s)))
        (let [hex-chars (str/replace s #"[^0-9a-fA-F]" "")]
-         (when (not= 32 (count hex-chars))
+         (when-not (= 32 (count hex-chars))
            (throw (ex-info "Session secret must be 32 hex characters (16 bytes)"
                            {:provided-length (count hex-chars)})))
          (byte-array (map #(unchecked-byte (Integer/parseInt (apply str %) 16))

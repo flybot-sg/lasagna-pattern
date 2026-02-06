@@ -9,7 +9,7 @@
         io.replikativ/datahike {:mvn/version "0.6.1555"} ;; same as used in datahike-s3
         io.replikativ/datahike-s3 {:mvn/version "0.1.13"}
         clj-commons/clj-yaml {:mvn/version "1.0.29"}
-        io.github.studer-l/ring-oauth2 {:git/sha "db75c05284aa2a3458025ebb124efe9d3c14439b"}
+        io.github.studer-l/ring-oauth2 {:git/sha "db75c05284aa2a3458025ebb124efe9d3c14439b"} ;; fork with refresh token support
         clj-http/clj-http {:mvn/version "3.13.0"}
         cheshire/cheshire {:mvn/version "5.13.0"}
         metosin/malli {:mvn/version "0.16.4"}
