@@ -1,17 +1,26 @@
-# Pull Pattern Playground
+# Pull Playground
 
-An interactive browser-based playground for experimenting with the pull pattern DSL.
+Interactive browser-based playground for experimenting with the pull pattern DSL.
+
+## Rationale
+
+Learning a new pattern language is easier with immediate feedback. This playground lets you:
+
+- **Experiment live** - Edit patterns and data, see results instantly
+- **No setup needed** - Local mode runs entirely in the browser
+- **Test remote APIs** - Switch to remote mode to query a live server
+- **Learn by example** - Pre-loaded patterns demonstrate common use cases
 
 ## Quick Start
+
+All commands are run from the **repository root** (see [root README](../../README.md) for full task list).
 
 ### Local Mode (Recommended)
 
 Pattern matching runs entirely in the browser - no backend needed.
 
 ```bash
-# From repo root
 bb serve examples/pull-playground
-
 # Open http://localhost:3001
 ```
 
@@ -73,10 +82,10 @@ Example queries:
 - `{:posts {{:id 1} ?post}}` - Get post by ID (indexed lookup)
 - `{:config {:version ?v}}` - Extract config version
 
-## Tasks
+## Development
 
-| Command | Description |
-|---------|-------------|
-| `bb serve examples/pull-playground` | Serve UI on port 3001 |
-| `bb server examples/pull-playground` | Start backend on port 8081 |
-| `bb clean examples/pull-playground` | Clean build artifacts |
+```bash
+bb serve examples/pull-playground   # Serve UI on port 3001
+bb server examples/pull-playground  # Start backend on port 8081
+bb clean examples/pull-playground   # Clean build artifacts
+```

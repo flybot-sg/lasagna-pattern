@@ -1,6 +1,6 @@
 # Flybot Site
 
-Migration of [flybot.sg](https://flybot.sg) company site. Public company blog with employee-authored content.
+Public company blog with employee-authored content.
 
 ## Purpose
 
