@@ -364,7 +364,7 @@
   ([post-pages] (page-badges post-pages nil))
   ([post-pages dispatch!]
    (when (seq post-pages)
-     [:div.tags
+     [:div.tags.page-badges
       (for [p post-pages]
         [:span.tag.tag-page {:replicant/key p
                              :style (when dispatch! {:cursor "pointer"})
@@ -375,7 +375,7 @@
          p])])))
 
 (defn- featured-icon []
-  [:svg.featured-icon {:width "14" :height "14" :viewBox "0 0 24 24" :fill "currentColor" :stroke "none"
+  [:svg.featured-icon {:width "16" :height "16" :viewBox "0 0 24 24" :fill "currentColor" :stroke "none"
                        :title "Featured post"}
    [:polygon {:points "12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"}]])
 
@@ -415,8 +415,9 @@
                                            (dispatch! [:filter-by-tag "featured"]))}}
            " • " (featured-icon)])]
        [:div.post-content (render-markdown content)]
-       (page-badges pages dispatch!)
-       (tag-list tags dispatch!)])))
+       [:div.post-tags-row
+        (tag-list tags dispatch!)
+        (page-badges pages dispatch!)]])))
 
 (defn slide-card
   "Compact card for slideshow display."
@@ -437,7 +438,7 @@
       [:h3 "More Posts"]
       [:div.slideshow-nav
        [:button.slideshow-btn {:title "Scroll left"
-                               :on {:click #?(:cljs #(when-let [track (.-previousElementSibling (.-currentTarget %))]
+                               :on {:click #?(:cljs #(when-let [track (.querySelector js/document ".slideshow-track")]
                                                        (set! (.-scrollLeft track)
                                                              (- (.-scrollLeft track) 300)))
                                               :clj identity)}}
@@ -464,8 +465,8 @@
         ;; In page mode: featured post is hero, rest go to slideshow (sorted by date)
         hero-post (when page-mode? (state/hero-post posts))
         slideshow-posts (when page-mode? (state/non-hero-posts posts))]
-    [:div (cond-> {} page-mode? (assoc :class "page-view"))
-     [:div {:style {:display "flex" :justify-content "space-between" :align-items "center"}}
+    [:div (when page-mode? {:class "page-view"})
+     [:div.list-header
       [:h1.page-title (cond
                         page-mode? tag-filter
                         author-mode? (str "Posts by " (or author-name (:slug author-filter)))
@@ -530,9 +531,17 @@
                                    :font-size "0.85em"}}
               history-count])])]
        [:h1 (:post/title post)]
-       [:div.post-meta "By " (author-link (:post/author post) dispatch!) " • " (format-date (:post/created-at post))]
-       (page-badges (:post/pages post) dispatch!)
-       (tag-list (:post/tags post) dispatch!)
+       [:div.post-meta "By " (author-link (:post/author post) dispatch!) " • " (format-date (:post/created-at post))
+        (when (:post/featured? post)
+          [:a.featured-link {:href "/featured"
+                             :title "View all featured posts"
+                             :on {:click (fn [e]
+                                           (.preventDefault e)
+                                           (dispatch! [:filter-by-tag "featured"]))}}
+           " • " (featured-icon)])]
+       [:div.post-tags-row
+        (tag-list (:post/tags post) dispatch!)
+        (page-badges (:post/pages post) dispatch!)]
        [:div.post-body (render-markdown (:post/content post))]
        (when can-edit?
          [:div.button-group
@@ -603,19 +612,20 @@
      [:h1 "Post History: \"" (:post/title post) "\""]
      (if (empty? history)
        [:p "No history available for this post."]
-       [:table.history-table
-        [:thead
-         [:tr [:th "Version"] [:th "Date"] [:th "Title"] [:th "Preview"]]]
-        [:tbody
-         (map-indexed
-          (fn [idx version]
-            [:tr {:replicant/key (:version/tx version)
-                  :on {:click #(dispatch! [:view-version version])}}
-             [:td (if (zero? idx) "Current" (str "v" (- (count history) idx)))]
-             [:td (format-date (:version/timestamp version))]
-             [:td (:post/title version)]
-             [:td.preview (content-preview (:post/content version) 50)]])
-          history)]])]))
+       [:div.history-table-wrap
+        [:table.history-table
+         [:thead
+          [:tr [:th "Version"] [:th "Date"] [:th "Title"] [:th "Preview"]]]
+         [:tbody
+          (map-indexed
+           (fn [idx version]
+             [:tr {:replicant/key (:version/tx version)
+                   :on {:click #(dispatch! [:view-version version])}}
+              [:td (if (zero? idx) "Current" (str "v" (- (count history) idx)))]
+              [:td (format-date (:version/timestamp version))]
+              [:td (:post/title version)]
+              [:td.preview (content-preview (:post/content version) 50)]])
+           history)]]])]))
 
 (defn post-history-detail-view [state dispatch!]
   (let [version (:history-version state)
@@ -631,8 +641,9 @@
      [:h1 (:post/title version)
       [:span.version-label (if is-current? "(Current)" (str "(from " (format-date (:version/timestamp version)) ")"))]]
      [:div.post-meta "By " (author-link (:post/author version) dispatch!) " • " (format-date (:version/timestamp version))]
-     (page-badges (:post/pages version) dispatch!)
-     (tag-list (:post/tags version))
+     [:div.post-tags-row
+      (tag-list (:post/tags version))
+      (page-badges (:post/pages version) dispatch!)]
      [:div.post-body.history-content (render-markdown (:post/content version))]
      (when (and can-edit? (not is-current?))
        [:div.button-group {:style {:margin-top "2rem"}}

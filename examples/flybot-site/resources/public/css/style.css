@@ -484,6 +484,13 @@ code, pre, .font-mono {
   gap: var(--space-4);
 }
 
+.list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--space-4);
+}
+
 .page-title {
   flex: 1;
   margin: 0;
@@ -506,10 +513,28 @@ code, pre, .font-mono {
   padding: var(--space-5);
   cursor: pointer;
   transition: border-color var(--transition-fast);
+  position: relative;
+  overflow: hidden;
+}
+
+.post-card::before, .page-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-gold));
+  opacity: 0;
+  transition: opacity var(--transition-fast);
 }
 
 .post-card:hover, .page-card:hover {
   border-color: var(--accent);
+}
+
+.post-card:hover::before, .page-card:hover::before {
+  opacity: 1;
 }
 
 .post-card h2,
@@ -610,6 +635,21 @@ code, pre, .font-mono {
   background: var(--bg-secondary);
   color: var(--text-muted);
   border: 1px solid var(--border);
+}
+
+.post-tags-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.post-tags-row .tags {
+  margin-top: 0;
+}
+
+.post-tags-row .page-badges {
+  margin-left: auto;
 }
 
 .featured-icon {
@@ -801,10 +841,15 @@ button.danger {
   History Table
 ==============================================================================*/
 
+.history-table-wrap {
+  overflow-x: auto;
+}
+
 .history-table {
   width: 100%;
   border-collapse: collapse;
   margin-top: var(--space-4);
+  min-width: 500px;
 }
 
 .history-table th, .history-table td {
@@ -1085,8 +1130,6 @@ button.danger {
   max-width: 700px;
   width: 100%;
   padding: var(--space-8);
-  background: linear-gradient(135deg, var(--bg-card) 0%, rgba(40, 145, 184, 0.05) 100%);
-  border: 2px solid var(--accent);
   border-radius: var(--radius-2xl);
 }
 
@@ -1170,6 +1213,12 @@ button.danger {
 
 .slideshow-track::-webkit-scrollbar {
   display: none;
+}
+
+@media (max-width: 600px) {
+  .slideshow-nav {
+    display: none;
+  }
 }
 
 .slide-card {
@@ -1465,8 +1514,13 @@ button.danger {
 }
 
 @media (max-width: 600px) {
+  .profile-admin {
+    overflow-x: auto;
+  }
+
   .admin-table {
     font-size: var(--text-sm);
+    min-width: 400px;
   }
 
   .admin-table th:nth-child(2),
