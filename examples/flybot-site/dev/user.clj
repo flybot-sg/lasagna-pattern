@@ -49,4 +49,11 @@
   (client/schema api)
 
   ;; === STOP ===
-  (sys/stop!))
+  (sys/stop!)
+
+  ;; === RESTART AFTER CODE CHANGES ===
+  ;; Editing a .clj file doesn't update in-memory var definitions.
+  ;; Reload the changed namespace(s) between stop and start:
+  (sys/stop!)
+  (require 'sg.flybot.flybot-site.server.system.api :reload) ; example
+  (start!))

@@ -319,12 +319,16 @@
        [:span.show-dark (sun-icon)]]
       (if user
         [:div.user-info
-         (if-let [picture (:picture user)]
-           [:img.avatar {:src picture :alt (:name user)}]
-           ;; Fallback: show initials when no picture
-           [:div.avatar.avatar-initials
-            (let [name (:name user "?")]
-              (-> name (subs 0 1) .toUpperCase))])
+         [:a.avatar-link {:href "/profile"
+                          :on {:click (fn [e]
+                                        (.preventDefault e)
+                                        (dispatch! :view-profile))}}
+          (if-let [picture (:picture user)]
+            [:img.avatar {:src picture :alt (:name user)}]
+            ;; Fallback: show initials when no picture
+            [:div.avatar.avatar-initials
+             (let [name (:name user "?")]
+               (-> name (subs 0 1) .toUpperCase))])]
          [:span.user-name (:name user)]
          [:button.icon-btn {:title "Sign out"
                             :on {:click #(dispatch! :logout)}}
@@ -609,6 +613,99 @@
         [:button {:on {:click #(dispatch! [:restore-version version])}} "Restore This Version"]])]))
 
 ;;=============================================================================
+;; Profile View
+;;=============================================================================
+
+(defn- shield-icon []
+  [:svg {:width "16" :height "16" :viewBox "0 0 24 24" :fill "none" :stroke "currentColor" :stroke-width "2"}
+   [:path {:d "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"}]])
+
+(defn- admin-user-row
+  "Row for a user in the admin management table.
+   :user/roles is a set of keywords e.g. #{:admin :member :owner}."
+  [u dispatch! loading?]
+  (let [uid (:user/id u)
+        roles (set (:user/roles u))
+        is-admin? (contains? roles :admin)
+        is-owner? (contains? roles :owner)]
+    [:tr {:replicant/key uid}
+     [:td (:user/name u)]
+     [:td (:user/email u)]
+     [:td (for [r (sort (map name roles))]
+            [:span.role-badge {:replicant/key r
+                               :style {:margin-right "0.25rem"}}
+             r])]
+     [:td (if is-owner?
+            [:span.text-muted "Owner"]
+            (if is-admin?
+              [:button.btn-sm.btn-danger
+               {:disabled loading?
+                :on {:click #(dispatch! [:revoke-admin uid])}}
+               "Revoke admin"]
+              [:button.btn-sm.btn-primary
+               {:disabled loading?
+                :on {:click #(dispatch! [:grant-admin uid])}}
+               "Grant admin"]))]]))
+
+(defn- admin-management-section
+  "Owner-only section for managing admin roles."
+  [{:keys [admin-users loading?]} dispatch!]
+  (when admin-users
+    [:div.profile-admin
+     [:h2 (shield-icon) " Admin Management"]
+     [:p.text-muted "Grant or revoke admin role. Admins can edit and delete any post."]
+     [:table.admin-table
+      [:thead [:tr [:th "Name"] [:th "Email"] [:th "Roles"] [:th "Action"]]]
+      [:tbody
+       (for [u (sort-by :user/name admin-users)]
+         (admin-user-row u dispatch! loading?))]]]))
+
+(defn profile-view [{:keys [user profile-data] :as state} dispatch!]
+  (let [{:keys [post-count revision-count roles]} profile-data
+        owner? (some #(= :owner (:role/name %)) roles)]
+    [:div.profile-page
+     [:a.back-link {:href "#"
+                    :on {:click (fn [e]
+                                  (.preventDefault e)
+                                  (dispatch! [:view-back :list]))}}
+      "← Back to posts"]
+     [:div.profile-header
+      (if-let [picture (:picture user)]
+        [:img.profile-avatar {:src picture :alt (:name user)}]
+        [:div.profile-avatar.profile-avatar-initials
+         (let [name (:name user "?")]
+           (-> name (subs 0 1) .toUpperCase))])
+      [:div.profile-info
+       [:h1.profile-name (:name user)]
+       [:p.profile-email (:email user)]]]
+     (if profile-data
+       [:div
+        [:div.profile-stats
+         [:a.profile-stat.profile-stat-link
+          {:href (str "/author/" (:slug user))
+           :on {:click (fn [e]
+                         (.preventDefault e)
+                         (dispatch! [:filter-by-author {:slug (:slug user) :name (:name user)}]))}}
+          [:span.stat-value (or post-count 0)]
+          [:span.stat-label "Posts authored"]]
+         [:div.profile-stat
+          [:span.stat-value (or revision-count 0)]
+          [:span.stat-label "Total revisions"]]]
+        (when (seq roles)
+          [:div.profile-roles
+           [:h2 "Roles"]
+           [:table.roles-table
+            [:thead [:tr [:th "Role"] [:th "Granted"]]]
+            [:tbody
+             (for [role roles]
+               [:tr {:replicant/key (:role/name role)}
+                [:td [:span.role-badge (name (:role/name role))]]
+                [:td (format-date (:role/granted-at role))]])]]])
+        (when owner?
+          (admin-management-section state dispatch!))]
+       [:div.loading "Loading profile..."])]))
+
+;;=============================================================================
 ;; Toast Notifications
 ;;=============================================================================
 
@@ -651,6 +748,7 @@
       :new (post-form-view state dispatch!)
       :history (post-history-view state dispatch!)
       :history-detail (post-history-detail-view state dispatch!)
+      :profile (profile-view state dispatch!)
       (post-list-view state dispatch!))]
    (site-footer)
    (toast-container (:toasts state))])

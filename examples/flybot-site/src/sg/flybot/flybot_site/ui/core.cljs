@@ -48,6 +48,16 @@
    :me-fetched      state/me-fetched
    :me-fetch-failed state/me-fetch-failed
    :logout          (fn [s _] (state/logout s))
+   ;; Profile
+   :view-profile    (fn [s _] (state/view-profile s))
+   :profile-fetched state/profile-fetched
+   ;; Admin Management (owner)
+   :admin-users-fetched    state/admin-users-fetched
+   :grant-admin            state/grant-admin
+   :grant-admin-confirmed  state/grant-admin-confirmed
+   :revoke-admin           state/revoke-admin
+   :revoke-admin-confirmed state/revoke-admin-confirmed
+   :role-changed           state/role-changed
    ;; Mobile Navigation
    :toggle-mobile-nav (fn [s _] (state/toggle-mobile-nav s))
    :close-mobile-nav  (fn [s _] (state/close-mobile-nav s))

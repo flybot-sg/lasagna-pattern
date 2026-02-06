@@ -498,6 +498,110 @@
          (map normalize-post)
          (sort-by :post/created-at #(compare %2 %1)))))
 
+(defn count-user-posts
+  "Count posts authored by user via Datalog aggregate.
+   Returns 0 if user has no posts."
+  [conn user-id]
+  (or (when user-id
+        (d/q '[:find (count ?p) .
+               :in $ ?uid
+               :where
+               [?u :user/id ?uid]
+               [?p :post/author ?u]]
+             @conn user-id))
+      0))
+
+(defn count-user-revisions
+  "Count total revisions (edits) across all posts authored by user.
+   First finds post entity IDs from current DB, then counts unique transactions
+   in history DB that touched content or title, minus one per post (initial creation).
+   Returns 0 if user has no edits."
+  [conn user-id]
+  (if-not user-id
+    0
+    (let [db         @conn
+          ;; Step 1: get entity IDs of user's posts from current DB
+          post-eids  (d/q '[:find [?p ...]
+                            :in $ ?uid
+                            :where
+                            [?u :user/id ?uid]
+                            [?p :post/author ?u]]
+                          db user-id)
+          ;; Step 2: count unique transactions that touched content or title
+          hist       (d/history db)
+          tx-count   (if (seq post-eids)
+                       (or (d/q '[:find (count-distinct ?tx) .
+                                  :in $ [?p ...]
+                                  :where
+                                  (or [?p :post/content _ ?tx true]
+                                      [?p :post/title _ ?tx true])]
+                                hist post-eids)
+                           0)
+                       0)]
+      (max 0 (- tx-count (count post-eids))))))
+
+^:rct/test
+(comment
+  ;; === count-user-posts / count-user-revisions / get-user-roles-detailed ===
+  (def conn (create-conn!))
+
+  ;; Setup: create users and posts
+  (create-user! conn #:user{:id "u1" :email "a@b.com" :name "Alice" :picture ""})
+  (create-user! conn #:user{:id "u2" :email "b@b.com" :name "Bob" :picture ""})
+  (def p (posts conn))
+  (coll/mutate! p nil {:post/title "Post A" :post/content "aaa" :post/author "u1"})
+  (coll/mutate! p nil {:post/title "Post B" :post/content "bbb" :post/author "u1"})
+  (coll/mutate! p nil {:post/title "Post C" :post/content "ccc" :post/author "u2"})
+
+  ;; count-user-posts
+  (count-user-posts conn "u1") ;=> 2
+  (count-user-posts conn "u2") ;=> 1
+  (count-user-posts conn nil) ;=> 0
+  (count-user-posts conn "nonexistent") ;=> 0
+
+  ;; count-user-revisions — no edits yet
+  (count-user-revisions conn "u1") ;=> 0
+  (count-user-revisions conn "u2") ;=> 0
+  (count-user-revisions conn nil) ;=> 0
+
+  ;; Edit post A content → 1 revision for u1
+  (coll/mutate! p {:post/id 1} {:post/title "Post A" :post/content "aaa edited"})
+  (count-user-revisions conn "u1") ;=> 1
+
+  ;; Edit post A content again → 2 revisions for u1
+  (coll/mutate! p {:post/id 1} {:post/title "Post A" :post/content "aaa edited again"})
+  (count-user-revisions conn "u1") ;=> 2
+
+  ;; Edit post B title only → 3 revisions for u1 (title changes count too)
+  (coll/mutate! p {:post/id 2} {:post/title "Post B Renamed" :post/content "bbb"})
+  (count-user-revisions conn "u1") ;=> 3
+
+  ;; Edit post B title+content in same tx → 4 revisions (counts as one)
+  (coll/mutate! p {:post/id 2} {:post/title "Post B Again" :post/content "bbb edited"})
+  (count-user-revisions conn "u1") ;=> 4
+
+  ;; u2 still 0 revisions
+  (count-user-revisions conn "u2") ;=> 0
+
+  ;; Edit post C title only → 1 revision for u2
+  (coll/mutate! p {:post/id 3} {:post/title "Post C Renamed" :post/content "ccc"})
+  (count-user-revisions conn "u2") ;=> 1
+
+  ;; get-user-roles-detailed — no roles yet
+  (get-user-roles-detailed conn "u1") ;=> []
+
+  ;; Grant roles and check
+  (grant-role! conn "u1" :member)
+  (grant-role! conn "u1" :admin)
+  (count (get-user-roles-detailed conn "u1")) ;=> 2
+  (map :role/name (get-user-roles-detailed conn "u1")) ;=> [:member :admin]
+  (every? inst? (map :role/granted-at (get-user-roles-detailed conn "u1"))) ;=> true
+
+  ;; nil user returns nil
+  (get-user-roles-detailed conn nil) ;=> nil
+
+  (release-conn! conn))
+
 ;;=============================================================================
 ;; Role Operations
 ;;=============================================================================
@@ -513,6 +617,17 @@
                 [?r :role/name ?role-name]]
               @conn user-id)
          set)))
+
+(defn get-user-roles-detailed
+  "Get roles with grant timestamps for user. Returns vector of {:role/name :role/granted-at}."
+  [conn user-id]
+  (when user-id
+    (->> (d/q '[:find [(pull ?r [:role/name :role/granted-at]) ...]
+                :in $ ?uid
+                :where [?u :user/id ?uid]
+                [?u :user/roles ?r]]
+              @conn user-id)
+         (sort-by :role/granted-at))))
 
 (defn grant-role!
   "Add a role to user with grant timestamp.

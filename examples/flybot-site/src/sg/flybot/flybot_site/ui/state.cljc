@@ -11,7 +11,7 @@
 ;;=============================================================================
 
 (def initial-state
-  {:view :list        ; :list | :detail | :edit | :new | :history | :history-detail
+  {:view :list        ; :list | :detail | :edit | :new | :history | :history-detail | :profile
    :posts []
    :selected-id nil
    :loading? false
@@ -19,6 +19,8 @@
    :form {:title "" :content "" :tags "" :featured? false}
    :history []
    :history-version nil
+   :profile-data nil   ; {:post-count :revision-count :roles}
+   :admin-users nil    ; [{:user/id :user/name :user/roles ...}] for owner management
    :tag-filter "Home" ; nil = show all posts, string = filter by tag (includes pages)
    :author-filter nil ; nil = show all, {:slug "..." :name "..."} = filter by author
    :pages #{"Home" "About" "Apply"}  ; tags that are pages (get nav tabs, different styling)
@@ -395,6 +397,13 @@
     {:state (assoc state :loading? true :error nil)
      :fx (api-fx {role-key {:posts {{:post/id id} data}}} :post-saved)}))
 
+;; --- Profile ---
+
+(defn view-profile [state]
+  {:state (assoc state :view :profile :profile-data nil :admin-users nil)
+   :fx (merge {:history :push}
+              (api-fx '{:member {:me/profile ?profile}} :profile-fetched))})
+
 ;; --- Navigation (browser back/forward) ---
 
 (defn navigate [state {:keys [view id tag author]}]
@@ -414,6 +423,7 @@
                     (api-fx {:member {:posts/history {{:post/id id} '?versions}}}
                             :history-fetched))}
     :history-detail {:state (assoc state :view :history-detail :selected-id id)}
+    :profile (view-profile state)
     {:state state}))
 
 ;; --- User/Auth ---
@@ -438,6 +448,39 @@
   "Clear user and navigate to /logout endpoint."
   {:state (assoc state :user nil)
    :fx {:navigate "/logout"}})
+
+(defn profile-fetched [state profile]
+  (let [owner? (some #(= :owner (:role/name %)) (:roles profile))]
+    (cond-> {:state (assoc state :profile-data profile)}
+      owner? (assoc :fx (api-fx '{:owner {:users ?users}} :admin-users-fetched)))))
+
+(defn admin-users-fetched [state users]
+  {:state (assoc state :admin-users users)})
+
+(defn grant-admin [state user-id]
+  {:state state
+   :fx {:confirm {:message "Grant admin role to this user?"
+                  :on-confirm [:grant-admin-confirmed user-id]}}})
+
+(defn grant-admin-confirmed [state user-id]
+  {:state (assoc state :loading? true)
+   :fx (api-fx {:owner {:users/roles {nil {:user/id user-id :role/name :admin}}}}
+               :role-changed)})
+
+(defn revoke-admin [state user-id]
+  {:state state
+   :fx {:confirm {:message "Revoke admin role from this user?"
+                  :on-confirm [:revoke-admin-confirmed user-id]}}})
+
+(defn revoke-admin-confirmed [state user-id]
+  {:state (assoc state :loading? true)
+   :fx (api-fx {:owner {:users/roles {{:user/id user-id :role/name :admin} nil}}}
+               :role-changed)})
+
+(defn role-changed [state _]
+  {:state (assoc state :loading? false)
+   :fx (merge (api-fx '{:owner {:users ?users}} :admin-users-fetched)
+              {:toast {:type :success :title "Role updated"}})})
 
 ;;=============================================================================
 ;; Toast Notifications

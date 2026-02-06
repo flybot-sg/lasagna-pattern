@@ -47,7 +47,6 @@ The system uses [fun-map](https://github.com/robertluo/fun-map) for dependency i
 (start!)                    ; Default dev mode (auto-login, in-memory DB)
 (start! {:mode :dev-oauth}) ; Dev mode with real OAuth2 flow
 (sys/stop!)                 ; Stop the system
-(sys/restart!)              ; Restart with same config
 ```
 
 The `dev-cfg` map in `user.clj` shows all available configuration options.

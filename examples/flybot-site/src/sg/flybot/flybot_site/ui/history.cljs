@@ -29,6 +29,7 @@
     :new "/posts/new"
     :history (str "/posts/" selected-id "/history")
     :history-detail (str "/posts/" selected-id "/history/detail")
+    :profile "/profile"
     "/"))
 
 (defn path->state
@@ -74,6 +75,10 @@
       (re-matches #"/posts/(\d+)" path)
       (let [[_ id] (re-matches #"/posts/(\d+)" path)]
         {:view :detail :id (js/parseInt id 10)})
+
+      ;; /profile - user profile
+      (= path "/profile")
+      {:view :profile :id nil}
 
       ;; /posts - blog posts list
       (= path "/posts")

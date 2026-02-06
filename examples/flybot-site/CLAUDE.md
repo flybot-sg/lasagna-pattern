@@ -67,7 +67,6 @@ Go to `dev/user.clj` namespace — it has everything you need:
 ```clojure
 (start!)       ; Start server (config from .env)
 (sys/stop!)    ; Stop server
-(sys/restart!) ; Restart server
 ```
 
 ### nREPL Connection (for Claude Code)

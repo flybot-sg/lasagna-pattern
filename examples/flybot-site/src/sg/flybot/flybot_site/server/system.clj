@@ -414,15 +414,12 @@
     (halt! @system)
     (reset! system nil)))
 
-(defn restart! [] (stop!) (start!))
-
 (defn -main
   "Entry point. Starts system from environment variables."
   [& _args]
   (start!)
   @(promise))  ; Keep alive
 
-^:rct/test
 (comment
   (require '[ring.mock.request :as mock])
 

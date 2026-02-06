@@ -95,7 +95,21 @@
              [:email :string]
              [:name :string]
              [:picture :string]
+             [:slug {:optional true} [:maybe :string]]
              [:roles [:set :keyword]]]))
+
+(def ^:private role-detail-schema
+  "Schema for a role with grant date."
+  (m/schema [:map
+             [:role/name :keyword]
+             [:role/granted-at :any]]))
+
+(def ^:private profile-schema
+  "Schema for user profile data."
+  (m/schema [:map
+             [:post-count :int]
+             [:revision-count :int]
+             [:roles [:vector role-detail-schema]]]))
 
 (def schema
   "Public API schema (used by remote for validation).
@@ -105,11 +119,15 @@
    :member (m/schema [:maybe [:map
                               [:posts posts-schema]
                               [:posts/history history-schema]
-                              [:me me-schema]]])
+                              [:me me-schema]
+                              [:me/profile profile-schema]]])
    :admin (m/schema [:maybe [:map
                              [:posts posts-schema]]])
    :owner (m/schema [:maybe [:map
-                             [:users [:vector user-schema]]]])})
+                             [:users [:vector user-schema]]
+                             [:users/roles [:map-of
+                                            [:map [:user/id :string]]
+                                            [:vector [:map [:role/name :keyword]]]]]]])})
 
 (def ^:private sample-data
   "Sample data for GET /api/_schema introspection."
@@ -259,18 +277,97 @@
 (defn- roles-collection [conn user-id]
   (->RolesCollection conn user-id))
 
+(defn- roles-lookup
+  "Mutable ILookup for role management.
+   - GET: (get lookup {:user/id \"..\"}) => list of roles for user
+   - CREATE (grant): (mutate! lookup nil {:user/id \"..\" :role/name :admin})
+   - DELETE (revoke): (mutate! lookup {:user/id \"..\" :role/name :admin} nil)"
+  [conn]
+  (reify
+    clojure.lang.ILookup
+    (valAt [_ query]
+      (when-let [uid (:user/id query)]
+        (vec (seq (roles-collection conn uid)))))
+    (valAt [this query not-found]
+      (or (.valAt this query) not-found))
+
+    coll/Mutable
+    (mutate! [_ query value]
+      (cond
+        ;; GRANT: nil query, value with :user/id and :role/name
+        (and (nil? query) (some? value))
+        (let [{:keys [user/id role/name]} value]
+          (if (and id name)
+            (do (db/grant-role! conn id name)
+                {:user/id id :role/name name :granted true})
+            {:error {:type :invalid-mutation :message "Requires :user/id and :role/name"}}))
+
+        ;; REVOKE: query with :user/id and :role/name, nil value
+        (and (some? query) (nil? value))
+        (let [{:keys [user/id role/name]} query]
+          (if (and id name)
+            (do (db/revoke-role! conn id name)
+                {:user/id id :role/name name :revoked true})
+            {:error {:type :invalid-mutation :message "Requires :user/id and :role/name"}}))
+
+        :else
+        {:error {:type :invalid-mutation :message "Invalid role operation"}}))
+
+    coll/Wireable
+    (->wire [_] nil)))
+
 ;;=============================================================================
 ;; API Builder
 ;;=============================================================================
 
-(defn- session->me
-  "Extract user info from session for :me key."
-  [session]
-  {:id (:user-id session)
-   :email (:user-email session)
-   :name (or (:user-name session) (:user-email session))
-   :picture (:user-picture session)
-   :roles (or (:roles session) #{})})
+(defn- me-lookup
+  "Lazy ILookup for current user info.
+   Most fields come from the session (free), but :slug requires a DB lookup
+   which only runs when the pattern accesses it."
+  [conn session]
+  (let [user-id (:user-id session)]
+    (reify
+      clojure.lang.ILookup
+      (valAt [this k] (.valAt this k nil))
+      (valAt [_ k not-found]
+        (case k
+          :id user-id
+          :email (:user-email session)
+          :name (or (:user-name session) (:user-email session))
+          :picture (:user-picture session)
+          :slug (:user/slug (db/get-user conn user-id))
+          :roles (or (:roles session) #{})
+          not-found))
+
+      coll/Wireable
+      (->wire [_]
+        {:id user-id
+         :email (:user-email session)
+         :name (or (:user-name session) (:user-email session))
+         :picture (:user-picture session)
+         :slug (:user/slug (db/get-user conn user-id))
+         :roles (or (:roles session) #{})}))))
+
+(defn- profile-lookup
+  "Lazy ILookup for user profile data.
+   Cheap to create (just a closure) — DB queries only run when ->wire is called,
+   i.e. when the pattern matcher binds ?profile."
+  [conn user-id]
+  (reify
+    clojure.lang.ILookup
+    (valAt [this k] (.valAt this k nil))
+    (valAt [_ k not-found]
+      (case k
+        :post-count (db/count-user-posts conn user-id)
+        :revision-count (db/count-user-revisions conn user-id)
+        :roles (db/get-user-roles-detailed conn user-id)
+        not-found))
+
+    coll/Wireable
+    (->wire [_]
+      {:post-count (db/count-user-posts conn user-id)
+       :revision-count (db/count-user-revisions conn user-id)
+       :roles (db/get-user-roles-detailed conn user-id)})))
 
 (def ^:private error-config
   "Error handling config for remote layer.
@@ -289,9 +386,12 @@
 
    Data structure (role as top-level, nil if session lacks role):
    - :guest  - always available: {:posts}
-   - :member - requires :member: {:posts, :posts/history, :me}
+   - :member - requires :member: {:posts, :posts/history, :me, :me/profile}
    - :admin  - requires :admin: {:posts}
-   - :owner  - requires :owner: {:users}"
+   - :owner  - requires :owner: {:users, :users/roles}
+
+   :me and :me/profile are lazy ILookups — DB queries only run when the
+   pattern matcher accesses their fields (e.g. :slug triggers db/get-user)."
   [{:keys [conn]}]
   (fn [ring-request]
     (let [session (:session ring-request)
@@ -303,19 +403,21 @@
        {;; Guest: always available (read-only posts only)
         :guest {:posts (coll/read-only posts)}
 
-        ;; Member: CRUD own posts + history + user info
+        ;; Member: values are lazy ILookups — no DB calls until pattern accesses them
         :member (role/with-role session :member
                   {:posts (member-posts posts user-id)
                    :posts/history history
-                   :me (session->me session)})
+                   :me (me-lookup conn session)
+                   :me/profile (profile-lookup conn user-id)})
 
         ;; Admin: CRUD any post
         :admin (role/with-role session :admin
                  {:posts posts})
 
-        ;; Owner: user management
+        ;; Owner: user management + role grant/revoke
         :owner (role/with-role session :owner
-                 {:users (users-collection conn)})}
+                 {:users (users-collection conn)
+                  :users/roles (roles-lookup conn)})}
 
        :schema schema
        :errors error-config
