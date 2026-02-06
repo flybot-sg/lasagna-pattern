@@ -16,21 +16,15 @@
   #?(:clj (when d (str d))
      :cljs (when d (.toLocaleDateString (js/Date. d)))))
 
-(def ^:private page-tags
-  "Tags that represent pages (styled differently)."
-  #{"Home" "About" "Apply"})
-
 (defn tag-list
-  "Render tags. If dispatch! provided, tags are clickable to filter.
-   Page tags (Home, About, Apply) are styled with .tag-page class."
+  "Render tags. If dispatch! provided, tags are clickable to filter."
   ([tags] (tag-list tags nil))
   ([tags dispatch!]
    (when (seq tags)
      [:div.tags
-      (for [tag tags
-            :let [is-page? (contains? page-tags tag)]]
+      (for [tag tags]
         [:span {:replicant/key tag
-                :class (if is-page? ["tag" "tag-page"] "tag")
+                :class "tag"
                 :style (when dispatch! {:cursor "pointer"})
                 :on (when dispatch!
                       {:click (fn [e]
@@ -241,13 +235,10 @@
    [:path {:d "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"}]
    [:path {:d "M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"}]])
 
-(def ^:private page-order ["Home" "About" "Apply"])
-
 (defn- mobile-nav-drawer
   "Mobile navigation drawer - slides in from right on mobile."
-  [{:keys [tag-filter pages mobile-nav-open?] :as state} dispatch!]
-  (let [pages-set (or pages #{})
-        page-mode? (state/page-mode? state)]
+  [{:keys [tag-filter mobile-nav-open?] :as state} dispatch!]
+  (let [page-mode? (state/page-mode? state)]
     [:div.mobile-nav-drawer {:class (when mobile-nav-open? "open")}
      [:div.mobile-nav-header
       [:span "Menu"]
@@ -256,8 +247,7 @@
        (close-icon)]]
      [:nav.mobile-nav-links
       ;; Pages in defined order
-      (for [p page-order
-            :when (contains? pages-set p)]
+      (for [p state/page-order]
         [:a.mobile-nav-link {:replicant/key p
                              :class (when (and page-mode? (= tag-filter p)) "active")
                              :href "#"
@@ -281,13 +271,11 @@
 
 (defn- header-nav
   "Navigation in header - pages in order, then Posts."
-  [{:keys [tag-filter pages] :as state} dispatch!]
-  (let [pages-set (or pages #{})
-        page-mode? (state/page-mode? state)]
+  [{:keys [tag-filter] :as state} dispatch!]
+  (let [page-mode? (state/page-mode? state)]
     [:nav.header-nav
      ;; Pages in defined order
-     (for [p page-order
-           :when (contains? pages-set p)]
+     (for [p state/page-order]
        [:a.nav-link {:replicant/key p
                      :class (when (and page-mode? (= tag-filter p)) "active")
                      :href "#"
@@ -371,11 +359,31 @@
        name]
       [:span name])))
 
+(defn- page-badges
+  "Render page memberships as clickable badges."
+  ([post-pages] (page-badges post-pages nil))
+  ([post-pages dispatch!]
+   (when (seq post-pages)
+     [:div.tags
+      (for [p post-pages]
+        [:span.tag.tag-page {:replicant/key p
+                             :style (when dispatch! {:cursor "pointer"})
+                             :on (when dispatch!
+                                   {:click (fn [e]
+                                             (.stopPropagation e)
+                                             (dispatch! [:filter-by-tag p]))})}
+         p])])))
+
+(defn- featured-icon []
+  [:svg.featured-icon {:width "14" :height "14" :viewBox "0 0 24 24" :fill "currentColor" :stroke "none"
+                       :title "Featured post"}
+   [:polygon {:points "12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26"}]])
+
 (defn post-card
   "Post card. In page mode: minimal (no metadata, no height limit).
    Shows edit button for author/admin users."
   [post dispatch! state & [page-mode?]]
-  (let [{:post/keys [id title author created-at content tags]} post
+  (let [{:post/keys [id title author created-at content tags pages featured?]} post
         can-edit? (state/can-edit-post? state post)]
     (if page-mode?
       [:div.page-card {:on {:click #(dispatch! [:select-post id])}}
@@ -397,8 +405,17 @@
                                            (.stopPropagation e)
                                            (dispatch! [:view-edit post]))}}
            (edit-icon)])]
-       [:div.post-meta "By " (author-link author dispatch!) " • " (format-date created-at)]
+       [:div.post-meta "By " (author-link author dispatch!) " • " (format-date created-at)
+        (when featured?
+          [:a.featured-link {:href "/featured"
+                             :title "View all featured posts"
+                             :on {:click (fn [e]
+                                           (.preventDefault e)
+                                           (.stopPropagation e)
+                                           (dispatch! [:filter-by-tag "featured"]))}}
+           " • " (featured-icon)])]
        [:div.post-content (render-markdown content)]
+       (page-badges pages dispatch!)
        (tag-list tags dispatch!)])))
 
 (defn slide-card
@@ -514,6 +531,7 @@
               history-count])])]
        [:h1 (:post/title post)]
        [:div.post-meta "By " (author-link (:post/author post) dispatch!) " • " (format-date (:post/created-at post))]
+       (page-badges (:post/pages post) dispatch!)
        (tag-list (:post/tags post) dispatch!)
        [:div.post-body (render-markdown (:post/content post))]
        (when can-edit?
@@ -547,13 +565,20 @@
       [:input {:type "text" :value (:title form)
                :on {:input #(dispatch! [:update-form :title (.. % -target -value)])}}]]
      [:div.form-group
+      [:label "Pages"]
+      [:div.checkbox-group
+       (for [p state/page-order]
+         [:label.checkbox-label {:replicant/key p}
+          [:input {:type "checkbox"
+                   :checked (contains? (:pages form) p)
+                   :on {:change #(dispatch! [:toggle-form-page p])}}]
+          p])]]
+     [:div.form-group
       [:label "Tags"]
       [:input {:type "text"
                :value (:tags form)
-               :placeholder "clojure, web, Home (comma-separated)"
-               :on {:input #(dispatch! [:update-form :tags (.. % -target -value)])}}]
-      [:small {:style {:color "var(--text-muted)" :display "block" :margin-top "0.25rem"}}
-       "Page tags: Home, About, Apply"]]
+               :placeholder "clojure, web (comma-separated)"
+               :on {:input #(dispatch! [:update-form :tags (.. % -target -value)])}}]]
      [:div.form-group
       [:label.checkbox-label
        [:input {:type "checkbox"
@@ -606,6 +631,7 @@
      [:h1 (:post/title version)
       [:span.version-label (if is-current? "(Current)" (str "(from " (format-date (:version/timestamp version)) ")"))]]
      [:div.post-meta "By " (author-link (:post/author version) dispatch!) " • " (format-date (:version/timestamp version))]
+     (page-badges (:post/pages version) dispatch!)
      (tag-list (:post/tags version))
      [:div.post-body.history-content (render-markdown (:post/content version))]
      (when (and can-edit? (not is-current?))
@@ -771,7 +797,7 @@
   (tag-list [] identity) ;=> nil
   (first (tag-list ["a" "b"])) ;=> :div.tags
   (first (tag-list ["a" "b"] identity)) ;=> :div.tags
-  (first (app-view {:view :list :posts [] :loading? false :user nil :pages #{}} identity)) ;=> :div.app-container
+  (first (app-view {:view :list :posts [] :loading? false :user nil} identity)) ;=> :div.app-container
   ;; error-banner renders when error present
   (first (error-banner {:error {:message "Test" :retryable? true :type :network}} identity)) ;=> :div.alert-box
   ;; error-banner returns nil when no error

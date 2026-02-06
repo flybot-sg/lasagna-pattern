@@ -104,6 +104,9 @@
    {:db/ident :post/tags
     :db/valueType :db.type/string
     :db/cardinality :db.cardinality/many}
+   {:db/ident :post/pages
+    :db/valueType :db.type/string
+    :db/cardinality :db.cardinality/many}
    {:db/ident :post/created-at
     :db/valueType :db.type/instant
     :db/cardinality :db.cardinality/one}
@@ -124,7 +127,7 @@
 
 (def ^:private post-attr-keys
   "Post attribute keys (namespaced)."
-  [:post/id :post/title :post/content :post/author :post/tags :post/created-at :post/updated-at :post/featured?])
+  [:post/id :post/title :post/content :post/author :post/tags :post/pages :post/created-at :post/updated-at :post/featured?])
 
 ;;=============================================================================
 ;; Connection Management
@@ -215,6 +218,7 @@
   (into {} (for [[k v] m :when (some #{k} post-attr-keys)]
              [k (cond
                   (= k :post/tags) (set v)
+                  (= k :post/pages) (set v)
                   ;; Convert user-id string to lookup ref
                   (and (= k :post/author) (string? v)) [:user/id v]
                   :else v)])))
@@ -234,6 +238,24 @@
            :in ~'$ ~'?v
            :where [~'?e ~k ~'?v]]
          @conn v)))
+
+(defn- unfeature-siblings!
+  "When a post becomes featured, un-feature other featured posts that share
+   any of its pages. Ensures at most one featured (hero) post per page."
+  [conn post-id post-pages]
+  (when (seq post-pages)
+    (let [siblings (d/q '[:find [?id ...]
+                          :in $ ?self-id [?page ...]
+                          :where
+                          [?e :post/featured? true]
+                          [?e :post/id ?id]
+                          [(not= ?id ?self-id)]
+                          [?e :post/pages ?page]]
+                        @conn post-id post-pages)]
+      (when (seq siblings)
+        (d/transact conn (mapv #(vector :db/add [:post/id %] :post/featured? false)
+                               siblings))
+        (mu/log ::unfeature-siblings :post-id post-id :unfeatured siblings)))))
 
 (defrecord PostsDataSource [conn]
   coll/DataSource
@@ -263,6 +285,8 @@
                            :post/created-at ts
                            :post/updated-at ts})]
         (d/transact conn [entity])
+        (when (:post/featured? entity)
+          (unfeature-siblings! conn (:post/id entity) (:post/pages entity)))
         (mu/log ::db-create :entity :post :id (:post/id entity))
         ;; Re-fetch to get expanded author
         (normalize-post (find-by conn {:post/id (:post/id entity)})))
@@ -277,6 +301,9 @@
                              {:post/id (:post/id post)
                               :post/updated-at (now)})]
           (d/transact conn [updates])
+          (when (:post/featured? updates)
+            (unfeature-siblings! conn (:post/id post)
+                                 (or (:post/pages updates) (:post/pages post))))
           (mu/log ::db-update :entity :post :id (:post/id post))
           (coll/fetch this {:post/id (:post/id post)})))
       (catch Exception e
@@ -674,7 +701,8 @@
 ;;=============================================================================
 
 (defn posts
-  "Create a posts collection for the given Datahike connection."
+  "Create a posts collection for the given Datahike connection.
+   When a post is marked featured, other featured posts sharing a page are un-featured."
   ([conn] (posts conn {}))
   ([conn {:keys [indexes] :or {indexes #{#{:post/id}}} :as opts}]
    (coll/collection (->PostsDataSource conn) (assoc opts :indexes indexes))))
@@ -743,6 +771,46 @@
   (boolean (#'persistent-backend? {:store {:backend :mem}})) ;=> false
   (boolean (#'persistent-backend? {:store {:backend :file :path "/tmp/db"}})) ;=> true
   (boolean (#'persistent-backend? {:store {:backend :s3 :bucket "my-bucket"}})) ;=> true
+
+  (release-conn! conn))
+
+^:rct/test
+(comment
+  ;; === Exclusive featured post per page ===
+  (def conn (create-conn!))
+  (create-user! conn #:user{:id "u1" :email "a@b.com" :name "Alice" :picture ""})
+  (def p (posts conn))
+
+  ;; Create two posts on same page, first is featured
+  (coll/mutate! p nil {:post/title "Hero" :post/content "x" :post/author "u1"
+                       :post/featured? true :post/pages ["Home"] :post/tags ["clojure"]})
+  (coll/mutate! p nil {:post/title "Other" :post/content "y" :post/author "u1"
+                       :post/pages ["Home"] :post/tags ["news"]})
+  (:post/featured? (get p {:post/id 1})) ;=> true
+
+  ;; Mark second post as featured — first should be un-featured (share "Home" page)
+  (coll/mutate! p {:post/id 2} {:post/title "Other" :post/content "y"
+                                :post/featured? true :post/pages ["Home"] :post/tags ["news"]})
+  (:post/featured? (get p {:post/id 2})) ;=> true
+  (:post/featured? (get p {:post/id 1})) ;=> false
+
+  ;; Create a featured post on different page — no interference
+  (coll/mutate! p nil {:post/title "About Hero" :post/content "z" :post/author "u1"
+                       :post/featured? true :post/pages ["About"]})
+  (:post/featured? (get p {:post/id 3})) ;=> true
+  (:post/featured? (get p {:post/id 2})) ;=> true
+
+  ;; Post with no pages but featured — should NOT trigger un-featuring of page posts
+  (coll/mutate! p nil {:post/title "News Only" :post/content "w" :post/author "u1"
+                       :post/featured? true :post/tags ["news"]})
+  (:post/featured? (get p {:post/id 4})) ;=> true
+  (:post/featured? (get p {:post/id 2})) ;=> true
+
+  ;; Un-feature post 2 — no side effects
+  (coll/mutate! p {:post/id 2} {:post/title "Other" :post/content "y"
+                                :post/featured? false :post/pages ["Home"] :post/tags ["news"]})
+  (:post/featured? (get p {:post/id 2})) ;=> false
+  (:post/featured? (get p {:post/id 3})) ;=> true
 
   (release-conn! conn))
 
@@ -866,7 +934,8 @@
     ;; Home page content (featured = hero post)
     (coll/create! ds {:post/title "Welcome to Flybot"
                       :post/author "sample-alice"
-                      :post/tags ["Home" "clojure"]
+                      :post/pages ["Home"]
+                      :post/tags ["clojure"]
                       :post/featured? true
                       :post/content "# Building the Future of Software
 
@@ -883,7 +952,8 @@ At Flybot, we're passionate about creating elegant solutions using **functional 
     ;; Additional Home posts for slideshow
     (coll/create! ds {:post/title "Latest News: Q1 2026 Update"
                       :post/author "sample-bob"
-                      :post/tags ["Home" "news"]
+                      :post/pages ["Home"]
+                      :post/tags ["news"]
                       :post/content "We're excited to announce **several new client partnerships** and the release of our open-source [pull-pattern library](https://github.com/flybot-sg/pull-pattern)!
 
 ## Highlights
@@ -894,7 +964,8 @@ At Flybot, we're passionate about creating elegant solutions using **functional 
 
     (coll/create! ds {:post/title "Featured Project: Data Pipeline"
                       :post/author "sample-alice"
-                      :post/tags ["Home" "projects" "tech" "clojure"]
+                      :post/pages ["Home"]
+                      :post/tags ["projects" "tech" "clojure"]
                       :post/content "Check out our latest case study on building **high-performance data pipelines** with Clojure and Kafka.
 
 ## Architecture
@@ -912,7 +983,7 @@ The pipeline handles *10,000 events/second* with sub-millisecond latency."})
     ;; About page content (featured = hero post)
     (coll/create! ds {:post/title "About Flybot"
                       :post/author "sample-alice"
-                      :post/tags ["About"]
+                      :post/pages ["About"]
                       :post/featured? true
                       :post/content "# Our Story
 
@@ -934,7 +1005,8 @@ Our engineers bring decades of combined experience from top tech companies, unit
 
     (coll/create! ds {:post/title "Our Tech Stack"
                       :post/author "sample-bob"
-                      :post/tags ["About" "tech" "clojure"]
+                      :post/pages ["About"]
+                      :post/tags ["tech" "clojure"]
                       :post/content "We work primarily with **Clojure/ClojureScript**, Datomic, and modern cloud infrastructure.
 
 ## Core Technologies
@@ -951,7 +1023,7 @@ Our tooling philosophy emphasizes *composability* and data-driven configuration.
     ;; Apply page content (featured = hero post)
     (coll/create! ds {:post/title "Join Our Team"
                       :post/author "sample-bob"
-                      :post/tags ["Apply"]
+                      :post/pages ["Apply"]
                       :post/featured? true
                       :post/content "# We're Hiring!
 
@@ -981,7 +1053,8 @@ Send your resume and a brief note about your favorite Clojure project to **caree
 
     (coll/create! ds {:post/title "Internship Program"
                       :post/author "sample-alice"
-                      :post/tags ["Apply" "internship"]
+                      :post/pages ["Apply"]
+                      :post/tags ["internship"]
                       :post/content "Our **3-month internship program** is designed for students and early-career developers eager to learn functional programming.
 
 ## What You'll Learn

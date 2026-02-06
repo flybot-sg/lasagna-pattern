@@ -60,6 +60,7 @@
     [:post/content {:doc "Markdown content"} :string]
     [:post/author {:doc "Author (user reference)" :optional true} [:maybe user-schema]]
     [:post/tags {:doc "List of tags"} [:vector :string]]
+    [:post/pages {:doc "Page memberships" :optional true} [:vector :string]]
     [:post/featured? {:doc "Featured post" :optional true} :boolean]
     [:post/created-at {:doc "Creation timestamp"} :any]
     [:post/updated-at {:doc "Last update timestamp"} :any]]))

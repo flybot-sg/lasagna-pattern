@@ -40,7 +40,7 @@
 
 (defn- post->markdown
   "Convert post to markdown with full metadata in frontmatter."
-  [{:post/keys [id title author tags created-at updated-at content]}]
+  [{:post/keys [id title author tags pages created-at updated-at content]}]
   (let [;; Strip existing frontmatter from content body
         body (if (and content (str/starts-with? content "---"))
                (if-let [match (re-find #"(?s)^---\n.*?\n---\n?" content)]
@@ -51,6 +51,7 @@
                id (assoc :id id)
                author (assoc :author author)
                (seq tags) (assoc :tags (vec tags))
+               (seq pages) (assoc :pages (vec pages))
                created-at (assoc :created-at (date->iso created-at))
                updated-at (assoc :updated-at (date->iso updated-at)))]
     (str "---\n"
@@ -105,7 +106,7 @@
           end-idx (->> (rest lines) (take-while #(not= % "---")) count inc)
           yaml-str (str/join "\n" (subvec (vec lines) 1 end-idx))
           body (str/trim (str/join "\n" (subvec (vec lines) (inc end-idx))))
-          {:keys [id title author tags created-at updated-at featured?]} (yaml/parse-string yaml-str :keywords true)]
+          {:keys [id title author tags pages created-at updated-at featured?]} (yaml/parse-string yaml-str :keywords true)]
       (cond-> {:post/id (long id)
                :post/title title
                :post/author author
@@ -117,7 +118,8 @@
                                   (when (seq tags)
                                     (str "tags:\n" (str/join "\n" (map #(str "  - " %) tags)) "\n"))
                                   "---\n\n" body)}
-        featured? (assoc :post/featured? true)))))
+        featured? (assoc :post/featured? true)
+        (seq pages) (assoc :post/pages (set pages))))))
 
 (defn import-all!
   "Import all .md files from directory.

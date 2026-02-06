@@ -1,5 +1,6 @@
 (ns sg.flybot.flybot-site.ui.history
-  "Browser history integration for SPA navigation.")
+  "Browser history integration for SPA navigation."
+  (:require [sg.flybot.flybot-site.ui.state :as state]))
 
 ;;=============================================================================
 ;; URL <-> State Mapping
@@ -7,7 +8,7 @@
 
 (defn state->path
   "Convert app state to URL path."
-  [{:keys [view selected-id tag-filter author-filter pages]}]
+  [{:keys [view selected-id tag-filter author-filter]}]
   (case view
     :list (cond
             ;; Author filter -> /author/bob-smith
@@ -17,8 +18,11 @@
             (= tag-filter "Home")
             "/"
             ;; Other page tags -> /page/About
-            (and tag-filter (contains? (or pages #{}) tag-filter))
+            (and tag-filter (contains? state/pages tag-filter))
             (str "/page/" (js/encodeURIComponent tag-filter))
+            ;; Featured -> /featured
+            (= tag-filter "featured")
+            "/featured"
             ;; Regular tag -> /tag/clojure
             tag-filter
             (str "/tag/" (js/encodeURIComponent tag-filter))
@@ -45,6 +49,10 @@
       (re-matches #"/author/(.+)" path)
       (let [[_ slug] (re-matches #"/author/(.+)" path)]
         {:view :list :id nil :tag nil :author {:slug (js/decodeURIComponent slug)}})
+
+      ;; /featured - all featured posts
+      (= path "/featured")
+      {:view :list :id nil :tag "featured"}
 
       ;; /page/:name - pages are just tag filters
       (re-matches #"/page/(.+)" path)

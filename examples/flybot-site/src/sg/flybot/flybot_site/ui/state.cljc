@@ -10,20 +10,27 @@
 ;; State Shape
 ;;=============================================================================
 
+(def page-order
+  "Ordered list of pages for navigation tabs."
+  ["Home" "About" "Apply"])
+
+(def pages
+  "Set of page names (get nav tabs, hero post, different styling)."
+  (set page-order))
+
 (def initial-state
   {:view :list        ; :list | :detail | :edit | :new | :history | :history-detail | :profile
    :posts []
    :selected-id nil
    :loading? false
    :error nil          ; {:message "..." :retryable? bool} or nil
-   :form {:title "" :content "" :tags "" :featured? false}
+   :form {:title "" :content "" :tags "" :pages #{} :featured? false}
    :history []
    :history-version nil
    :profile-data nil   ; {:post-count :revision-count :roles}
    :admin-users nil    ; [{:user/id :user/name :user/roles ...}] for owner management
-   :tag-filter "Home" ; nil = show all posts, string = filter by tag (includes pages)
+   :tag-filter "Home" ; nil = show all posts, string = filter by tag or page
    :author-filter nil ; nil = show all, {:slug "..." :name "..."} = filter by author
-   :pages #{"Home" "About" "Apply"}  ; tags that are pages (get nav tabs, different styling)
    :user nil          ; {:id :email :name :picture :roles :slug} when logged in
    :mobile-nav-open? false  ; mobile navigation drawer state
    :toasts []         ; [{:id :type :title :message} ...] active toast notifications
@@ -122,28 +129,32 @@
 (defn filtered-posts
   "Filter posts for list view.
    - When author-filter is set, show posts by that author
-   - When tag-filter is set, show posts with that tag
-   - Otherwise, show posts that have at least one non-page tag OR are featured
+   - When tag-filter is a page, show posts on that page (via :post/pages)
+   - When tag-filter is a regular tag, show posts with that tag
+   - Otherwise, show all posts
    - Results sorted by creation date (newest first)"
-  [{:keys [posts tag-filter author-filter pages]}]
-  (let [pages (or pages #{})]
-    (->> (cond
-           ;; Author filter takes precedence
-           author-filter
-           (filter #(= (get-in % [:post/author :user/slug]) (:slug author-filter)) posts)
+  [{:keys [posts tag-filter author-filter]}]
+  (->> (cond
+         ;; Author filter takes precedence
+         author-filter
+         (filter #(= (get-in % [:post/author :user/slug]) (:slug author-filter)) posts)
 
-           ;; Tag filter
-           tag-filter
-           (filter #(some #{tag-filter} (:post/tags %)) posts)
+         ;; Featured filter
+         (= tag-filter "featured")
+         (filter :post/featured? posts)
 
-           ;; Default: show posts with non-page tags or featured
-           :else
-           (filter #(let [tags (set (:post/tags %))]
-                      (or (empty? tags)
-                          (:post/featured? %)
-                          (not (every? pages tags))))
-                   posts))
-         sort-by-date)))
+         ;; Page filter (tag-filter is a page name)
+         (and tag-filter (contains? pages tag-filter))
+         (filter #(some #{tag-filter} (:post/pages %)) posts)
+
+         ;; Tag filter
+         tag-filter
+         (filter #(some #{tag-filter} (:post/tags %)) posts)
+
+         ;; Default: show all posts
+         :else
+         posts)
+       sort-by-date))
 
 (defn hero-post
   "Get the featured post from filtered posts (for page mode hero display)."
@@ -156,9 +167,9 @@
   (remove :post/featured? posts))
 
 (defn page-mode?
-  "Is the current view showing a page (tag-filter is a page tag)?"
-  [{:keys [tag-filter pages]}]
-  (boolean (and tag-filter (contains? (or pages #{}) tag-filter))))
+  "Is the current view showing a page (tag-filter is a page name)?"
+  [{:keys [tag-filter]}]
+  (boolean (and tag-filter (contains? pages tag-filter))))
 
 (defn author-mode?
   "Is the current view showing posts by a specific author?"
@@ -203,7 +214,8 @@
            :post/featured? (boolean (:featured? form))}
     ;; Use user ID for author reference (links to user entity in DB)
     (:id user) (assoc :post/author (:id user))
-    (seq (:tags form)) (assoc :post/tags (parse-tags (:tags form)))))
+    (seq (:tags form)) (assoc :post/tags (parse-tags (:tags form)))
+    (seq (:pages form)) (assoc :post/pages (vec (:pages form)))))
 
 (defn logged-in?
   "Is a user currently logged in?"
@@ -297,7 +309,7 @@
      :fx (api-fx {role-key {:posts {{:post/id id} (form->post-data state)}}} :post-saved)}))
 
 (defn post-saved [state _]
-  {:state (assoc state :loading? false :view :list :form {:title "" :content "" :tags "" :featured? false})
+  {:state (assoc state :loading? false :view :list :form {:title "" :content "" :tags "" :pages #{} :featured? false})
    :fx (merge {:history :push :toast {:type :success :title "Post saved"}} fetch-posts-fx)})
 
 (defn delete-post [state id]
@@ -322,7 +334,7 @@
    :fx {:history :push}})
 
 (defn view-new [state]
-  {:state (assoc state :view :new :form {:title "" :content "" :tags "" :featured? false})
+  {:state (assoc state :view :new :form {:title "" :content "" :tags "" :pages #{} :featured? false})
    :fx {:history :push}})
 
 (defn- tags->string
@@ -339,6 +351,7 @@
                  :form {:title (:post/title post "")
                         :content (strip-frontmatter (:post/content post))
                         :tags (tags->string (:post/tags post))
+                        :pages (set (:post/pages post))
                         :featured? (boolean (:post/featured? post))})
    :fx {:history :push}})
 
@@ -346,6 +359,10 @@
 
 (defn update-form [state field value]
   {:state (assoc-in state [:form field] value)})
+
+(defn toggle-form-page [state page]
+  {:state (update-in state [:form :pages] #(let [ps (or % #{})]
+                                             (if (contains? ps page) (disj ps page) (conj ps page))))})
 
 ;; --- Mobile Navigation ---
 
@@ -535,43 +552,48 @@
   ;=> [false false]
 
   ;; filtered-posts returns all when no filter
-  (filtered-posts {:posts [{:post/id 1}] :tag-filter nil :pages #{}})
+  (filtered-posts {:posts [{:post/id 1}] :tag-filter nil})
   ;=> [{:post/id 1}]
 
   ;; filtered-posts filters by tag
   (filtered-posts {:posts [{:post/id 1 :post/tags ["clojure"]}
                            {:post/id 2 :post/tags ["java"]}]
-                   :tag-filter "clojure"
-                   :pages #{}})
+                   :tag-filter "clojure"})
   ;=> [{:post/id 1 :post/tags ["clojure"]}]
 
-  ;; filtered-posts excludes page-only posts (unless featured)
-  (filtered-posts {:posts [{:post/id 1 :post/tags ["Home"]}
+  ;; filtered-posts filters by page (via :post/pages)
+  (filtered-posts {:posts [{:post/id 1 :post/pages ["Home"]}
                            {:post/id 2 :post/tags ["clojure"]}
-                           {:post/id 3 :post/tags ["Home"] :post/featured? true}]
-                   :tag-filter nil
-                   :pages #{"Home"}})
-  ;=> [{:post/id 2 :post/tags ["clojure"]} {:post/id 3 :post/tags ["Home"] :post/featured? true}]
+                           {:post/id 3 :post/pages ["Home"] :post/featured? true}]
+                   :tag-filter "Home"})
+  ;=> [{:post/id 1 :post/pages ["Home"]} {:post/id 3 :post/pages ["Home"] :post/featured? true}]
+
+  ;; filtered-posts shows all posts when no filter (including page-only)
+  (filtered-posts {:posts [{:post/id 1 :post/pages ["Home"]}
+                           {:post/id 2 :post/tags ["clojure"]}
+                           {:post/id 3 :post/pages ["Home"] :post/featured? true}]
+                   :tag-filter nil})
+  ;=> [{:post/id 1 :post/pages ["Home"]} {:post/id 2 :post/tags ["clojure"]} {:post/id 3 :post/pages ["Home"] :post/featured? true}]
 
   ;; page-mode? returns true when tag-filter is a page
-  (page-mode? {:tag-filter "Home" :pages #{"Home"}})
+  (page-mode? {:tag-filter "Home"})
   ;=> true
 
   ;; page-mode? returns false for regular tags
-  (page-mode? {:tag-filter "clojure" :pages #{"Home"}})
+  (page-mode? {:tag-filter "clojure"})
   ;=> false
 
   ;; page-mode? returns false when no filter
-  (page-mode? {:tag-filter nil :pages #{"Home"}})
+  (page-mode? {:tag-filter nil})
   ;=> false
 
   ;; filter-by-tag with page pushes history
-  (let [{:keys [fx]} (filter-by-tag {:pages #{"Home"}} "Home")]
+  (let [{:keys [fx]} (filter-by-tag {} "Home")]
     (:history fx))
   ;=> :push
 
   ;; filter-by-tag with regular tag now also pushes history (goes to /tag/clojure)
-  (let [{:keys [fx]} (filter-by-tag {:pages #{"Home"}} "clojure")]
+  (let [{:keys [fx]} (filter-by-tag {} "clojure")]
     (:history fx))
   ;=> :push
 
@@ -604,16 +626,14 @@
   (filtered-posts {:posts [{:post/id 1 :post/author {:user/slug "bob-smith"}}
                            {:post/id 2 :post/author {:user/slug "jane-doe"}}]
                    :author-filter {:slug "bob-smith"}
-                   :tag-filter nil
-                   :pages #{}})
+                   :tag-filter nil})
   ;=> [{:post/id 1 :post/author {:user/slug "bob-smith"}}]
 
   ;; author filter takes precedence over tag filter
   (filtered-posts {:posts [{:post/id 1 :post/author {:user/slug "bob-smith"} :post/tags ["clojure"]}
                            {:post/id 2 :post/author {:user/slug "jane-doe"} :post/tags ["clojure"]}]
                    :author-filter {:slug "bob-smith"}
-                   :tag-filter "clojure"
-                   :pages #{}})
+                   :tag-filter "clojure"})
   ;=> [{:post/id 1 :post/author {:user/slug "bob-smith"} :post/tags ["clojure"]}]
 
   ;; logged-in? returns false for nil user

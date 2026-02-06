@@ -612,6 +612,21 @@ code, pre, .font-mono {
   border: 1px solid var(--border);
 }
 
+.featured-icon {
+  color: var(--accent-gold);
+  vertical-align: middle;
+}
+
+.featured-link {
+  color: var(--accent-gold);
+  text-decoration: none;
+}
+
+.featured-link:hover {
+  color: var(--accent-gold-hover);
+  text-decoration: none;
+}
+
 /*==============================================================================
   Post Detail & Body
 ==============================================================================*/
@@ -719,6 +734,12 @@ code, pre, .font-mono {
 .form-group textarea {
   min-height: 150px;
   font-family: var(--font-mono);
+}
+
+.checkbox-group {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
 }
 
 .form-group label.checkbox-label {

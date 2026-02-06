@@ -33,6 +33,7 @@
    :view-edit       state/view-edit
    :view-back       state/set-view
    :update-form     state/update-form
+   :toggle-form-page state/toggle-form-page
    :view-history    (fn [s _] (state/view-history s))
    :history-fetched state/history-fetched
    :view-version    state/view-version
