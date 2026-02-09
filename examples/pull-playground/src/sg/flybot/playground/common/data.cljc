@@ -35,4 +35,5 @@
      [:features {:doc "Feature flags"}
       [:map
        [:dark-mode {:doc "Dark mode enabled"} :boolean]
-       [:notifications {:doc "Notifications enabled"} :boolean]]]]]])
+       [:notifications {:doc "Notifications enabled"} :boolean]]]
+     [:debug {:optional true :doc "Debug mode"} :boolean]]]])

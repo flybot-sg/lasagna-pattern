@@ -12,34 +12,8 @@
             [malli.core :as m]))
 
 ;;=============================================================================
-;; Sample Data (from shared data.cljc)
+;; Handlers
 ;;=============================================================================
-
-(def users-source
-  (coll/atom-source {:initial (:users data/default-data)}))
-
-(def posts-source
-  (coll/atom-source {:initial (:posts data/default-data)}))
-
-(def sample-data
-  {:users  (coll/collection users-source)
-   :posts  (coll/collection posts-source)
-   :config (:config data/default-data)})
-
-(def sample-schema
-  (m/schema data/default-schema))
-
-;;=============================================================================
-;; API Function
-;;=============================================================================
-
-(defn api-fn
-  "API function for Remote Pull Protocol.
-   Returns data and schema for pattern matching."
-  [_ring-request]
-  {:data   sample-data
-   :schema sample-schema
-   :sample (sample/generate sample-schema {:size 10 :seed 42 :min 5})})
 
 (defn- health-handler
   "Health check endpoint."
@@ -50,12 +24,12 @@
      :headers {"Content-Type" "text/plain"}
      :body "OK"}))
 
-;;=============================================================================
-;; Middleware
-;;=============================================================================
-
-(def app
-  (let [pull-handler (remote/make-handler api-fn)]
+(defn- make-app [{:keys [data schema]}]
+  (let [api-fn       (fn [_ring-request]
+                       {:data   data
+                        :schema schema
+                        :sample (sample/generate schema {:size 10 :seed 42 :min 5})})
+        pull-handler (remote/make-handler api-fn)]
     (-> (fn [request]
           (or (health-handler request)
               (pull-handler request)))
@@ -65,27 +39,30 @@
                    :access-control-allow-headers ["Content-Type" "Accept"]))))
 
 ;;=============================================================================
-;; Server
+;; System Lifecycle
 ;;=============================================================================
 
-(defonce server (atom nil))
+(defonce system (atom nil))
 
 (defn start! [& [{:keys [port] :or {port 8081}}]]
-  (println (str "Starting demo server on port " port "..."))
-  (println "Sample data available:")
-  (println "  :users - List of users")
-  (println "  :posts - List of posts")
-  (println "  :config - App configuration")
-  (reset! server (http/run-server app {:port port}))
-  (println (str "Server running at http://localhost:" port)))
+  (let [sources {:users (coll/atom-source {:initial (:users data/default-data)})
+                 :posts (coll/atom-source {:initial (:posts data/default-data)})}
+        colls   {:users  (coll/collection (:users sources))
+                 :posts  (coll/collection (:posts sources))
+                 :config (:config data/default-data)}
+        schema  (m/schema data/default-schema)
+        app     (make-app {:data colls :schema schema})
+        stop-fn (http/run-server app {:port port})]
+    (reset! system {:stop-fn stop-fn :data colls :schema schema})
+    (println (str "Server running at http://localhost:" port))))
 
 (defn stop! []
-  (when-let [s @server]
-    (s :timeout 100)
-    (reset! server nil)
+  (when-let [{:keys [stop-fn]} @system]
+    (stop-fn :timeout 100)
+    (reset! system nil)
     (println "Server stopped")))
 
 (defn -main [& args]
   (let [port (if (seq args) (Integer/parseInt (first args)) 8081)]
     (start! {:port port})
-    @(promise))) ; Keep running
+    @(promise)))

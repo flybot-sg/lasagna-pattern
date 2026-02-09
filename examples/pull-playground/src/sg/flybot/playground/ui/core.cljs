@@ -51,10 +51,7 @@
                          :headers #js {"Content-Type" "application/transit+json"
                                        "Accept" "application/transit+json"}
                          :body (encode {:pattern pattern})})
-          (.then (fn [resp]
-                   (if (.-ok resp)
-                     (.text resp)
-                     (throw (js/Error. (str "HTTP " (.-status resp)))))))
+          (.then (fn [resp] (.text resp)))
           (.then (fn [text]
                    (let [response (decode text)]
                      (if (:errors response)

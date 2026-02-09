@@ -2110,6 +2110,17 @@
   (compile-pattern '?x {:schema :map}) ;=>> fn?
   (compile-pattern '?x {:schema :string}) ;=>> fn?
 
+  ;; Valid: :default and :when chain patterns on scalar schema
+  (compile-pattern '{:name (?n :default "anon")} {:schema {:name :string}}) ;=>> fn?
+  (compile-pattern '{:age (?a :when pos?)} {:schema {:age :number}}) ;=>> fn?
+
+  ;; Invalid: key not in schema throws even with :default
+  (try
+    (compile-pattern '{:debug (?d :default false)} {:schema {:version :string}})
+    (catch clojure.lang.ExceptionInfo e
+      (:key (ex-data e))))
+  ;=> :debug
+
   ;; Invalid: seq pattern on :map schema - throws
   (try
     (compile-pattern '[?x] {:schema :map})

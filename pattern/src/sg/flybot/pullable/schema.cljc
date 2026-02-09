@@ -62,7 +62,7 @@
                          :seq (or (#{:seq :var :any} ptn-type)
                                   (and (= ptn-type :map) indexed-lookup?))
                          (:number :string :keyword :symbol :boolean)
-                         (#{:var :val :pred :any :regex} ptn-type)
+                         (#{:var :val :pred :any :regex :-> :sub} ptn-type)
                          true))]
       (when-not type-ok?
         (throw (ex-info (str "Schema violation: pattern :" ptn-type " vs schema :" type
