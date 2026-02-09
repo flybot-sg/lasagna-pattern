@@ -1,4 +1,25 @@
 {:tasks
- {test
+ {dev
+  {:doc "Start nREPL with CLJS support. Then in REPL:
+         (shadow.cljs.devtools.server/start!)
+         (shadow.cljs.devtools.api/watch :app)
+        For backend server: (start!) for server on 8081."
+   :task (clojure "-M:dev:cljs -m nrepl.cmdline --middleware \"[cider.nrepl/cider-middleware]\"")}
+
+  watch
+  {:doc "Start shadow-cljs watch + dev server on port 3002 (standalone, no REPL)"
+   :task (shell "npx shadow-cljs -A:dev:cljs watch app")}
+
+  test
   {:doc "Run RCT (no kaocha needed)"
-   :task (clojure "-X:dev:rct")}}}
+   :task (clojure "-X:dev:rct")}
+
+  deploy
+  {:doc "Build SPA and deploy to S3. Set S3_BUCKET in .env or environment."
+   :task (let [bucket (System/getenv "S3_BUCKET")]
+           (when-not bucket
+             (println "Error: S3_BUCKET not set. Add it to .env or export it.")
+             (System/exit 1))
+           (shell "npm install")
+           (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
+           (shell "aws s3 sync resources/public" (str "s3://" bucket) "--delete"))}}}
