@@ -282,8 +282,18 @@
   (parse-mutation '{:posts ?all})
   ;=> nil
 
-  (parse-mutation '{:member {:me ?user}}))
+  (parse-mutation '{:member {:me ?user}})
   ;=> nil
+
+  ;; parse-mutation: keyword query keys are reads, not mutations
+  (parse-mutation '{:config {:debug (?d :default false)}})
+  ;=> nil
+
+  (parse-mutation '{:users {:name "Alice"}})
+  ;=> nil
+
+  (parse-mutation '{:role {:config {:debug true}}}))
+  ;=> nil)
 
 ;;=============================================================================
 ;; Response Helpers
@@ -405,13 +415,15 @@
                (= 1 (count (val (first v1)))))
           (let [[k2 v2] (first v1)
                 [query value] (first v2)]
-            (when-not (variable? value)
+            (when (and (not (variable? value))
+                       (or (nil? query) (map? query)))
               {:path [k1 k2] :query query :value value}))
 
           ;; Flat: {:posts {query value}}
           (and (map? v1) (= 1 (count v1)))
           (let [[query value] (first v1)]
-            (when-not (variable? value)
+            (when (and (not (variable? value))
+                       (or (nil? query) (map? query)))
               {:path [k1] :query query :value value}))
 
           :else nil)))))
