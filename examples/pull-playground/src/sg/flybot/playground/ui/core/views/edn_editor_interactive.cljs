@@ -1,11 +1,11 @@
-(ns sg.flybot.playground.edn-editor-interactive
+(ns sg.flybot.playground.ui.core.views.edn-editor-interactive
   "Interactive EDN editor with parinfer support.
 
    This ClojureScript-only module handles the interactive editing behavior:
    - Textarea for input
    - Overlay with syntax highlighting
    - Parinfer integration for auto-balancing"
-  (:require [sg.flybot.playground.edn-editor :as edn]
+  (:require [sg.flybot.playground.ui.core.views.edn-editor-interactive.editor :as edn]
             [parinferish.core :as paren]
             [clojure.string :as str]
             [malli.core :as m]))

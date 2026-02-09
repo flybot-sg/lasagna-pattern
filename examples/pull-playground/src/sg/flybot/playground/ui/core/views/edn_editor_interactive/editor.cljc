@@ -1,4 +1,4 @@
-(ns sg.flybot.playground.edn-editor
+(ns sg.flybot.playground.ui.core.views.edn-editor-interactive.editor
   "EDN editor component with syntax highlighting and rainbow parens.
 
    Uses parinferish to parse EDN/Clojure code and render it with

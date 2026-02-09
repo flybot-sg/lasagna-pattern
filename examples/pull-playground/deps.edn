@@ -1,24 +1,24 @@
 {:paths ["src" "resources"]
- :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
         local/pattern {:local/root "../../pattern"}
         local/collection {:local/root "../../collection"}
         local/remote {:local/root "../../remote"}
-        http-kit/http-kit {:mvn/version "2.8.0"}
-        ring/ring-core {:mvn/version "1.12.2"}
+        http-kit/http-kit {:mvn/version "2.8.1"}
+        ring/ring-core {:mvn/version "1.15.3"}
         ring-cors/ring-cors {:mvn/version "0.1.13"}
-        com.cognitect/transit-clj {:mvn/version "1.0.333"}
+        com.cognitect/transit-clj {:mvn/version "1.1.347"}
         parinferish/parinferish {:mvn/version "0.8.0"}
-        metosin/malli {:mvn/version "0.16.4"}}
+        metosin/malli {:mvn/version "0.20.0"}}
  :aliases
  {:dev {:extra-paths ["dev"]
         :extra-deps {io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
-                     nrepl/nrepl {:mvn/version "1.3.0"}
-                     cider/cider-nrepl {:mvn/version "0.50.2"}}}
+                     nrepl/nrepl {:mvn/version "1.5.2"}
+                     cider/cider-nrepl {:mvn/version "0.58.0"}}}
   :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
         :exec-args {:dirs #{"src"}}}
-  :run {:main-opts ["-m" "sg.flybot.playground.server"]}
-  :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.28.22"}
-                      no.cjohansen/replicant {:mvn/version "2025.06.21"}
+  :run {:main-opts ["-m" "sg.flybot.playground.server.main"]}
+  :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "3.3.5"}
+                      no.cjohansen/replicant {:mvn/version "2025.12.1"}
                       com.cognitect/transit-cljs {:mvn/version "0.8.280"}
-                      org.babashka/sci {:mvn/version "0.8.43"}
+                      org.babashka/sci {:mvn/version "0.12.51"}
                       parinferish/parinferish {:mvn/version "0.8.0"}}}}}

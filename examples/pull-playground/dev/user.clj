@@ -1,3 +1,7 @@
+;; SCI + shadow-cljs workaround (babashka/sci#832):
+;; Pre-load CLJS analyzer API so SCI's copy-var macro doesn't NPE.
+(try (requiring-resolve 'cljs.analyzer.api/ns-resolve) (catch Exception _ nil))
+
 (ns user
   "REPL helpers for playground backend development.
 
@@ -6,7 +10,7 @@
 
    Stop:
      (stop!)"
-  (:require [sg.flybot.playground.server :as server]))
+  (:require [sg.flybot.playground.server.main :as server]))
 
 (defn start!
   "Start the playground demo server on port 8081."

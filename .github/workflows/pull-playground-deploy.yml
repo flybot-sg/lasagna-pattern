@@ -1,0 +1,76 @@
+name: Deploy Pull Playground
+
+on:
+  push:
+    tags:
+      - 'pull-playground-v*'
+
+env:
+  AWS_REGION: ap-southeast-1
+  S3_BUCKET: ${{ vars.PLAYGROUND_S3_BUCKET }}
+  CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.PLAYGROUND_CF_DISTRIBUTION_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Clojure
+        uses: DeLaGuardo/setup-clojure@12.5
+        with:
+          cli: latest
+          bb: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.npm
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/deps.edn', '**/package-lock.json') }}
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Build SPA
+        working-directory: examples/pull-playground
+        run: |
+          npm install
+          clojure -M:cljs -m shadow.cljs.devtools.cli release app
+
+      - name: Deploy to S3
+        run: |
+          aws s3 sync examples/pull-playground/resources/public s3://$S3_BUCKET --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id $CLOUDFRONT_DISTRIBUTION_ID \
+            --paths "/*"
+
+      - name: Summary
+        run: |
+          echo "### Deployment Complete :rocket:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **URL:** https://pattern.flybot.sg" >> $GITHUB_STEP_SUMMARY
