@@ -3,49 +3,30 @@
 (try (requiring-resolve 'cljs.analyzer.api/ns-resolve) (catch Exception _ nil))
 
 (ns user
-  "REPL helpers for playground backend development.
+  "REPL helpers for playground development.
 
-   Start the demo server:
-     (start!)
-
-   Stop:
-     (stop!)"
+   Start:   (start!)
+   Stop:    (stop!)
+   Restart: (restart!)"
   (:require [sg.flybot.playground.server.main :as server]))
 
-(defn start!
-  "Start the playground demo server on port 8081."
-  []
-  (server/start!))
-
-(defn stop!
-  "Stop the server."
-  []
-  (server/stop!))
-
-(defn restart!
-  "Restart the server."
-  []
-  (stop!)
-  (start!))
+(defn start!  [] (server/start!))
+(defn stop!   [] (server/stop!))
+(defn restart! [] (stop!) (start!))
 
 (comment
-  ;; Start the demo server
   (start!)
-
-  ;; Stop the server
   (stop!)
 
-  ;; Test pattern matching locally
+  ;; Test pattern matching against running server data
   (require '[sg.flybot.pullable.impl :as impl])
 
   (let [pattern '{:users ?users}
-        matcher (impl/compile-pattern pattern)
-        result (matcher (impl/vmr server/sample-data))]
-    {:val (:val result)
-     :vars (:vars result)})
+        data    (:data @server/system)
+        result  ((impl/compile-pattern pattern) (impl/vmr data))]
+    (:vars result))
 
-  ;; Test with indexed lookup
   (let [pattern '{:users {{:id 2} ?user}}
-        matcher (impl/compile-pattern pattern)
-        result (matcher (impl/vmr server/sample-data))]
+        data    (:data @server/system)
+        result  ((impl/compile-pattern pattern) (impl/vmr data))]
     (:vars result)))

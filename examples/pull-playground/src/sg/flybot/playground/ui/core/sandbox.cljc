@@ -8,6 +8,8 @@
             [sg.flybot.playground.common.data :as data]
             [sg.flybot.pullable.collection :as coll]
             [sg.flybot.pullable.impl :as impl]
+            [sg.flybot.pullable.malli]
+            [malli.core :as m]
             #?(:cljs [sci.core :as sci])))
 
 ;;=============================================================================
@@ -136,8 +138,10 @@
             {:error (str "Collection " coll-key " not found or not mutable")}))
         (let [colls (make-collections @sources)
               data (assoc colls :config (:config data/default-data))
-              opts #?(:clj {}
-                      :cljs {:resolve sci-resolve :eval sci-eval})
+              schema (m/schema data/default-schema)
+              opts #?(:clj  {:schema schema}
+                      :cljs {:schema schema
+                             :resolve sci-resolve :eval-fn sci-eval})
               matcher (impl/compile-pattern pattern opts)
               result (matcher (impl/vmr data))]
           (if (impl/failure? result)
