@@ -9,7 +9,7 @@
 ;;=============================================================================
 
 (def initial-state
-  {:mode :sandbox          ; :sandbox | :remote (hidden via ?mode=remote)
+  {:mode :sandbox          ; :sandbox | :remote (path-based: /sandbox, /remote)
    :pattern-text ""        ; Pattern editor content
    :result nil             ; Bindings map (symbol → value)
    :error nil              ; Error message string
@@ -19,7 +19,8 @@
    :sandbox-data nil       ; Snapshot: {:users [...] :posts [...] :config {...}}
    :sandbox-schema nil     ; Malli hiccup form for autocomplete/tooltips
    :data-view :data        ; :data | :schema toggle
-   ;; Remote mode (hidden)
+   ;; Remote mode
+   :remote-data nil        ; Server snapshot: {:users [...] :posts [...] :config {...}}
    :server-url "http://localhost:8081/api"
    :schema nil             ; Remote server schema
    :schema-loading? false
@@ -57,6 +58,9 @@
 
 (defn set-sandbox-schema [db schema]
   (assoc db :sandbox-schema schema))
+
+(defn set-remote-data [db data]
+  (assoc db :remote-data data))
 
 ;;=============================================================================
 ;; Remote mode updaters
@@ -123,6 +127,11 @@
   ;; set-sandbox-data stores snapshot
   (let [db (set-sandbox-data {} {:users [{:id 1}]})]
     (:sandbox-data db))
+  ;=> {:users [{:id 1}]}
+
+  ;; set-remote-data stores remote server snapshot
+  (let [db (set-remote-data {} {:users [{:id 1}]})]
+    (:remote-data db))
   ;=> {:users [{:id 1}]}
 
   ;; set-schema stores schema and clears sample-data

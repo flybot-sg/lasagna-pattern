@@ -45,24 +45,28 @@
 
 #?(:cljs
    (defalias site-header
-     [{::keys [mode dispatch!]}]
-     [:header.site-header
-      [:h1 "Pull Pattern Playground"]
-      [:div.header-right
-       [:div.mode-toggle
-        [:button {:class (when (= mode :sandbox) "active")
-                  :on {:click #(dispatch! {:db (fn [db] (state/set-mode db :sandbox))})}}
-         "Sandbox"]
-        [:button {:class (when (= mode :remote) "active")
-                  :on {:click #(dispatch! {:db (fn [db] (state/set-mode db :remote))})}}
-         "Remote"]]
-       [:button.theme-toggle {:title "Toggle theme"
-                              :on {:click #(js/sg.flybot.playground.ui.core.toggle_theme_BANG_)}}
-        [:span.show-light (moon-icon)]
-        [:span.show-dark (sun-icon)]]]]))
+     [{::keys [db dispatch!]}]
+     (let [{:keys [mode]} db]
+       [:header.site-header
+        [:h1 "Pull Pattern Playground"]
+        [:div.header-right
+         [:div.mode-toggle
+          [:button {:class (when (= mode :sandbox) "active")
+                    :on {:click #(dispatch! {:db  (fn [db] (state/set-mode db :sandbox))
+                                             :nav :sandbox})}}
+           "Sandbox"]
+          [:button {:class (when (= mode :remote) "active")
+                    :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :remote))
+                                             :nav  :remote
+                                             :pull :init})}}
+           "Remote"]]
+         [:button.theme-toggle {:title "Toggle theme"
+                                :on {:click #(js/sg.flybot.playground.ui.core.toggle_theme_BANG_)}}
+          [:span.show-light (moon-icon)]
+          [:span.show-dark (sun-icon)]]]])))
 
 #?(:clj
-   (defn site-header [{::keys [mode dispatch!]}]
+   (defn site-header [{}]
      [:header.site-header
       [:h1 "Pull Pattern Playground"]]))
 
@@ -72,7 +76,7 @@
 
 (defn- data-display
   "Read-only display of sample data with :data/:schema toggle and optional reset."
-  [{::keys [sandbox-data sandbox-schema data-view mode dispatch!]}]
+  [{::keys [displayed-data displayed-schema data-view mode dispatch!]}]
   [:div.sandbox-data-section
    [:div.sandbox-header
     [:div.data-view-toggle
@@ -83,16 +87,16 @@
                :on {:click #(dispatch! {:db (fn [db] (assoc db :data-view :schema))})}}
       "Schema"]]
     (when (= mode :sandbox)
-      [:button.reset-btn {:on {:click #(dispatch! {:exec {:type :sandbox-reset}})}}
+      [:button.reset-btn {:on {:click #(dispatch! {:pull :reset})}}
        "Reset"])]
    [:div.sandbox-content
-    (let [text (format-result-pretty (if (= data-view :schema) sandbox-schema sandbox-data))]
+    (let [text (format-result-pretty (if (= data-view :schema) displayed-schema displayed-data))]
       (edn/edn-display {:value text :placeholder "No data"}))]])
 
 #?(:cljs
    (defalias data-panel
      [{::keys [db dispatch!]}]
-     (let [{:keys [mode server-url sandbox-data sandbox-schema data-view]} db]
+     (let [{:keys [mode server-url sandbox-data sandbox-schema remote-data data-view]} db]
        [:div.panel.data-panel
         [:div.panel-header
          [:h2 "Data"]]
@@ -107,14 +111,14 @@
                       :placeholder "http://localhost:8081/api"
                       :on {:input #(dispatch! {:db (fn [db] (assoc db :server-url (.. % -target -value)))})}}]]])
          (data-display
-          {::sandbox-data sandbox-data
-           ::sandbox-schema sandbox-schema
+          {::displayed-data (if (= mode :remote) remote-data sandbox-data)
+           ::displayed-schema sandbox-schema
            ::data-view data-view
            ::mode mode
            ::dispatch! dispatch!})]]))
 
    :clj
-   (defn data-panel [{::keys [db dispatch!]}]
+   (defn data-panel [{}]
      [:div.panel.data-panel
       [:div.panel-header
        [:h2 "Data"]]
@@ -126,14 +130,6 @@
 ;;-----------------------------------------------------------------------------
 
 (def ^:private pattern-editor-id "pattern-editor")
-
-(defn- execute-effect
-  "Build :exec effect based on mode."
-  [db]
-  (let [{:keys [mode pattern-text server-url]} db]
-    (case mode
-      :sandbox {:type :sandbox :pattern pattern-text}
-      :remote  {:type :remote :pattern pattern-text :url server-url})))
 
 #?(:cljs
    (defalias pattern-results-panel
@@ -150,7 +146,7 @@
           [:label "Pattern"]
           [:button.execute-btn
            {:on {:click #(dispatch! {:db state/set-loading
-                                     :exec (execute-effect db)})}
+                                     :pull (:pattern-text db)})}
             :disabled loading?}
            (if loading? "Executing..." "Execute")]]
          [:div.pattern-editor
@@ -259,10 +255,10 @@
 ;;=============================================================================
 
 (defn app-view [{::keys [db dispatch!]}]
-  (let [{:keys [mode selected-example]} db]
+  (let [{:keys [selected-example]} db]
     [:div.app-container
-     #?(:cljs [::site-header {::mode mode ::dispatch! dispatch!}]
-        :clj  (site-header {::mode mode ::dispatch! dispatch!}))
+     #?(:cljs [::site-header {::db db ::dispatch! dispatch!}]
+        :clj  (site-header {::db db ::dispatch! dispatch!}))
      [:div.main-content.with-sidebar
       #?(:cljs [::data-panel {::db db ::dispatch! dispatch!}]
          :clj  (data-panel {::db db ::dispatch! dispatch!}))
@@ -287,9 +283,5 @@
 
   ;; app-view returns container
   (first (app-view {::db {:mode :sandbox :pattern-text ""}
-                    ::dispatch! identity}))
-  ;=> :div.app-container
-
-  ;; execute-effect builds correct effect for each mode
-  (:type (execute-effect {:mode :sandbox :pattern-text "p"})) ;=> :sandbox
-  (:type (execute-effect {:mode :remote :pattern-text "p" :server-url "u"}))) ;=> :remote)
+                    ::dispatch! identity})))
+  ;=> :div.app-container)
