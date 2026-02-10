@@ -1,11 +1,15 @@
 (ns sg.flybot.playground.ui.core
   "Playground SPA entry point.
 
-   Uses a dispatch-of effect pattern (like hibou):
+   Uses a dispatch-of effect pattern:
    - :db    — pure state updater (swap! app-db update root-key f)
-   - :pull  — pull pattern API (string or keyword, routed via pull-api)
+   - :pull  — pull pattern API (string or keyword)
    - :nav   — URL navigation (pushState)
-   - :batch — composed effects"
+   - :batch — composed effects
+
+   Mode only affects transport. make-executor returns a function
+   that runs patterns — sandbox does it in-process via remote/execute,
+   remote sends HTTP. Everything else is mode-agnostic."
   (:require [replicant.dom :as r]
             [cognitect.transit :as t]
             [cljs.reader :as reader]
@@ -22,20 +26,14 @@
 (defonce ^:private popstate-listener (atom nil))
 
 ;;=============================================================================
-;; Remote API Client (Transit)
+;; Transit Client (for remote mode HTTP transport)
 ;;=============================================================================
 
-(defn- transit-reader []
-  (t/reader :json))
-
-(defn- transit-writer []
-  (t/writer :json))
-
 (defn- encode [data]
-  (t/write (transit-writer) data))
+  (t/write (t/writer :json) data))
 
 (defn- decode [s]
-  (t/read (transit-reader) s))
+  (t/read (t/reader :json) s))
 
 (defn- format-error
   "Format an error response to a user-friendly string."
@@ -46,8 +44,8 @@
            (str " at " (pr-str path))))))
 
 (defn- pull!
-  "Execute a pull query against a remote server.
-   Always reads body — errors are transit-encoded in the response."
+  "Execute a pull pattern against a remote server via HTTP POST.
+   Callback-based: (on-success vars) or (on-error message)."
   [url pattern-str on-success on-error]
   (try
     (let [pattern (reader/read-string pattern-str)]
@@ -67,78 +65,84 @@
     (catch :default e
       (on-error (str "Parse error: " (.-message e))))))
 
-(defn- fetch-schema!
-  "Fetch schema from remote server.
-   Checks resp.ok — schema endpoint returns plain HTTP errors, not transit."
-  [url on-success on-error]
-  (let [schema-url (str url "/_schema")]
-    (-> (js/fetch schema-url
-                  #js {:method "GET"
-                       :headers #js {"Accept" "application/transit+json"}})
-        (.then (fn [resp]
-                 (if (.-ok resp)
-                   (.text resp)
-                   (throw (js/Error. (str "HTTP " (.-status resp)))))))
-        (.then (fn [text]
-                 (on-success (decode text))))
-        (.catch (fn [err]
-                  (on-error (.-message err)))))))
-
 ;;=============================================================================
-;; Pull API
+;; Executor — the ONLY mode-specific function
 ;;=============================================================================
 
 (def ^:private read-all-pattern
+  "Pull pattern that reads all top-level collections."
   (pr-str (into {} (map (fn [k] [k (symbol (str "?" (name k)))])) (keys data/default-data))))
 
-(defn- pull-result->data
-  "Convert pull bindings (transit symbol keys) to keyword-keyed data map."
+(defn- vars->data
+  "Convert pull bindings (symbol keys from ?-vars) to keyword-keyed data map."
   [result]
   (into {} (map (fn [[k v]] [(keyword (name k)) v])) result))
 
-(def ^:private pull-api
-  {:sandbox
-   {:execute
-    (fn [dispatch! _db pattern]
-      (let [{:keys [result error snapshot]} (sandbox/execute! pattern)]
-        (if error
-          (dispatch! {:db #(state/set-error % error)})
-          (dispatch! {:db #(-> % (state/set-result result)
-                               (state/set-sandbox-data snapshot))}))))
-    :reset
-    (fn [dispatch! _db]
-      (let [snap (sandbox/reset-data!)]
-        (dispatch! {:db #(-> % (state/set-sandbox-data snap) state/clear-result)})))}
+(defn- make-executor
+  "Build executor for current mode.
+   Returns (fn [pattern-str on-success on-error]).
+   Sandbox: remote/execute in-process. Remote: HTTP POST."
+  [db]
+  (case (:mode db)
+    :sandbox (fn [pattern-str on-success on-error]
+               (let [{:keys [result error]} (sandbox/execute! pattern-str)]
+                 (if error (on-error error) (on-success result))))
+    :remote  (fn [pattern-str on-success on-error]
+               (pull! (:server-url db) pattern-str on-success on-error))))
 
-   :remote
-   {:execute
-    (fn [dispatch! db pattern]
-      (let [url       (:server-url db)
-            mutation? (try (some? (remote/parse-mutation (reader/read-string pattern)))
-                           (catch :default _ false))]
-        (pull! url pattern
-               (fn [result]
-                 (dispatch! {:db #(state/set-result % result)})
-                 (when mutation?
-                   (pull! url read-all-pattern
-                          (fn [data]
-                            (dispatch! {:db #(state/set-remote-data % (pull-result->data data))}))
-                          (fn [_] nil))))
-               (fn [error]
-                 (dispatch! {:db #(state/set-error % error)})))))
-    :init
-    (fn [dispatch! db]
-      (pull! (:server-url db) read-all-pattern
+;;=============================================================================
+;; Pull API — mode-agnostic, everything is a pattern
+;;=============================================================================
+
+(def ^:private pull-api
+  {:pattern
+   (fn [dispatch! db pattern]
+     (let [exec      (make-executor db)
+           mutation? (try (some? (remote/parse-mutation (reader/read-string pattern)))
+                          (catch :default _ false))]
+       (exec pattern
              (fn [result]
-               (dispatch! {:db #(state/set-remote-data % (pull-result->data result))}))
-             (fn [_] nil)))
-    :schema
-    (fn [dispatch! db]
-      (fetch-schema! (:server-url db)
-                     (fn [{:keys [schema sample]}]
-                       (dispatch! {:db #(-> % (state/set-schema schema) (assoc :sample-data sample))}))
-                     (fn [error]
-                       (dispatch! {:db #(state/set-schema-error % error)}))))}})
+               (dispatch! {:db #(state/set-result % result)})
+               (when mutation?
+                 (exec read-all-pattern
+                       (fn [r] (dispatch! {:db #(state/set-data % (vars->data r))}))
+                       (fn [_] nil))))
+             (fn [error]
+               (dispatch! {:db #(state/set-error % error)})))))
+
+   :data
+   (fn [dispatch! db]
+     (let [exec (make-executor db)]
+       (exec read-all-pattern
+             (fn [r] (dispatch! {:db #(state/set-data % (vars->data r))}))
+             (fn [_] nil))))
+
+   :schema
+   (fn [dispatch! db]
+     (let [exec (make-executor db)]
+       (exec "{:schema ?s}"
+             (fn [result]
+               (let [{:keys [schema sample]} (get result 's)]
+                 (dispatch! {:db #(cond-> (state/set-schema % schema)
+                                    sample (assoc :sample-data sample))})))
+             (fn [error]
+               (dispatch! {:db #(state/set-schema-error % error)})))))
+
+   :seed
+   (fn [dispatch! db]
+     (let [exec (make-executor db)]
+       (exec "{:seed {nil true}}"
+             (fn [_]
+               (exec read-all-pattern
+                     (fn [r] (dispatch! {:db #(-> % (state/set-data (vars->data r)) state/clear-result)}))
+                     (fn [_] nil)))
+             (fn [error]
+               (dispatch! {:db #(state/set-error % error)})))))
+
+   :init
+   (fn [dispatch! db]
+     ((:data pull-api) dispatch! db)
+     ((:schema pull-api) dispatch! db))})
 
 ;;=============================================================================
 ;; Dispatch
@@ -150,11 +154,10 @@
       (case type
         :db    (swap! app-db update root-key effect-def)
         :pull  (let [db        (get @app-db root-key)
-                     api       (get pull-api (:mode db))
-                     dispatch! ((partial dispatch-of app-db) root-key)]
+                     dispatch! (dispatch-of app-db root-key)]
                  (if (string? effect-def)
-                   ((:execute api) dispatch! db effect-def)
-                   (when-let [f (get api effect-def)]
+                   ((:pattern pull-api) dispatch! db effect-def)
+                   (when-let [f (get pull-api effect-def)]
                      (f dispatch! db))))
         :nav   (let [path (str "/" (name effect-def))]
                  (when-not (= path (.-pathname js/location))
@@ -205,19 +208,17 @@
   (init-theme!)
   (when (= (.-pathname js/location) "/")
     (.replaceState js/history nil "" "/sandbox"))
-  (let [snap   (sandbox/init!)
-        mode   (path->mode)
+  (sandbox/init!)
+  (let [mode     (path->mode)
         dispatch! (dispatch-of app-db root-key)]
-    (dispatch! {:db (fn [db]
-                      (-> db
-                          (state/set-sandbox-data snap)
-                          (state/set-sandbox-schema data/default-schema)
-                          (state/set-mode mode)))})
-    (when (= mode :remote)
-      (dispatch! {:pull :init}))
+    (dispatch! {:db #(state/set-mode % mode)})
+    (dispatch! {:pull :init})
     (when-let [prev @popstate-listener]
       (.removeEventListener js/window "popstate" prev))
-    (let [listener (fn [_] (dispatch! {:db #(state/set-mode % (path->mode))}))]
+    (let [listener (fn [_]
+                     (let [new-mode (path->mode)]
+                       (dispatch! {:db #(state/set-mode % new-mode)})
+                       (dispatch! {:pull :init})))]
       (.addEventListener js/window "popstate" listener)
       (reset! popstate-listener listener)))
   (render!))

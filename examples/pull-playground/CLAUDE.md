@@ -48,27 +48,29 @@ The app uses a custom dispatch pattern — NOT Replicant's built-in action syste
 | Effect | Value | What happens |
 |--------|-------|--------------|
 | `:db` | `(fn [db] db')` | `swap! app-db update root-key f` |
-| `:pull` | `"pattern string"` | Execute via current mode's `:execute` |
-| `:pull` | `:keyword` | Named action (`:init`, `:reset`, `:schema`) |
+| `:pull` | `"pattern string"` | Execute pattern via `make-executor` |
+| `:pull` | `:keyword` | Named action (`:init`, `:seed`, `:schema`, `:data`) |
 | `:nav` | `:sandbox` / `:remote` | `pushState` URL navigation |
 | `:batch` | `(fn [db dispatcher] [...])` | Composed effects |
 
-### pull-api — noun-based API
+### make-executor — the ONLY mode-specific function
 
-Data structure you can read to understand each mode's API surface:
+Returns `(fn [pattern-str on-success on-error])`. Sandbox calls `remote/execute` in-process, remote sends HTTP POST. Everything else is mode-agnostic.
+
+### pull-api — mode-agnostic
+
+Single flat map, no mode branching. Every handler calls `(make-executor db)`:
 
 ```clojure
 (def pull-api
-  {:sandbox
-   {:execute (fn [dispatch! _db pattern] ...)
-    :reset   (fn [dispatch! _db] ...)}
-   :remote
-   {:execute (fn [dispatch! db pattern] ...)
-    :init    (fn [dispatch! db] ...)
-    :schema  (fn [dispatch! db] ...)}})
+  {:pattern (fn [dispatch! db pattern] ...)  ; execute user pattern
+   :data    (fn [dispatch! db] ...)          ; fetch all collections
+   :schema  (fn [dispatch! db] ...)          ; {:schema ?s} pattern
+   :seed    (fn [dispatch! db] ...)          ; {:seed {nil true}} mutation
+   :init    (fn [dispatch! db] ...)})        ; fetch data + schema
 ```
 
-Leaf functions receive `dispatch!` (created by dispatch-of) and call it back with result effects. This enables recursive async flows without a separate callback system.
+Schema and seed are pull-able data in the store — not separate endpoints. Schema is a plain map under `:schema`, seed is a `Mutable` reify under `:seed`.
 
 ### State layer
 
@@ -112,7 +114,7 @@ src/sg/flybot/playground/
 └── ui/core/
     ├── core.cljs            # Entry point, dispatch-of, pull-api, Transit client
     ├── state.cljc           # Pure state updaters (db → db)
-    ├── sandbox.cljc         # SCI-based pattern execution
+    ├── sandbox.cljc         # Sandbox via remote/execute with atom-sources
     └── views.cljc           # Replicant hiccup (dispatch! closures)
 ```
 
