@@ -6,7 +6,7 @@ on:
       - 'pull-playground-v*'
 
 env:
-  AWS_REGION: ap-southeast-1
+  AWS_REGION: ${{ vars.AWS_REGION }}
   S3_BUCKET: ${{ vars.PLAYGROUND_S3_BUCKET }}
   CLOUDFRONT_DISTRIBUTION_ID: ${{ vars.PLAYGROUND_CF_DISTRIBUTION_ID }}
 
