@@ -10,7 +10,7 @@
    [clojure.walk :as walk]
    [clojure.zip :as zip]
    [sg.flybot.pullable.schema :as schema]
-   [sg.flybot.pullable.util :refer [vars->]])
+   [sg.flybot.pullable.util :refer [vars-> variable?]])
   #?(:cljs (:require-macros [sg.flybot.pullable.impl])))
 
 ;;=============================================================================
@@ -1203,7 +1203,7 @@
   (and (seq? x)
        (let [fst (first x)]
          (or ;; Original form: (?x :opt ...)
-          (and (symbol? fst) (= \? (first (name fst))))
+          (variable? fst)
              ;; After matching-var-rewrite: ((? :var ...) :opt ...)
           (and (seq? fst) (= '? (first fst)) (= :var (second fst)))
              ;; Rewritten wildcard: ((? :any) :skip ...)
@@ -1385,9 +1385,7 @@
   [fst]
   (cond
     ;; Quantified var: ?x*, ?x+, ?x?, ?x*!, ?x+!
-    (and (symbol? fst)
-         (= \? (first (name fst)))
-         (parse-matching-var fst))
+    (and (variable? fst) (parse-matching-var fst))
     (let [{:keys [sym quantifier greedy?]} (parse-matching-var fst)
           var-sym (when sym (symbol (subs (name sym) 1)))]
       (case quantifier
@@ -1397,8 +1395,7 @@
         nil))
 
     ;; Simple var: ?x, ?_ (bare ? is not a var - it's the core pattern marker)
-    (and (symbol? fst)
-         (= \? (first (name fst)))
+    (and (variable? fst)
          (> (count (name fst)) 1)
          (not (re-find forbidden-var-chars (subs (name fst) 1))))
     (let [var-name (subs (name fst) 1)]
@@ -1818,7 +1815,7 @@
   [template vars]
   (walk/postwalk
    (fn [x]
-     (if (and (symbol? x) (= \? (first (name x))))
+     (if (variable? x)
        (let [nm (name x)
              ;; Strip ? prefix and any quantifier suffix
              base (if-let [[_ b] (re-matches #"\?([^\s\?\+\*\!]+)[\?\+\*]?\!?" nm)]
@@ -1922,7 +1919,7 @@
          vars (atom #{})
          _ (walk/postwalk
             (fn [x]
-              (when (and (symbol? x) (= \? (first (name x))))
+              (when (variable? x)
                 (let [nm (name x)
                       ;; Strip prefix ? and any suffix quantifiers
                       base (if-let [[_ b] (re-matches #"\?([^\s\?\+\*\!]+)[\?\+\*]?\!?" nm)]
