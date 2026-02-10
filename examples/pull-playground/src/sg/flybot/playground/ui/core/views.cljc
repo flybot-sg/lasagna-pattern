@@ -99,11 +99,9 @@
         [:div.panel-content
          (when (= mode :remote)
            [:div.remote-sections
-            [:div.remote-info
-             "Remote mode connects to a running Pull Pattern server. "
-             "Clone the repository and run the demo server locally to try it out."]
             [:div.editor-section.url-section
-             [:label "Server URL"]
+             [:label "Server URL"
+              [:span.info-hint {:data-tooltip "Remote mode connects to a running Pull Pattern server. Clone the repository and run the demo server locally."} "i"]]
              [:input {:type "text"
                       :value server-url
                       :placeholder "http://localhost:8081/api"
