@@ -15,14 +15,12 @@
    :error nil              ; Error message string
    :loading? false
    :selected-example nil   ; Index of selected example
-   ;; Sandbox mode
-   :sandbox-data nil       ; Snapshot: {:users [...] :posts [...] :config {...}}
-   :sandbox-schema nil     ; Malli hiccup form for autocomplete/tooltips
+   ;; Mode-agnostic (populated by pull-api handlers for current mode)
+   :data nil               ; Snapshot: {:users [...] :posts [...] :config {...}}
+   :schema nil             ; Malli hiccup form for autocomplete/tooltips
    :data-view :data        ; :data | :schema toggle
-   ;; Remote mode
-   :remote-data nil        ; Server snapshot: {:users [...] :posts [...] :config {...}}
+   ;; Remote mode config
    :server-url "http://localhost:8081/api"
-   :schema nil             ; Remote server schema
    :schema-loading? false
    :schema-error nil
    :sample-data nil        ; Generated sample data from schema
@@ -44,7 +42,7 @@
   (-> db
       (assoc :mode mode)
       (assoc :result nil :error nil :selected-example nil)
-      (assoc :schema nil :schema-error nil :sample-data nil)
+      (assoc :data nil :schema nil :schema-error nil :sample-data nil)
       (assoc :schema-view-mode :schema)))
 
 (defn set-result [db result]
@@ -53,21 +51,12 @@
 (defn set-error [db error]
   (assoc db :loading? false :error error :result nil))
 
-(defn set-sandbox-data [db snapshot]
-  (assoc db :sandbox-data snapshot))
-
-(defn set-sandbox-schema [db schema]
-  (assoc db :sandbox-schema schema))
-
-(defn set-remote-data [db data]
-  (assoc db :remote-data data))
+(defn set-data [db data]
+  (assoc db :data data))
 
 ;;=============================================================================
 ;; Remote mode updaters
 ;;=============================================================================
-
-(defn set-schema-loading [db]
-  (assoc db :schema nil :schema-error nil :schema-loading? true))
 
 (defn set-schema [db schema]
   (assoc db :schema-loading? false :schema schema :schema-error nil :sample-data nil))
@@ -99,10 +88,10 @@
 
 ^:rct/test
 (comment
-  ;; set-mode changes mode and clears results
-  (let [db (set-mode {:mode :sandbox :result {:data 1}} :remote)]
-    [(:mode db) (:result db)])
-  ;=> [:remote nil]
+  ;; set-mode changes mode and clears results and data
+  (let [db (set-mode {:mode :sandbox :result {:data 1} :data {:users []}} :remote)]
+    [(:mode db) (:result db) (:data db)])
+  ;=> [:remote nil nil]
 
   ;; clear-result nils out result and error
   (let [db (clear-result {:result {:a 1} :error "oops"})]
@@ -124,14 +113,9 @@
     [(:loading? db) (:error db)])
   ;=> [false "Parse error"]
 
-  ;; set-sandbox-data stores snapshot
-  (let [db (set-sandbox-data {} {:users [{:id 1}]})]
-    (:sandbox-data db))
-  ;=> {:users [{:id 1}]}
-
-  ;; set-remote-data stores remote server snapshot
-  (let [db (set-remote-data {} {:users [{:id 1}]})]
-    (:remote-data db))
+  ;; set-data stores snapshot
+  (let [db (set-data {} {:users [{:id 1}]})]
+    (:data db))
   ;=> {:users [{:id 1}]}
 
   ;; set-schema stores schema and clears sample-data

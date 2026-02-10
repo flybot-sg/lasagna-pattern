@@ -52,8 +52,9 @@
         [:div.header-right
          [:div.mode-toggle
           [:button {:class (when (= mode :sandbox) "active")
-                    :on {:click #(dispatch! {:db  (fn [db] (state/set-mode db :sandbox))
-                                             :nav :sandbox})}}
+                    :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :sandbox))
+                                             :nav  :sandbox
+                                             :pull :init})}}
            "Sandbox"]
           [:button {:class (when (= mode :remote) "active")
                     :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :remote))
@@ -75,8 +76,8 @@
 ;;-----------------------------------------------------------------------------
 
 (defn- data-display
-  "Read-only display of sample data with :data/:schema toggle and optional reset."
-  [{::keys [displayed-data displayed-schema data-view mode dispatch!]}]
+  "Read-only display of data with :data/:schema toggle and reset."
+  [{::keys [displayed-data displayed-schema data-view dispatch!]}]
   [:div.sandbox-data-section
    [:div.sandbox-header
     [:div.data-view-toggle
@@ -86,9 +87,8 @@
      [:button {:class (when (= data-view :schema) "active")
                :on {:click #(dispatch! {:db (fn [db] (assoc db :data-view :schema))})}}
       "Schema"]]
-    (when (= mode :sandbox)
-      [:button.reset-btn {:on {:click #(dispatch! {:pull :reset})}}
-       "Reset"])]
+    [:button.reset-btn {:on {:click #(dispatch! {:pull :seed})}}
+     "Reset"]]
    [:div.sandbox-content
     (let [text (format-result-pretty (if (= data-view :schema) displayed-schema displayed-data))]
       (edn/edn-display {:value text :placeholder "No data"}))]])
@@ -96,7 +96,7 @@
 #?(:cljs
    (defalias data-panel
      [{::keys [db dispatch!]}]
-     (let [{:keys [mode server-url sandbox-data sandbox-schema remote-data data-view]} db]
+     (let [{:keys [mode server-url data schema data-view]} db]
        [:div.panel.data-panel
         [:div.panel-header
          [:h2 "Data"]]
@@ -111,10 +111,9 @@
                       :placeholder "http://localhost:8081/api"
                       :on {:input #(dispatch! {:db (fn [db] (assoc db :server-url (.. % -target -value)))})}}]]])
          (data-display
-          {::displayed-data (if (= mode :remote) remote-data sandbox-data)
-           ::displayed-schema sandbox-schema
+          {::displayed-data data
+           ::displayed-schema schema
            ::data-view data-view
-           ::mode mode
            ::dispatch! dispatch!})]]))
 
    :clj
@@ -134,11 +133,7 @@
 #?(:cljs
    (defalias pattern-results-panel
      [{::keys [db dispatch!]}]
-     (let [{:keys [mode pattern-text loading? schema sandbox-schema autocomplete result error]} db
-           active-schema (case mode
-                           :remote schema
-                           :sandbox sandbox-schema
-                           nil)]
+     (let [{:keys [pattern-text loading? schema autocomplete result error]} db]
        [:div.panel.pattern-results-panel
         ;; Pattern section
         [:div.pattern-section
@@ -156,14 +151,14 @@
             :on-change #(dispatch! {:db (fn [db] (assoc db :pattern-text %))})
             :parinfer-mode :indent
             :editor-id pattern-editor-id
-            :schema (when (#{:remote :sandbox} mode) active-schema)
-            :hover-tooltips? (and (#{:remote :sandbox} mode) (some? active-schema))
-            :autocomplete (when (#{:remote :sandbox} mode) autocomplete)
+            :schema schema
+            :hover-tooltips? (some? schema)
+            :autocomplete autocomplete
             :on-autocomplete #(dispatch! {:db (fn [db] (state/show-autocomplete db %))})
             :on-autocomplete-hide #(dispatch! {:db state/hide-autocomplete})
             :on-autocomplete-select #(dispatch! {:db (fn [db] (state/select-autocomplete db %))})
             :on-autocomplete-move #(dispatch! {:db (fn [db] (state/move-autocomplete-selection db %))})})]
-         (when (and (#{:remote :sandbox} mode) autocomplete)
+         (when autocomplete
            (edn-i/editor-autocomplete
             {:editor-id pattern-editor-id
              :autocomplete autocomplete
@@ -282,6 +277,6 @@
   (format-result {:a 1}) ;=> "{:a 1}"
 
   ;; app-view returns container
-  (first (app-view {::db {:mode :sandbox :pattern-text ""}
+  (first (app-view {::db {:mode :sandbox :pattern-text "" :data nil :schema nil}
                     ::dispatch! identity})))
   ;=> :div.app-container)
