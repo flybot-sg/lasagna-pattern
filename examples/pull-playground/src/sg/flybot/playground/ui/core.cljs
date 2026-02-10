@@ -1,9 +1,10 @@
 (ns sg.flybot.playground.ui.core
   "Playground SPA entry point.
 
-   Uses a dispatch-of effect pattern:
+   Uses a dispatch-of effect pattern (like hibou):
    - :db    — pure state updater (swap! app-db update root-key f)
-   - :exec  — pattern execution (sandbox or remote)
+   - :pull  — pull pattern API (string or keyword, routed via pull-api)
+   - :nav   — URL navigation (pushState)
    - :batch — composed effects"
   (:require [replicant.dom :as r]
             [cognitect.transit :as t]
@@ -11,11 +12,14 @@
             [sg.flybot.playground.common.data :as data]
             [sg.flybot.playground.ui.core.state :as state]
             [sg.flybot.playground.ui.core.views :as views]
-            [sg.flybot.playground.ui.core.sandbox :as sandbox]))
+            [sg.flybot.playground.ui.core.sandbox :as sandbox]
+            [sg.flybot.pullable.remote :as remote]))
 
 (defonce app-db (atom {:app/playground state/initial-state}))
 
 (def ^:private root-key :app/playground)
+
+(defonce ^:private popstate-listener (atom nil))
 
 ;;=============================================================================
 ;; Remote API Client (Transit)
@@ -81,51 +85,60 @@
                   (on-error (.-message err)))))))
 
 ;;=============================================================================
-;; Exec Handlers
+;; Pull API
 ;;=============================================================================
 
-(defn- exec-sandbox [{:keys [pattern]} dispatcher]
-  (let [{:keys [result error snapshot]} (sandbox/execute! pattern)
-        dispatch! (dispatcher root-key)]
-    (if error
-      (dispatch! {:db #(state/set-error % error)})
-      (dispatch! {:db (fn [db]
-                        (-> db
-                            (state/set-result result)
-                            (state/set-sandbox-data snapshot)))}))))
+(def ^:private read-all-pattern
+  (pr-str (into {} (map (fn [k] [k (symbol (str "?" (name k)))])) (keys data/default-data))))
 
-(defn- exec-sandbox-reset [_effect-def dispatcher]
-  (let [snap (sandbox/reset-data!)
-        dispatch! (dispatcher root-key)]
-    (dispatch! {:db (fn [db]
-                      (-> db
-                          (state/set-sandbox-data snap)
-                          state/clear-result))})))
+(defn- pull-result->data
+  "Convert pull bindings (transit symbol keys) to keyword-keyed data map."
+  [result]
+  (into {} (map (fn [[k v]] [(keyword (name k)) v])) result))
 
-(defn- exec-remote [{:keys [pattern url]} dispatcher]
-  (let [dispatch! (dispatcher root-key)]
-    (pull! url pattern
-           (fn [result] (dispatch! {:db #(state/set-result % result)}))
-           (fn [error] (dispatch! {:db #(state/set-error % error)})))))
+(def ^:private pull-api
+  {:sandbox
+   {:execute
+    (fn [dispatch! _db pattern]
+      (let [{:keys [result error snapshot]} (sandbox/execute! pattern)]
+        (if error
+          (dispatch! {:db #(state/set-error % error)})
+          (dispatch! {:db #(-> % (state/set-result result)
+                               (state/set-sandbox-data snapshot))}))))
+    :reset
+    (fn [dispatch! _db]
+      (let [snap (sandbox/reset-data!)]
+        (dispatch! {:db #(-> % (state/set-sandbox-data snap) state/clear-result)})))}
 
-(defn- fetch-schema-remote [{:keys [url]} dispatcher]
-  (let [dispatch! (dispatcher root-key)]
-    (fetch-schema! url
-                   (fn [{:keys [schema sample]}]
-                     (dispatch! {:db (fn [db]
-                                       (-> db
-                                           (state/set-schema schema)
-                                           (assoc :sample-data sample)))}))
-                   (fn [error]
-                     (dispatch! {:db #(state/set-schema-error % error)})))))
-
-(defn- exec-handler [effect-def dispatcher]
-  (case (:type effect-def)
-    :sandbox       (exec-sandbox effect-def dispatcher)
-    :sandbox-reset (exec-sandbox-reset effect-def dispatcher)
-    :remote        (exec-remote effect-def dispatcher)
-    :fetch-schema  (fetch-schema-remote effect-def dispatcher)
-    (js/console.warn "Unknown exec type:" (:type effect-def))))
+   :remote
+   {:execute
+    (fn [dispatch! db pattern]
+      (let [url       (:server-url db)
+            mutation? (try (some? (remote/parse-mutation (reader/read-string pattern)))
+                           (catch :default _ false))]
+        (pull! url pattern
+               (fn [result]
+                 (dispatch! {:db #(state/set-result % result)})
+                 (when mutation?
+                   (pull! url read-all-pattern
+                          (fn [data]
+                            (dispatch! {:db #(state/set-remote-data % (pull-result->data data))}))
+                          (fn [_] nil))))
+               (fn [error]
+                 (dispatch! {:db #(state/set-error % error)})))))
+    :init
+    (fn [dispatch! db]
+      (pull! (:server-url db) read-all-pattern
+             (fn [result]
+               (dispatch! {:db #(state/set-remote-data % (pull-result->data result))}))
+             (fn [_] nil)))
+    :schema
+    (fn [dispatch! db]
+      (fetch-schema! (:server-url db)
+                     (fn [{:keys [schema sample]}]
+                       (dispatch! {:db #(-> % (state/set-schema schema) (assoc :sample-data sample))}))
+                     (fn [error]
+                       (dispatch! {:db #(state/set-schema-error % error)}))))}})
 
 ;;=============================================================================
 ;; Dispatch
@@ -136,7 +149,16 @@
     (doseq [[type effect-def] effects]
       (case type
         :db    (swap! app-db update root-key effect-def)
-        :exec  (exec-handler effect-def (partial dispatch-of app-db))
+        :pull  (let [db        (get @app-db root-key)
+                     api       (get pull-api (:mode db))
+                     dispatch! ((partial dispatch-of app-db) root-key)]
+                 (if (string? effect-def)
+                   ((:execute api) dispatch! db effect-def)
+                   (when-let [f (get api effect-def)]
+                     (f dispatch! db))))
+        :nav   (let [path (str "/" (name effect-def))]
+                 (when-not (= path (.-pathname js/location))
+                   (.pushState js/history nil "" path)))
         :batch (doseq [[dispatch! eff] (effect-def @app-db (partial dispatch-of app-db))]
                  (dispatch! eff))
         (js/console.warn "Unknown effect type:" type)))))
@@ -173,21 +195,31 @@
 ;; Initialization
 ;;=============================================================================
 
-(defn- detect-mode-from-url []
-  (when (= (.get (js/URLSearchParams. (.-search js/location)) "mode") "remote")
-    :remote))
+(defn- path->mode []
+  (if (= (.-pathname js/location) "/remote")
+    :remote
+    :sandbox))
 
 (defn ^:export init! []
   (reset! root-el (js/document.getElementById "app"))
   (init-theme!)
-  (let [snap (sandbox/init!)
-        mode (detect-mode-from-url)
+  (when (= (.-pathname js/location) "/")
+    (.replaceState js/history nil "" "/sandbox"))
+  (let [snap   (sandbox/init!)
+        mode   (path->mode)
         dispatch! (dispatch-of app-db root-key)]
     (dispatch! {:db (fn [db]
-                      (cond-> (-> db
-                                  (state/set-sandbox-data snap)
-                                  (state/set-sandbox-schema data/default-schema))
-                        mode (state/set-mode mode)))}))
+                      (-> db
+                          (state/set-sandbox-data snap)
+                          (state/set-sandbox-schema data/default-schema)
+                          (state/set-mode mode)))})
+    (when (= mode :remote)
+      (dispatch! {:pull :init}))
+    (when-let [prev @popstate-listener]
+      (.removeEventListener js/window "popstate" prev))
+    (let [listener (fn [_] (dispatch! {:db #(state/set-mode % (path->mode))}))]
+      (.addEventListener js/window "popstate" listener)
+      (reset! popstate-listener listener)))
   (render!))
 
 (init!)
