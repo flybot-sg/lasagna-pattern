@@ -29,14 +29,14 @@ bb dev examples/pull-playground
 
 ## Architecture
 
-### dispatch-of + pull-api (effects-as-data)
+### dispatch-of + handle-pull (effects-as-data)
 
 The app uses a custom dispatch pattern — NOT Replicant's built-in action system. Components close over `dispatch!` and call it directly with effect maps:
 
 ```clojure
 ;; Views dispatch effect maps
 (dispatch! {:db state/set-loading        ; pure state update
-            :pull (:pattern-text db)})   ; execute pattern
+            :pull :pattern})             ; execute user's pattern
 
 (dispatch! {:db #(state/set-mode % :remote)
             :nav :remote                 ; pushState URL
@@ -48,8 +48,7 @@ The app uses a custom dispatch pattern — NOT Replicant's built-in action syste
 | Effect | Value | What happens |
 |--------|-------|--------------|
 | `:db` | `(fn [db] db')` | `swap! app-db update root-key f` |
-| `:pull` | `"pattern string"` | Execute pattern via `make-executor` |
-| `:pull` | `:keyword` | Named action (`:init`, `:seed`, `:schema`, `:data`) |
+| `:pull` | `:keyword` | Operation (`:pattern`, `:init`, `:seed`, `:schema`, `:data`) |
 | `:nav` | `:sandbox` / `:remote` | `pushState` URL navigation |
 | `:batch` | `(fn [db dispatcher] [...])` | Composed effects |
 
@@ -57,17 +56,20 @@ The app uses a custom dispatch pattern — NOT Replicant's built-in action syste
 
 Returns `(fn [pattern-str on-success on-error])`. Sandbox calls `remote/execute` in-process, remote sends HTTP POST. Everything else is mode-agnostic.
 
-### pull-api — mode-agnostic
+### handle-pull — operation dispatch
 
-Single flat map, no mode branching. Every handler calls `(make-executor db)`:
+Builds the executor once, then dispatches by operation keyword:
 
 ```clojure
-(def pull-api
-  {:pattern (fn [dispatch! db pattern] ...)  ; execute user pattern
-   :data    (fn [dispatch! db] ...)          ; fetch all collections
-   :schema  (fn [dispatch! db] ...)          ; {:schema ?s} pattern
-   :seed    (fn [dispatch! db] ...)          ; {:seed {nil true}} mutation
-   :init    (fn [dispatch! db] ...)})        ; fetch data + schema
+(defn- handle-pull [dispatch! db op]
+  (let [exec (make-executor db)]
+    (case op
+      :pattern ...  ; execute (:pattern-text db) via exec
+      :data    ...  ; fetch all collections
+      :schema  ...  ; {:schema ?s} pattern
+      :seed    ...  ; {:seed {nil true}} mutation
+      :init    ...  ; (handle-pull ... :data) + (handle-pull ... :schema)
+      )))
 ```
 
 Schema and seed are pull-able data in the store — not separate endpoints. Schema is a plain map under `:schema`, seed is a `Mutable` reify under `:seed`.
@@ -90,7 +92,7 @@ bb test examples/pull-playground
 |-------|------|-----------------|
 | State updaters | `state.cljc` | Yes — pure functions |
 | View structure | `views.cljc` | Yes — hiccup data |
-| pull-api / dispatch | `core.cljs` | No — requires browser (SCI, fetch) |
+| handle-pull / dispatch | `core.cljs` | No — requires browser (SCI, fetch) |
 | Sandbox eval | `sandbox.cljc` | Yes — SCI runs on JVM |
 
 ### RCT conventions
@@ -112,7 +114,7 @@ src/sg/flybot/playground/
 ├── common/data.cljc        # Default sample data + schema
 ├── server/main.clj         # Demo backend (http-kit + remote handler)
 └── ui/core/
-    ├── core.cljs            # Entry point, dispatch-of, pull-api, Transit client
+    ├── core.cljs            # Entry point, dispatch-of, handle-pull, Transit client
     ├── state.cljc           # Pure state updaters (db → db)
     ├── sandbox.cljc         # Sandbox via remote/execute with atom-sources
     └── views.cljc           # Replicant hiccup (dispatch! closures)

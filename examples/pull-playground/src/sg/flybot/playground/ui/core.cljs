@@ -94,54 +94,50 @@
 ;; Pull API — mode-agnostic, everything is a pattern
 ;;=============================================================================
 
-(def ^:private pull-api
-  {:pattern
-   (fn [dispatch! db pattern]
-     (let [exec      (make-executor db)
-           mutation? (try (some? (remote/parse-mutation (reader/read-string pattern)))
-                          (catch :default _ false))]
-       (exec pattern
-             (fn [result]
-               (dispatch! {:db #(state/set-result % result)})
-               (when mutation?
-                 (exec read-all-pattern
-                       (fn [r] (dispatch! {:db #(state/set-data % (vars->data r))}))
-                       (fn [_] nil))))
-             (fn [error]
-               (dispatch! {:db #(state/set-error % error)})))))
+(defn- handle-pull
+  "Execute a pull pattern operation against the data store and update UI state."
+  [dispatch! db op]
+  (let [exec (make-executor db)]
+    (case op
+      :pattern
+      (let [pattern   (:pattern-text db)
+            mutation? (try (some? (remote/parse-mutation (reader/read-string pattern)))
+                           (catch :default _ false))]
+        (exec pattern
+              (fn [result]
+                (dispatch! {:db #(state/set-result % result)})
+                (when mutation?
+                  (exec read-all-pattern
+                        (fn [r] (dispatch! {:db #(state/set-data % (vars->data r))}))
+                        (fn [_] nil))))
+              (fn [error]
+                (dispatch! {:db #(state/set-error % error)}))))
 
-   :data
-   (fn [dispatch! db]
-     (let [exec (make-executor db)]
-       (exec read-all-pattern
-             (fn [r] (dispatch! {:db #(state/set-data % (vars->data r))}))
-             (fn [_] nil))))
+      :data
+      (exec read-all-pattern
+            (fn [r] (dispatch! {:db #(state/set-data % (vars->data r))}))
+            (fn [_] nil))
 
-   :schema
-   (fn [dispatch! db]
-     (let [exec (make-executor db)]
-       (exec "{:schema ?s}"
-             (fn [result]
-               (let [{:keys [schema]} (get result 's)]
-                 (dispatch! {:db #(state/set-schema % schema)})))
-             (fn [error]
-               (dispatch! {:db #(state/set-schema-error % error)})))))
+      :schema
+      (exec "{:schema ?s}"
+            (fn [result]
+              (let [{:keys [schema]} (get result 's)]
+                (dispatch! {:db #(state/set-schema % schema)})))
+            (fn [error]
+              (dispatch! {:db #(state/set-schema-error % error)})))
 
-   :seed
-   (fn [dispatch! db]
-     (let [exec (make-executor db)]
-       (exec "{:seed {nil true}}"
-             (fn [_]
-               (exec read-all-pattern
-                     (fn [r] (dispatch! {:db #(-> % (state/set-data (vars->data r)) state/clear-result)}))
-                     (fn [_] nil)))
-             (fn [error]
-               (dispatch! {:db #(state/set-error % error)})))))
+      :seed
+      (exec "{:seed {nil true}}"
+            (fn [_]
+              (exec read-all-pattern
+                    (fn [r] (dispatch! {:db #(-> % (state/set-data (vars->data r)) state/clear-result)}))
+                    (fn [_] nil)))
+            (fn [error]
+              (dispatch! {:db #(state/set-error % error)})))
 
-   :init
-   (fn [dispatch! db]
-     ((:data pull-api) dispatch! db)
-     ((:schema pull-api) dispatch! db))})
+      :init
+      (do (handle-pull dispatch! db :data)
+          (handle-pull dispatch! db :schema)))))
 
 ;;=============================================================================
 ;; Dispatch
@@ -152,12 +148,9 @@
     (doseq [[type effect-def] effects]
       (case type
         :db    (swap! app-db update root-key effect-def)
-        :pull  (let [db        (get @app-db root-key)
-                     dispatch! (dispatch-of app-db root-key)]
-                 (if (string? effect-def)
-                   ((:pattern pull-api) dispatch! db effect-def)
-                   (when-let [f (get pull-api effect-def)]
-                     (f dispatch! db))))
+        :pull  (handle-pull (dispatch-of app-db root-key)
+                            (get @app-db root-key)
+                            effect-def)
         :nav   (let [path (str "/" (name effect-def))]
                  (when-not (= path (.-pathname js/location))
                    (.pushState js/history nil "" path)))

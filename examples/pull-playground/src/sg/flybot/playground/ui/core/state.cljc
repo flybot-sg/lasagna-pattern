@@ -15,7 +15,7 @@
    :error nil              ; Error message string
    :loading? false
    :selected-example nil   ; Index of selected example
-   ;; Mode-agnostic (populated by pull-api handlers for current mode)
+   ;; Mode-agnostic (populated by handle-pull for current mode)
    :data nil               ; Snapshot: {:users [...] :posts [...] :config {...}}
    :schema nil             ; Malli hiccup form for autocomplete/tooltips
    :data-view :data        ; :data | :schema toggle

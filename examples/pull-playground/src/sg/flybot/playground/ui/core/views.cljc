@@ -125,7 +125,7 @@
        [:label "Pattern"]
        [:button.execute-btn
         {:on {:click #(dispatch! {:db state/set-loading
-                                  :pull (:pattern-text db)})}
+                                  :pull :pattern})}
          :disabled loading?}
         (if loading? "Executing..." "Execute")]]
       [:div.pattern-editor
