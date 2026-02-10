@@ -6,7 +6,7 @@ on:
       - 'flybot-site-v*'
 
 env:
-  AWS_REGION: ap-southeast-1
+  AWS_REGION: ${{ vars.AWS_REGION }}
   ECR_REPOSITORY: flybot-site
 
 jobs:
