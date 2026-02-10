@@ -122,9 +122,8 @@
      (let [exec (make-executor db)]
        (exec "{:schema ?s}"
              (fn [result]
-               (let [{:keys [schema sample]} (get result 's)]
-                 (dispatch! {:db #(cond-> (state/set-schema % schema)
-                                    sample (assoc :sample-data sample))})))
+               (let [{:keys [schema]} (get result 's)]
+                 (dispatch! {:db #(state/set-schema % schema)})))
              (fn [error]
                (dispatch! {:db #(state/set-schema-error % error)})))))
 
