@@ -2,6 +2,20 @@
   "Pure utility functions and macros with no domain knowledge."
   #?(:cljs (:require-macros [sg.flybot.pullable.util])))
 
+(defn variable?
+  "Check if x is a ?-prefixed pattern variable symbol."
+  [x]
+  (and (symbol? x) (= \? (first (name x)))))
+
+^:rct/test
+(comment
+  (variable? '?x) ;=> true
+  (variable? '?_) ;=> true
+  (variable? '?x*) ;=> true
+  (variable? 'x) ;=> false
+  (variable? :foo) ;=> false
+  (variable? "?x")) ;=> false)
+
 (defmacro vars->
   "Create a fn that destructures vars map.
    (vars-> [sym child] (mvar sym child))

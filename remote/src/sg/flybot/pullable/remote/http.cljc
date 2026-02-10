@@ -6,6 +6,7 @@
    [clojure.string :as str]
    [clojure.walk]
    [sg.flybot.pullable.impl :as pattern]
+   [sg.flybot.pullable.util :refer [variable?]]
    [sg.flybot.pullable.collection :as coll]
    #?(:clj [cognitect.transit :as transit])
    #?(:clj [clojure.edn :as edn])
@@ -384,12 +385,7 @@
   {:body (encode (prepare-for-wire response) format)
    :content-type (get content-types format)})
 
-(defn- variable?
-  "Check if value is a ?-prefixed symbol (pattern variable)."
-  [v]
-  (and (symbol? v) (= \? (first (name v)))))
-
-(defn- parse-mutation
+(defn parse-mutation
   "Detect if pattern is a mutation. Returns {:path :query :value} or nil.
 
    Flat mutation patterns:

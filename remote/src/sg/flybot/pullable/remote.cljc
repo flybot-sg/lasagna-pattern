@@ -102,6 +102,13 @@
          (pull-handler request)
          (next-handler request))))))
 
+(def parse-mutation
+  "Detect if pattern is a mutation. Returns {:path :query :value} or nil.
+
+   Mutations use nil (create) or map (update/delete) as query keys.
+   Read patterns (keyword query keys or ?-variable values) return nil."
+  http/parse-mutation)
+
 ;; For client implementations
 (def encode
   "Encode Clojure data to bytes. Format: :transit-json, :transit-msgpack, :edn."
@@ -115,6 +122,7 @@
 (comment
   make-handler ;=>> fn?
   wrap-api ;=>> fn?
+  parse-mutation ;=>> fn?
   encode ;=>> fn?
   decode ;=>> fn?
   )
