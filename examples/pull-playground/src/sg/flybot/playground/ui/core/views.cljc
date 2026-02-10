@@ -6,8 +6,8 @@
             [sg.flybot.playground.ui.core.views.edn-editor-interactive.editor :as edn]
             [sg.flybot.playground.ui.core.state :as state]
             [clojure.string :as str]
-            #?(:cljs [sg.flybot.playground.ui.core.views.edn-editor-interactive :as edn-i])
-            #?(:cljs [replicant.alias :refer [defalias]])))
+            [replicant.alias :refer [defalias]]
+            #?(:cljs [sg.flybot.playground.ui.core.views.edn-editor-interactive :as edn-i])))
 
 ;;=============================================================================
 ;; Helpers
@@ -43,33 +43,28 @@
 ;; Components
 ;;=============================================================================
 
-#?(:cljs
-   (defalias site-header
-     [{::keys [db dispatch!]}]
-     (let [{:keys [mode]} db]
-       [:header.site-header
-        [:h1 "Pull Pattern Playground"]
-        [:div.header-right
-         [:div.mode-toggle
-          [:button {:class (when (= mode :sandbox) "active")
-                    :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :sandbox))
-                                             :nav  :sandbox
-                                             :pull :init})}}
-           "Sandbox"]
-          [:button {:class (when (= mode :remote) "active")
-                    :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :remote))
-                                             :nav  :remote
-                                             :pull :init})}}
-           "Remote"]]
+(defalias site-header
+  [{::keys [db dispatch!]}]
+  (let [{:keys [mode]} db]
+    [:header.site-header
+     [:h1 "Pull Pattern Playground"]
+     [:div.header-right
+      [:div.mode-toggle
+       [:button {:class (when (= mode :sandbox) "active")
+                 :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :sandbox))
+                                          :nav  :sandbox
+                                          :pull :init})}}
+        "Sandbox"]
+       [:button {:class (when (= mode :remote) "active")
+                 :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :remote))
+                                          :nav  :remote
+                                          :pull :init})}}
+        "Remote"]]
+      #?(:cljs
          [:button.theme-toggle {:title "Toggle theme"
                                 :on {:click #(js/sg.flybot.playground.ui.core.toggle_theme_BANG_)}}
           [:span.show-light (moon-icon)]
-          [:span.show-dark (sun-icon)]]]])))
-
-#?(:clj
-   (defn site-header [{}]
-     [:header.site-header
-      [:h1 "Pull Pattern Playground"]]))
+          [:span.show-dark (sun-icon)]])]]))
 
 ;;-----------------------------------------------------------------------------
 ;; Data Panel
@@ -93,36 +88,27 @@
     (let [text (format-result-pretty (if (= data-view :schema) displayed-schema displayed-data))]
       (edn/edn-display {:value text :placeholder "No data"}))]])
 
-#?(:cljs
-   (defalias data-panel
-     [{::keys [db dispatch!]}]
-     (let [{:keys [mode server-url data schema data-view]} db]
-       [:div.panel.data-panel
-        [:div.panel-header
-         [:h2 "Data"]]
-        [:div.panel-content
-         (when (= mode :remote)
-           [:div.remote-sections
-            [:div.editor-section.url-section
-             [:label "Server URL"
-              [:span.info-hint {:data-tooltip "Remote mode connects to a running Pull Pattern server. Clone the repository and run the demo server locally."} "i"]]
-             [:input {:type "text"
-                      :value server-url
-                      :placeholder "http://localhost:8081/api"
-                      :on {:input #(dispatch! {:db (fn [db] (assoc db :server-url (.. % -target -value)))})}}]]])
-         (data-display
-          {::displayed-data data
-           ::displayed-schema schema
-           ::data-view data-view
-           ::dispatch! dispatch!})]]))
-
-   :clj
-   (defn data-panel [{}]
-     [:div.panel.data-panel
-      [:div.panel-header
-       [:h2 "Data"]]
-      [:div.panel-content
-       [:div "Sample data"]]]))
+(defalias data-panel
+  [{::keys [db dispatch!]}]
+  (let [{:keys [mode server-url data schema data-view]} db]
+    [:div.panel.data-panel
+     [:div.panel-header
+      [:h2 "Data"]]
+     [:div.panel-content
+      (when (= mode :remote)
+        [:div.remote-sections
+         [:div.editor-section.url-section
+          [:label "Server URL"
+           [:span.info-hint {:data-tooltip "Remote mode connects to a running Pull Pattern server. Clone the repository and run the demo server locally."} "i"]]
+          [:input {:type "text"
+                   :value server-url
+                   :placeholder "http://localhost:8081/api"
+                   :on {:input #(dispatch! {:db (fn [db] (assoc db :server-url (.. % -target -value)))})}}]]])
+      (data-display
+       {::displayed-data data
+        ::displayed-schema schema
+        ::data-view data-view
+        ::dispatch! dispatch!})]]))
 
 ;;-----------------------------------------------------------------------------
 ;; Pattern + Results Panel
@@ -130,21 +116,20 @@
 
 (def ^:private pattern-editor-id "pattern-editor")
 
-#?(:cljs
-   (defalias pattern-results-panel
-     [{::keys [db dispatch!]}]
-     (let [{:keys [pattern-text loading? schema autocomplete result error]} db]
-       [:div.panel.pattern-results-panel
-        ;; Pattern section
-        [:div.pattern-section
-         [:div.section-header
-          [:label "Pattern"]
-          [:button.execute-btn
-           {:on {:click #(dispatch! {:db state/set-loading
-                                     :pull (:pattern-text db)})}
-            :disabled loading?}
-           (if loading? "Executing..." "Execute")]]
-         [:div.pattern-editor
+(defalias pattern-results-panel
+  [{::keys [db dispatch!]}]
+  (let [{:keys [pattern-text loading? schema autocomplete result error]} db]
+    [:div.panel.pattern-results-panel
+     [:div.pattern-section
+      [:div.section-header
+       [:label "Pattern"]
+       [:button.execute-btn
+        {:on {:click #(dispatch! {:db state/set-loading
+                                  :pull (:pattern-text db)})}
+         :disabled loading?}
+        (if loading? "Executing..." "Execute")]]
+      [:div.pattern-editor
+       #?(:cljs
           (edn-i/edn-editor
            {:value pattern-text
             :placeholder "Enter a pull pattern, e.g. {:name ?n}"
@@ -157,93 +142,65 @@
             :on-autocomplete #(dispatch! {:db (fn [db] (state/show-autocomplete db %))})
             :on-autocomplete-hide #(dispatch! {:db state/hide-autocomplete})
             :on-autocomplete-select #(dispatch! {:db (fn [db] (state/select-autocomplete db %))})
-            :on-autocomplete-move #(dispatch! {:db (fn [db] (state/move-autocomplete-selection db %))})})]
+            :on-autocomplete-move #(dispatch! {:db (fn [db] (state/move-autocomplete-selection db %))})})
+          :clj
+          [:textarea {:value pattern-text
+                      :placeholder "Enter a pull pattern, e.g. {:name ?n}"}])]
+      #?(:cljs
          (when autocomplete
            (edn-i/editor-autocomplete
             {:editor-id pattern-editor-id
              :autocomplete autocomplete
              :on-change #(dispatch! {:db (fn [db] (assoc db :pattern-text %))})
              :on-autocomplete-hide #(dispatch! {:db state/hide-autocomplete})
-             :on-autocomplete-select #(dispatch! {:db (fn [db] (state/select-autocomplete db %))})}))]
-        ;; Results section
-        [:div.results-section
-         [:div.section-header
-          [:label "Results"]]
-         [:div.results-content
-          (cond
-            loading?
-            [:div.loading "Executing pattern..."]
+             :on-autocomplete-select #(dispatch! {:db (fn [db] (state/select-autocomplete db %))})})))]
+     [:div.results-section
+      [:div.section-header
+       [:label "Results"]]
+      [:div.results-content
+       (cond
+         loading?
+         [:div.loading "Executing pattern..."]
 
-            error
-            [:div.result-value.error error]
+         error
+         [:div.result-value.error error]
 
-            result
-            [:div.result-value.success
-             (edn/highlight-edn (format-result-pretty result))]
+         result
+         [:div.result-value.success
+          (edn/highlight-edn (format-result-pretty result))]
 
-            :else
-            [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]]))
-
-   :clj
-   (defn pattern-results-panel [{::keys [db dispatch!]}]
-     (let [{:keys [pattern-text result error]} db]
-       [:div.panel.pattern-results-panel
-        [:div.pattern-section
-         [:div.section-header
-          [:label "Pattern"]
-          [:button.execute-btn "Execute"]]
-         [:div.pattern-editor
-          [:textarea {:value pattern-text
-                      :placeholder "Enter a pull pattern, e.g. {:name ?n}"}]]]
-        [:div.results-section
-         [:div.section-header [:label "Results"]]
-         [:div.results-content
-          (cond
-            error [:div.result-value.error error]
-            result [:div.result-value.success (format-result-pretty result)]
-            :else [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]])))
+         :else
+         [:div.result-value.empty "Enter a pattern and data, then click Execute"])]]]))
 
 ;;-----------------------------------------------------------------------------
 ;; Examples Panel
 ;;-----------------------------------------------------------------------------
 
-#?(:cljs
-   (defalias examples-panel
-     [{::keys [selected-example dispatch!]}]
-     [:div.panel.examples-panel
-      [:div.panel-header
-       [:h2 "Examples"]]
-      [:div.panel-content
-       [:ul.example-list
-        (for [[idx example] (map-indexed vector examples/examples)]
-          [:li {:replicant/key idx
-                :class (when (= idx selected-example) "active")
-                :title (:description example)
-                :on {:click #(dispatch!
-                              {:db (fn [db]
-                                     (-> db
-                                         (assoc :pattern-text (:pattern example)
-                                                :selected-example idx)
-                                         state/clear-result))})}}
-           (:name example)])]
-       [:div.syntax-reference
-        [:h3 "Syntax Reference"]
-        [:div.syntax-list
-         (for [{:keys [syntax description]} examples/syntax-reference]
-           [:div.syntax-item {:replicant/key syntax}
-            [:code syntax]
-            [:span description]])]]]])
-
-   :clj
-   (defn examples-panel [{::keys [selected-example dispatch!]}]
-     [:div.panel.examples-panel
-      [:div.panel-header [:h2 "Examples"]]
-      [:div.panel-content
-       [:ul.example-list
-        (for [[idx example] (map-indexed vector examples/examples)]
-          [:li {:replicant/key idx
-                :class (when (= idx selected-example) "active")}
-           (:name example)])]]]))
+(defalias examples-panel
+  [{::keys [selected-example dispatch!]}]
+  [:div.panel.examples-panel
+   [:div.panel-header
+    [:h2 "Examples"]]
+   [:div.panel-content
+    [:ul.example-list
+     (for [[idx example] (map-indexed vector examples/examples)]
+       [:li {:replicant/key idx
+             :class (when (= idx selected-example) "active")
+             :title (:description example)
+             :on {:click #(dispatch!
+                           {:db (fn [db]
+                                  (-> db
+                                      (assoc :pattern-text (:pattern example)
+                                             :selected-example idx)
+                                      state/clear-result))})}}
+        (:name example)])]
+    [:div.syntax-reference
+     [:h3 "Syntax Reference"]
+     [:div.syntax-list
+      (for [{:keys [syntax description]} examples/syntax-reference]
+        [:div.syntax-item {:replicant/key syntax}
+         [:code syntax]
+         [:span description]])]]]])
 
 ;;=============================================================================
 ;; App Root
@@ -252,17 +209,12 @@
 (defn app-view [{::keys [db dispatch!]}]
   (let [{:keys [selected-example]} db]
     [:div.app-container
-     #?(:cljs [::site-header {::db db ::dispatch! dispatch!}]
-        :clj  (site-header {::db db ::dispatch! dispatch!}))
+     [::site-header {::db db ::dispatch! dispatch!}]
      [:div.main-content.with-sidebar
-      #?(:cljs [::data-panel {::db db ::dispatch! dispatch!}]
-         :clj  (data-panel {::db db ::dispatch! dispatch!}))
-      #?(:cljs [::pattern-results-panel {::db db ::dispatch! dispatch!}]
-         :clj  (pattern-results-panel {::db db ::dispatch! dispatch!}))
-      #?(:cljs [::examples-panel {::selected-example selected-example
-                                  ::dispatch! dispatch!}]
-         :clj  (examples-panel {::selected-example selected-example
-                                ::dispatch! dispatch!}))]]))
+      [::data-panel {::db db ::dispatch! dispatch!}]
+      [::pattern-results-panel {::db db ::dispatch! dispatch!}]
+      [::examples-panel {::selected-example selected-example
+                         ::dispatch! dispatch!}]]]))
 
 ;;=============================================================================
 ;; Tests

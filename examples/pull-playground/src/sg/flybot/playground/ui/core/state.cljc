@@ -21,10 +21,7 @@
    :data-view :data        ; :data | :schema toggle
    ;; Remote mode config
    :server-url "http://localhost:8081/api"
-   :schema-loading? false
    :schema-error nil
-   :sample-data nil        ; Generated sample data from schema
-   :schema-view-mode :schema ; :schema | :sample toggle
    ;; Autocomplete
    :autocomplete nil})     ; {:completions [...] :selected 0 :prefix ":" :x :y}
 
@@ -42,8 +39,7 @@
   (-> db
       (assoc :mode mode)
       (assoc :result nil :error nil :selected-example nil)
-      (assoc :data nil :schema nil :schema-error nil :sample-data nil)
-      (assoc :schema-view-mode :schema)))
+      (assoc :data nil :schema nil :schema-error nil)))
 
 (defn set-result [db result]
   (assoc db :loading? false :result result :error nil))
@@ -59,10 +55,10 @@
 ;;=============================================================================
 
 (defn set-schema [db schema]
-  (assoc db :schema-loading? false :schema schema :schema-error nil :sample-data nil))
+  (assoc db :schema schema :schema-error nil))
 
 (defn set-schema-error [db error]
-  (assoc db :schema-loading? false :schema nil :schema-error error :sample-data nil))
+  (assoc db :schema nil :schema-error error))
 
 ;;=============================================================================
 ;; Autocomplete updaters
@@ -118,10 +114,10 @@
     (:data db))
   ;=> {:users [{:id 1}]}
 
-  ;; set-schema stores schema and clears sample-data
-  (let [db (set-schema {:schema-loading? true :sample-data {:old "data"}} [:map [:name :string]])]
-    [(:schema-loading? db) (:schema db) (:sample-data db)])
-  ;=> [false [:map [:name :string]] nil]
+  ;; set-schema stores schema and clears error
+  (let [db (set-schema {:schema-error "old"} [:map [:name :string]])]
+    [(:schema db) (:schema-error db)])
+  ;=> [[:map [:name :string]] nil]
 
   ;; move-autocomplete-selection wraps around
   (let [db {:autocomplete {:completions [:a :b :c] :selected 2}}]
