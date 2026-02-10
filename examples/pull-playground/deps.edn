@@ -7,18 +7,17 @@
         ring/ring-core {:mvn/version "1.15.3"}
         com.cognitect/transit-clj {:mvn/version "1.1.347"}
         parinferish/parinferish {:mvn/version "0.8.0"}
-        metosin/malli {:mvn/version "0.20.0"}}
+        metosin/malli {:mvn/version "0.20.0"}
+        no.cjohansen/replicant {:mvn/version "2025.12.1"}}
  :aliases
  {:dev {:extra-paths ["dev"]
         :extra-deps {io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
                      nrepl/nrepl {:mvn/version "1.5.2"}
-                     cider/cider-nrepl {:mvn/version "0.58.0"}
-                     no.cjohansen/replicant {:mvn/version "2025.12.1"}}}
+                     cider/cider-nrepl {:mvn/version "0.58.0"}}}
   :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
         :exec-args {:dirs #{"src"}}}
   :run {:main-opts ["-m" "sg.flybot.playground.server.main"]}
   :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "3.3.5"}
-                      no.cjohansen/replicant {:mvn/version "2025.12.1"}
                       com.cognitect/transit-cljs {:mvn/version "0.8.280"}
                       org.babashka/sci {:mvn/version "0.12.51"}
                       parinferish/parinferish {:mvn/version "0.8.0"}}}}}
