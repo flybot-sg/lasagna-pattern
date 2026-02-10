@@ -109,6 +109,28 @@
    Read patterns (keyword query keys or ?-variable values) return nil."
   http/parse-mutation)
 
+(def execute
+  "Execute a pull pattern directly (no HTTP). Used by in-process callers
+   like browser sandboxes that share the same execution engine as the server.
+
+   api-fn:  (fn [context] {:data ... :schema ... :errors ...})
+   pattern: Clojure data structure (EDN)
+   opts:    {:params  {...}  ; $-param substitution
+             :resolve fn     ; symbol resolver (default: safe whitelist)
+             :eval-fn fn     ; form evaluator (default: blocked)
+             :context map}   ; passed to api-fn
+
+   Returns vars map on success, {:errors [...]} on failure.
+
+   ```clojure
+   (def api-fn
+     (fn [_ctx] {:data {:posts posts-coll}}))
+
+   (execute api-fn '{:posts ?all})
+   ;; => {'all [...]}
+   ```"
+  http/execute)
+
 ;; For client implementations
 (def encode
   "Encode Clojure data to bytes. Format: :transit-json, :transit-msgpack, :edn."
@@ -123,6 +145,7 @@
   make-handler ;=>> fn?
   wrap-api ;=>> fn?
   parse-mutation ;=>> fn?
+  execute ;=>> fn?
   encode ;=>> fn?
   decode ;=>> fn?
   )
