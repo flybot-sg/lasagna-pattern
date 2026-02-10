@@ -46,9 +46,6 @@
     :description "Delete with nil value — auto-detected as mutation"
     :pattern "{:users {{:id 2} nil}}"}])
 
-(defn examples-for-mode [mode]
-  (filter #(let [m (:mode %)] (or (nil? m) (= mode m))) examples))
-
 (def syntax-reference
   [{:syntax "?x" :description "Bind value to x"}
    {:syntax "?_" :description "Wildcard (match any)"}
@@ -64,7 +61,5 @@
 
 ^:rct/test
 (comment
-  (count (examples-for-mode :sandbox)) ;=> 11
-  (count (examples-for-mode :remote)) ;=> 11
-
-  (every? #(nil? (:mode %)) examples)) ;=> true)
+  (count examples) ;=> 11
+  (:name (first examples))) ;=> "List all users")

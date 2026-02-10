@@ -42,7 +42,8 @@
            (str " at " (pr-str path))))))
 
 (defn- pull!
-  "Execute a pull query against a remote server."
+  "Execute a pull query against a remote server.
+   Always reads body — errors are transit-encoded in the response."
   [url pattern-str on-success on-error]
   (try
     (let [pattern (reader/read-string pattern-str)]
@@ -63,7 +64,8 @@
       (on-error (str "Parse error: " (.-message e))))))
 
 (defn- fetch-schema!
-  "Fetch schema from remote server."
+  "Fetch schema from remote server.
+   Checks resp.ok — schema endpoint returns plain HTTP errors, not transit."
   [url on-success on-error]
   (let [schema-url (str url "/_schema")]
     (-> (js/fetch schema-url
