@@ -456,43 +456,46 @@
       (failure (error :execution-error
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
 
+(defn execute
+  "Execute a pull pattern against an api-fn. Returns vars map or {:errors [...]}.
+
+   Used by both the Ring handler and direct callers (e.g., browser sandbox).
+
+   api-fn:  (fn [context] {:data ... :schema ... :errors ...})
+   pattern: Clojure data structure (EDN)
+   opts:    {:params  {...}  ; $-param substitution
+             :resolve fn     ; symbol resolver (default: safe whitelist)
+             :eval-fn fn     ; form evaluator (default: blocked)
+             :context map}   ; passed to api-fn (default: {})"
+  ([api-fn pattern] (execute api-fn pattern {}))
+  ([api-fn pattern opts]
+   (try
+     (let [resolved (resolve-params pattern (:params opts))
+           _ (validate-pattern-depth! resolved)
+           ctx (or (:context opts) {})]
+       (if-let [mutation (parse-mutation resolved)]
+         (execute-mutation api-fn ctx mutation)
+         (let [{:keys [data schema]} (api-fn ctx)
+               compiled (pattern/compile-pattern
+                         resolved
+                         (cond-> (select-keys opts [:resolve :eval-fn])
+                           (not (:resolve opts)) (assoc :resolve safe-resolve)
+                           (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
+                           schema (assoc :schema schema)))
+               result (compiled (pattern/vmr data))]
+           (if (pattern/failure? result)
+             (failure (match-failure->error result))
+             (success (:val result) (:vars result))))))
+     (catch #?(:clj Exception :cljs js/Error) e
+       (failure (error :execution-error
+                       #?(:clj (.getMessage e) :cljs (.-message e))))))))
+
 (defn- execute-pull
-  "Execute pull pattern against API data.
-   Params in pull-request are used for:
-   1. Pattern parameterization: $key in pattern replaced with value
-   2. Ring request params: merged into ring-request :params
-
-   api-fn returns {:data ... :schema ... :errors {:detect fn :codes map}}
-
-   Security: Patterns are compiled with sandboxed resolve/eval to prevent
-   arbitrary code execution. Only whitelisted predicates are allowed."
+  "Execute pull pattern against API data. Delegates to `execute`."
   [api-fn ring-request pull-request]
-  (try
-    (let [params (:params pull-request)
-          ;; Resolve $params in pattern using rule-based substitution
-          resolved-pattern (resolve-params (:pattern pull-request) params)
-          ;; Validate pattern depth to prevent DoS
-          _ (validate-pattern-depth! resolved-pattern)
-          ;; Also merge params into ring request for API use
-          ring-request (update ring-request :params merge params)]
-      ;; Check if it's a mutation pattern first
-      (if-let [mutation (parse-mutation resolved-pattern)]
-        (execute-mutation api-fn ring-request mutation)
-        ;; Otherwise execute as read pattern
-        (let [{:keys [data schema]} (api-fn ring-request)
-              ;; SECURITY: Use sandboxed resolve/eval to prevent code execution
-              compiled (pattern/compile-pattern
-                        resolved-pattern
-                        (cond-> {:resolve safe-resolve
-                                 :eval-fn safe-eval}
-                          schema (assoc :schema schema)))
-              result (compiled (pattern/vmr data))]
-          (if (pattern/failure? result)
-            (failure (match-failure->error result))
-            (success (:val result) (:vars result))))))
-    (catch #?(:clj Exception :cljs js/Error) e
-      (failure (error :execution-error
-                      #?(:clj (.getMessage e) :cljs (.-message e)))))))
+  (execute api-fn (:pattern pull-request)
+           {:params  (:params pull-request)
+            :context ring-request}))
 
 (defn- handle-pull [api-fn ring-request]
   (let [req-fmt (or (parse-content-type (get-in ring-request [:headers "content-type"]))
@@ -604,5 +607,35 @@
   (response->http-status {:errors [{:code :forbidden}]} {:forbidden 403}) ;=> 403
   (response->http-status {:errors [{:code :custom}]} {:custom 418}) ;=> 418
   (response->http-status {:errors [{:code :unknown}]} nil) ;=> 400
+
+  ;; --- execute ---
+
+  (require '[sg.flybot.pullable.collection :as coll])
+
+  (def test-api-fn
+    (let [src (coll/atom-source {:initial [{:id 1 :name "Alice"} {:id 2 :name "Bob"}]})
+          items (coll/collection src)]
+      (fn [_ctx] {:data {:users items}})))
+
+  (execute test-api-fn '{:users ?all})
+  ;=>> {'all vector?}
+
+  (get (execute test-api-fn '{:users {{:id 1} ?u}}) 'u)
+  ;=>> {:id 1 :name "Alice"}
+
+  (get (execute test-api-fn '{:users {nil {:id 99 :name "Carol"}}}) 'users)
+  ;=>> {:id 3 :name "Carol"}
+
+  (execute test-api-fn '{:users {{:id 2} nil}})
+  ;=>> {'users true}
+
+  (:errors (execute test-api-fn '{:users (?x :when string?)}))
+  ;=>> [{:code :match-failure}]
+
+  (:errors (execute test-api-fn '{:missing {nil {:id 1}}}))
+  ;=>> [{:code :invalid-collection}]
+
+  (get (execute test-api-fn '{:users {{:id $uid} ?u}} {:params {:uid 1}}) 'u)
+  ;=>> {:id 1 :name "Alice"}
   )
 
