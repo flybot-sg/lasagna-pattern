@@ -2,7 +2,6 @@
   "Demo server for testing remote mode.
    Uses standard Remote Pull Protocol v0.2 handler."
   (:require [org.httpkit.server :as http]
-            [ring.middleware.cors :refer [wrap-cors]]
             [ring.middleware.params :refer [wrap-params]]
             [sg.flybot.playground.common.data :as data]
             [sg.flybot.pullable.remote :as remote]
@@ -10,6 +9,24 @@
             [sg.flybot.pullable.sample :as sample]
             [sg.flybot.pullable.malli]
             [malli.core :as m]))
+
+;;=============================================================================
+;; Middleware
+;;=============================================================================
+
+(defn- wrap-cors
+  "Add CORS headers for cross-origin requests."
+  [handler]
+  (fn [request]
+    (let [origin (get-in request [:headers "origin"] "*")]
+      (if (= :options (:request-method request))
+        {:status 204
+         :headers {"Access-Control-Allow-Origin" origin
+                   "Access-Control-Allow-Methods" "GET, POST, OPTIONS"
+                   "Access-Control-Allow-Headers" "Content-Type, Accept"
+                   "Access-Control-Max-Age" "86400"}}
+        (-> (handler request)
+            (assoc-in [:headers "Access-Control-Allow-Origin"] origin))))))
 
 ;;=============================================================================
 ;; Handlers
@@ -24,19 +41,15 @@
      :headers {"Content-Type" "text/plain"}
      :body "OK"}))
 
-(defn- make-app [{:keys [data schema]}]
+(defn- make-app [{:keys [data schema sample]}]
   (let [api-fn       (fn [_ring-request]
-                       {:data   data
-                        :schema schema
-                        :sample (sample/generate schema {:size 10 :seed 42 :min 5})})
+                       {:data data :schema schema :sample sample})
         pull-handler (remote/make-handler api-fn)]
     (-> (fn [request]
           (or (health-handler request)
               (pull-handler request)))
         wrap-params
-        (wrap-cors :access-control-allow-origin [#".*"]
-                   :access-control-allow-methods [:get :post :options]
-                   :access-control-allow-headers ["Content-Type" "Accept"]))))
+        wrap-cors)))
 
 ;;=============================================================================
 ;; System Lifecycle
@@ -51,7 +64,8 @@
                  :posts  (coll/collection (:posts sources))
                  :config (:config data/default-data)}
         schema  (m/schema data/default-schema)
-        app     (make-app {:data colls :schema schema})
+        sample  (sample/generate schema {:size 10 :seed 42 :min 5})
+        app     (make-app {:data colls :schema schema :sample sample})
         stop-fn (http/run-server app {:port port})]
     (reset! system {:stop-fn stop-fn :data colls :schema schema})
     (println (str "Server running at http://localhost:" port))))

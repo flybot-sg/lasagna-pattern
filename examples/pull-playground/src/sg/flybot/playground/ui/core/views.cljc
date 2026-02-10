@@ -220,39 +220,38 @@
 
 #?(:cljs
    (defalias examples-panel
-     [{::keys [mode selected-example dispatch!]}]
-     (let [mode-examples (examples/examples-for-mode mode)]
-       [:div.panel.examples-panel
-        [:div.panel-header
-         [:h2 "Examples"]]
-        [:div.panel-content
-         [:ul.example-list
-          (for [[idx example] (map-indexed vector mode-examples)]
-            [:li {:replicant/key (str (name mode) "-" idx)
-                  :class (when (= idx selected-example) "active")
-                  :title (:description example)
-                  :on {:click #(dispatch!
-                                {:db (fn [db]
-                                       (-> db
-                                           (assoc :pattern-text (:pattern example)
-                                                  :selected-example idx)
-                                           state/clear-result))})}}
-             (:name example)])]
-         [:div.syntax-reference
-          [:h3 "Syntax Reference"]
-          [:div.syntax-list
-           (for [{:keys [syntax description]} examples/syntax-reference]
-             [:div.syntax-item {:replicant/key syntax}
-              [:code syntax]
-              [:span description]])]]]]))
+     [{::keys [selected-example dispatch!]}]
+     [:div.panel.examples-panel
+      [:div.panel-header
+       [:h2 "Examples"]]
+      [:div.panel-content
+       [:ul.example-list
+        (for [[idx example] (map-indexed vector examples/examples)]
+          [:li {:replicant/key idx
+                :class (when (= idx selected-example) "active")
+                :title (:description example)
+                :on {:click #(dispatch!
+                              {:db (fn [db]
+                                     (-> db
+                                         (assoc :pattern-text (:pattern example)
+                                                :selected-example idx)
+                                         state/clear-result))})}}
+           (:name example)])]
+       [:div.syntax-reference
+        [:h3 "Syntax Reference"]
+        [:div.syntax-list
+         (for [{:keys [syntax description]} examples/syntax-reference]
+           [:div.syntax-item {:replicant/key syntax}
+            [:code syntax]
+            [:span description]])]]]])
 
    :clj
-   (defn examples-panel [{::keys [mode selected-example dispatch!]}]
+   (defn examples-panel [{::keys [selected-example dispatch!]}]
      [:div.panel.examples-panel
       [:div.panel-header [:h2 "Examples"]]
       [:div.panel-content
        [:ul.example-list
-        (for [[idx example] (map-indexed vector (examples/examples-for-mode mode))]
+        (for [[idx example] (map-indexed vector examples/examples)]
           [:li {:replicant/key idx
                 :class (when (= idx selected-example) "active")}
            (:name example)])]]]))
@@ -271,11 +270,9 @@
          :clj  (data-panel {::db db ::dispatch! dispatch!}))
       #?(:cljs [::pattern-results-panel {::db db ::dispatch! dispatch!}]
          :clj  (pattern-results-panel {::db db ::dispatch! dispatch!}))
-      #?(:cljs [::examples-panel {::mode mode
-                                  ::selected-example selected-example
+      #?(:cljs [::examples-panel {::selected-example selected-example
                                   ::dispatch! dispatch!}]
-         :clj  (examples-panel {::mode mode
-                                ::selected-example selected-example
+         :clj  (examples-panel {::selected-example selected-example
                                 ::dispatch! dispatch!}))]]))
 
 ;;=============================================================================
