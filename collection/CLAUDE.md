@@ -1,12 +1,26 @@
 # Collection
 
-CRUD collection abstraction that keeps `pattern` and `remote` generic by providing a dedicated place for client-specific data logic.
+The component that makes patterns bidirectional — enabling read AND write through the same pull syntax.
 
 ## Why This Component Exists
 
-`pattern` matches data. `remote` serves it over HTTP. Neither knows how your data is stored or what rules govern access. **Collection bridges that gap**: it wraps any data source (Datahike, atoms, APIs, files) in a uniform `ILookup + Seqable + Mutable` interface that pattern matching and remote serving consume without coupling to your storage layer.
+Without `collection`, patterns are read-only (SELECT). `collection` introduces the `Mutable` protocol, which elevates patterns to full read-write round-trips: a mutation pattern like `{:posts {nil data}}` creates an entity AND returns it in the response.
 
-Without collection, every consumer of pattern/remote would reinvent CRUD wrappers, query validation, serialization, and access control inline. Collection provides the canonical place for all of that.
+This is what makes the pull-pattern system fundamentally different from REST or GraphQL: **every interaction is a round-trip that returns data**, whether it's a read or a write.
+
+`collection` wraps any data source (Datahike, atoms, APIs, files) in a uniform `ILookup + Seqable + Mutable` interface. `pattern` consumes `ILookup` for reads. `remote` calls `mutate!` for writes and sends the result back to the client. The result must be used — discarding mutation responses and re-fetching is an anti-pattern.
+
+### Mutation Return Values
+
+`mutate!` delegates to `DataSource` methods that return meaningful data:
+
+| Operation | DataSource method | Must return |
+|-----------|-------------------|-------------|
+| CREATE (`nil` query, some value) | `create!` | Full created entity (with generated ID, timestamps) |
+| UPDATE (some query, some value) | `update!` | Full updated entity |
+| DELETE (some query, `nil` value) | `delete!` | `true` / `false` |
+
+These return values flow through `remote` back to the client. `DataSource` implementations must return complete entities — not partial data.
 
 ## Core Design: Protocol + Wrapper + Composition
 
@@ -19,9 +33,14 @@ DataSource protocol ← you implement this (5 methods)
     ▼
 Collection type ← uniform ILookup/Seqable/Mutable/Wireable
     │
-    ├──► read-only wrapper (disables Mutable)
-    ├──► custom wrapper (adds authorization, ownership, etc.)
+    ├──► read-only       (disables Mutable)
+    ├──► wrap-mutable    (custom mutation logic, delegates reads)
     └──► pattern matching / remote serving (consumes ILookup + Mutable)
+
+Non-enumerable resources (no DataSource needed):
+    │
+    ▼
+lookup ← ILookup/Wireable from keyword→value map (delays auto-derefed)
 ```
 
 ## How to Support a New Data Source
@@ -93,30 +112,56 @@ Remote walks the result tree calling `(coll/->wire x)` on any `Wireable`. Collec
 ;; CORRECT: single DataSource, multiple Collection wrappers
 (def posts-ds (->PostsDataSource conn))
 (def posts (coll/collection posts-ds {:id-key :post/id}))
-(def public-posts (coll/read-only posts))    ;; guest access
-(def member-posts (->MemberPosts posts uid)) ;; ownership enforcement
+(def public-posts (coll/read-only posts))              ;; guest access
+(def member-posts (coll/wrap-mutable posts mutate-fn)) ;; ownership enforcement
 ```
 
 ### 2. Custom wrappers for authorization logic
 
-Don't put authorization in DataSource. Put it in a wrapper type:
+Don't put authorization in DataSource. Use `wrap-mutable` to add access control
+while delegating reads to the inner collection:
 
 ```clojure
-;; CORRECT: wrapper adds access control, DataSource stays generic
-(deftype MemberPosts [posts user-id]
-  ILookup  ;; delegate reads to underlying posts
-  Mutable  ;; check ownership before delegating mutations
-  Wireable ;; delegate serialization)
+;; CORRECT: wrap-mutable adds ownership check, DataSource stays generic
+(defn member-posts [posts user-id]
+  (coll/wrap-mutable posts
+    (fn [posts query value]
+      (cond
+        ;; CREATE: inject author
+        (and (nil? query) (some? value))
+        (coll/mutate! posts nil (assoc value :post/author user-id))
+
+        ;; UPDATE/DELETE: check ownership
+        (some? query)
+        (if (owns-post? posts user-id query)
+          (coll/mutate! posts query value)
+          {:error {:type :forbidden :message "You don't own this post"}})))))
 ```
 
 This keeps DataSource reusable across different access contexts.
 
-### 3. Lazy ILookup for non-enumerable resources
+### 3. Field lookup for non-enumerable resources
 
-Some resources (history, profile, user-info) can't be listed — only looked up by key. Use `reify` with ILookup + Wireable:
+Some resources (profile, user-info) can't be listed — only looked up by keyword.
+Use `coll/lookup` with delays for expensive fields:
 
 ```clojure
-;; CORRECT: lazy lookup that only fetches on access
+;; CORRECT: lookup with delay-based laziness
+(defn me-lookup [conn session]
+  (coll/lookup {:id      (:user-id session)           ;; cheap — used as-is
+                :email   (:user-email session)         ;; cheap
+                :slug    (delay (db-lookup conn uid))  ;; expensive — computed once
+                :roles   (or (:roles session) #{})}))  ;; cheap
+```
+
+Delays are shared between ILookup and `->wire` — the DB query runs at most once
+regardless of whether the value is accessed via pattern matching (ILookup) or
+serialization (Wireable).
+
+For resources keyed by query maps (not keywords), use `reify` with ILookup + Wireable:
+
+```clojure
+;; CORRECT: query-keyed lookup (can't use coll/lookup — needs map keys)
 (defn history-lookup [conn]
   (reify
     clojure.lang.ILookup
@@ -193,6 +238,28 @@ Pattern matching and remote only work with Collection (or any ILookup).
 
 `read-only` deliberately does NOT implement `Mutable`. Remote checks `(satisfies? coll/Mutable coll)` and returns an error if false.
 
+### Mistake: Field filtering in DataSource instead of letting patterns select
+
+```clojure
+;; WRONG: list-all curates fields — the DataSource is doing the pattern's job
+(list-all [_]
+  (d/q '[:find [(pull ?e [:post/id :post/title {:post/author [:user/name]}]) ...]
+         :where [?e :post/id _]]
+       @conn))
+
+;; RIGHT: list-all returns complete entities, same as fetch
+(list-all [_]
+  (d/q '[:find [(pull ?e [* {:post/author [*]}]) ...]
+         :where [?e :post/id _]]
+       @conn))
+```
+
+`DataSource` returns data. The pattern system selects shape. When `list-all` pre-filters fields (e.g., omitting `:post/content` for "lightweight" lists), it breaks the pull-pattern contract — the client can't request fields the DataSource already stripped. The same pull expression (`[*]` or equivalent) should be used in both `fetch` and `list-all`.
+
+Format normalization (stripping `:db/id`, converting sets to vectors) is fine — that's adapting storage representation to domain representation. But omitting domain fields is not.
+
+Also ensure `fetch` and `list-all` return the **same shape**. If `list-all` includes roles but `fetch` doesn't (or vice versa), consumers get inconsistent data depending on whether they access a single item or list all.
+
 ### Mistake: Returning errors as exceptions from DataSource
 
 ```clojure
@@ -217,8 +284,18 @@ Remote's error config uses `:detect :error` to check if the mutation result cont
 |---|---|---|
 | `DataSource` | `fetch`, `list-all`, `create!`, `update!`, `delete!` | Backend storage adapter |
 | `Mutable` | `mutate!` | Unified CRUD: `(nil, data)` = create, `(query, data)` = update, `(query, nil)` = delete |
-| `Wireable` | `->wire` | Serialize for Transit/EDN (collections -> vectors, lazy lookups -> nil) |
+| `Wireable` | `->wire` | Serialize for Transit/EDN (collections -> vectors, lookups -> maps or nil) |
 | `TxSource` | `snapshot`, `transact!` | Atomic batch mutations (atom-source only) |
+
+## Constructors & Wrappers
+
+| Function | Purpose | Implements |
+|---|---|---|
+| `collection` | Wraps DataSource for pattern-compatible CRUD | ILookup, Seqable, Counted, Mutable, Wireable |
+| `read-only` | Disables mutations on a collection | ILookup, Seqable, Counted, Wireable |
+| `wrap-mutable` | Custom mutation logic, delegates reads | ILookup, Seqable, Counted, Mutable, Wireable |
+| `lookup` | Non-enumerable keyword→value resource | ILookup, Wireable |
+| `atom-source` | In-memory DataSource + TxSource | DataSource, TxSource |
 
 ## Testing
 

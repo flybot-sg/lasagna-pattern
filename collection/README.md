@@ -151,6 +151,51 @@ Wrap a collection to disable mutations:
 (coll/mutate! public-posts ...) ; throws - Mutable not implemented
 ```
 
+### wrap-mutable
+
+Wrap a collection with custom mutation logic (e.g., authorization),
+while delegating reads (ILookup, Seqable, Counted, Wireable) to the inner collection:
+
+```clojure
+(def member-posts
+  (coll/wrap-mutable posts
+    (fn [posts query value]
+      (cond
+        ;; CREATE: inject author
+        (and (nil? query) (some? value))
+        (coll/mutate! posts nil (assoc value :author user-id))
+
+        ;; UPDATE/DELETE: check ownership
+        (some? query)
+        (if (owns? user-id query)
+          (coll/mutate! posts query value)
+          {:error {:type :forbidden}})))))
+
+(seq member-posts)                           ; delegates to posts
+(get member-posts {:id 1})                   ; delegates to posts
+(coll/mutate! member-posts nil {:title "X"}) ; runs custom fn
+```
+
+### lookup
+
+Create an ILookup + Wireable from a keyword→value map.
+Use for non-enumerable resources (user info, profiles, computed data)
+where some fields are cheap and others require expensive DB queries:
+
+```clojure
+(def me (coll/lookup {:id      user-id
+                      :email   (:email session)
+                      :slug    (delay (db-lookup conn user-id))  ; lazy
+                      :roles   #{:member}}))
+
+(:id me)       ;=> user-id (cheap, no delay)
+(:slug me)     ;=> calls db-lookup once (delay), caches result
+(coll/->wire me)  ;=> {:id "..." :email "..." :slug "..." :roles #{:member}}
+```
+
+Delay values are dereferenced transparently on access.
+Shared between ILookup and `->wire` — a DB query runs at most once.
+
 ## Collection Options
 
 ```clojure
@@ -169,6 +214,8 @@ Queries must match an index or include the id-key, otherwise throws.
 | `collection` | `[src]` or `[src opts]` | Create Collection wrapping a DataSource |
 | `atom-source` | `[]` or `[opts]` | Create atom-backed DataSource + TxSource |
 | `read-only` | `[coll]` | Wrap collection to disable mutations |
+| `wrap-mutable` | `[coll mutate-fn]` | Wrap collection with custom mutation logic |
+| `lookup` | `[field-map]` | Create ILookup + Wireable from keyword→value map |
 | `mutate!` | `[coll query value]` | Protocol: create/update/delete |
 | `->wire` | `[x]` | Protocol: convert to serializable data |
 | `transact!` | `[src mutations]` | Protocol: atomic batch mutations |

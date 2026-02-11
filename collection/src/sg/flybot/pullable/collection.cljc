@@ -230,6 +230,130 @@
   (->ReadOnly coll))
 
 ;;=============================================================================
+;; Field Lookup (non-enumerable keyword-keyed resources)
+;;=============================================================================
+
+(defn- deref-if-delay
+  "Deref delays, pass other values through."
+  [v]
+  (if (delay? v) @v v))
+
+(deftype FieldLookup [field-map]
+  #?@(:clj
+      [clojure.lang.ILookup
+       (valAt [this k]
+              (.valAt this k nil))
+       (valAt [_ k not-found]
+              (let [v (get field-map k ::not-found)]
+                (if (= v ::not-found) not-found (deref-if-delay v))))]
+
+      :cljs
+      [ILookup
+       (-lookup [this k]
+                (-lookup this k nil))
+       (-lookup [_ k not-found]
+                (let [v (get field-map k ::not-found)]
+                  (if (= v ::not-found) not-found (deref-if-delay v))))]))
+
+(extend-type FieldLookup
+  Wireable
+  (->wire [this]
+    (persistent!
+     (reduce-kv (fn [m k v] (assoc! m k (deref-if-delay v)))
+                (transient {})
+                (.-field-map this)))))
+
+(defn lookup
+  "Create an ILookup + Wireable from a keyword->value map.
+
+   Delay values are dereferenced transparently on access.
+   `->wire` produces a plain map with all delays forced.
+
+   Use for non-enumerable resources where fields come from
+   multiple sources with different costs:
+
+   ```clojure
+   (lookup {:id    user-id                          ; cheap — used as-is
+            :email (:email session)                  ; cheap — used as-is
+            :slug  (delay (db-lookup conn user-id))  ; expensive — computed once
+            :roles (or (:roles session) #{})})       ; cheap — used as-is
+   ```
+
+   Delays are shared between ILookup and ->wire — a DB query
+   runs at most once regardless of access path."
+  [field-map]
+  (->FieldLookup field-map))
+
+;;=============================================================================
+;; Mutable Wrapper
+;;=============================================================================
+
+(deftype MutableWrapper [coll mutate-fn]
+  #?@(:clj
+      [clojure.lang.ILookup
+       (valAt [_ query]
+              (get coll query))
+       (valAt [_ query not-found]
+              (get coll query not-found))
+
+       clojure.lang.Seqable
+       (seq [_]
+            (seq coll))
+
+       clojure.lang.Counted
+       (count [_]
+              (count coll))]
+
+      :cljs
+      [ILookup
+       (-lookup [_ query]
+                (get coll query))
+       (-lookup [_ query not-found]
+                (get coll query not-found))
+
+       ISeqable
+       (-seq [_]
+             (seq coll))
+
+       ICounted
+       (-count [_]
+               (count coll))]))
+
+(extend-type MutableWrapper
+  Mutable
+  (mutate! [this query value]
+    ((.-mutate-fn this) (.-coll this) query value))
+
+  Wireable
+  (->wire [this]
+    (->wire (.-coll this))))
+
+(defn wrap-mutable
+  "Wrap a collection with custom mutation logic, delegating reads.
+
+   mutate-fn receives (coll query value) and should return:
+   - For create (nil query, some value): the created item
+   - For update (some query, some value): the updated item
+   - For delete (some query, nil value): true/false
+   - For errors: {:error {:type ... :message ...}}
+
+   Reads (ILookup, Seqable, Counted) and Wireable delegate to the
+   inner collection. Use this to add authorization, ownership checks,
+   or field injection without reimplementing the full deftype boilerplate.
+
+   Example:
+   ```clojure
+   (def member-posts
+     (wrap-mutable posts
+       (fn [posts query value]
+         (if (owns? user-id query)
+           (mutate! posts query value)
+           {:error {:type :forbidden}}))))
+   ```"
+  [coll mutate-fn]
+  (->MutableWrapper coll mutate-fn))
+
+;;=============================================================================
 ;; Constructor
 ;;=============================================================================
 
@@ -518,4 +642,89 @@
 
   ;; Mutable protocol NOT satisfied
   (satisfies? Mutable ro) ;=> false
+
+  ;;---------------------------------------------------------------------------
+  ;; Mutable Wrapper
+  ;;---------------------------------------------------------------------------
+
+  (def wm-src (atom-source))
+  (def wm-coll (collection wm-src {:indexes #{#{:id} #{:name}}}))
+  (mutate! wm-coll nil {:name "Alice"})
+  (mutate! wm-coll nil {:name "Bob"})
+
+  ;; wrap-mutable with ownership check
+  (def owned (wrap-mutable wm-coll
+                           (fn [coll query value]
+                             (cond
+                               (and (nil? query) (some? value))
+                               (mutate! coll nil (assoc value :owner "u1"))
+
+                               (and (some? query) (nil? value))
+                               {:error {:type :forbidden :message "Cannot delete"}}
+
+                               :else
+                               (mutate! coll query value)))))
+
+  ;; Reads delegate to inner collection
+  (count owned) ;=> 2
+  (:name (get owned {:id 1})) ;=> "Alice"
+
+  ;; Create injects :owner
+  (:owner (mutate! owned nil {:name "Charlie"})) ;=> "u1"
+
+  ;; Delete returns error (ownership denied)
+  (:type (:error (mutate! owned {:id 1} nil))) ;=> :forbidden
+
+  ;; Update delegates through
+  (:name (mutate! owned {:id 1} {:name "Alice Updated"})) ;=> "Alice Updated"
+
+  ;; Wireable delegates
+  (->wire owned) ;=>> vector?
+
+  ;; Mutable protocol IS satisfied
+  (satisfies? Mutable owned) ;=> true
+
+  ;;---------------------------------------------------------------------------
+  ;; Field Lookup (non-enumerable keyword-keyed resources)
+  ;;---------------------------------------------------------------------------
+
+  ;; Basic lookup with plain values
+  (def basic (lookup {:id "u1" :email "a@b.com" :name "Alice"}))
+  (:id basic) ;=> "u1"
+  (:email basic) ;=> "a@b.com"
+  (:missing basic) ;=> nil
+  (get basic :name "fallback") ;=> "Alice"
+  (get basic :missing "fallback") ;=> "fallback"
+
+  ;; Delays are dereferenced transparently
+  (def call-count (atom 0))
+  (def lazy (lookup {:cheap "fast"
+                     :expensive (delay (do (swap! call-count inc) "computed"))}))
+
+  ;; Not yet computed
+  @call-count ;=> 0
+
+  ;; ILookup access forces the delay
+  (:expensive lazy) ;=> "computed"
+  @call-count ;=> 1
+
+  ;; Second access reuses cached value (delay fires once)
+  (:expensive lazy) ;=> "computed"
+  @call-count ;=> 1
+
+  ;; ->wire produces plain map with all delays forced
+  (->wire lazy) ;=> {:cheap "fast" :expensive "computed"}
+  @call-count ;=> 1
+
+  ;; ->wire on fresh lookup forces delay exactly once
+  (def call-count-2 (atom 0))
+  (def lazy-2 (lookup {:a 1 :b (delay (do (swap! call-count-2 inc) 2))}))
+  (->wire lazy-2) ;=> {:a 1 :b 2}
+  @call-count-2 ;=> 1
+  ;; ILookup after ->wire still uses same delay
+  (:b lazy-2) ;=> 2
+  @call-count-2 ;=> 1
+
+  ;; Not Mutable or Seqable — lookup only
+  (satisfies? Mutable basic) ;=> false
   )
