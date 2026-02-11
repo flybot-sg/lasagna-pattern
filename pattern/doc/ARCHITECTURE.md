@@ -1,10 +1,6 @@
-# CLAUDE.md
+# Architecture
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-**IMPORTANT: Always use the Clojure skill (`/clojure`) when working on this project.** This ensures REPL-driven development, proper idioms, and avoids common pitfalls.
-
-**IMPORTANT: Always use `jj` instead of `git` for version control.** This is a jj/git co-located repo. Use jj commands for all operations (status, log, commit, push).
+Internal architecture reference for the pattern component. For the top-level guide, see `pattern/CLAUDE.md`.
 
 ## Project Overview
 
@@ -286,17 +282,3 @@ This turns schemas into more than validation - they become **access control poli
 ## clj-kondo Configuration
 
 Custom hooks in `.clj-kondo/` for macros: `match-fn`, `rule`, `vars->`, `cond-let`. The `defmatcher` macro is linted as `comment`.
-
-## Version Control
-
-**Use `jj` instead of `git` for all version control operations.**
-
-```bash
-jj status              # Check working copy changes
-jj log --limit 5       # View recent commits
-jj describe -m "msg"   # Set commit message for working copy
-jj bookmark set main   # Move main bookmark to current commit
-jj git push --bookmark main  # Push to remote
-jj new                 # Create new empty commit on top
-jj squash              # Squash into parent commit
-``` 

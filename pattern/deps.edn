@@ -3,6 +3,8 @@
  :aliases
  {:dev {:extra-paths ["notebook"]
         :extra-deps {io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
+                     nrepl/nrepl {:mvn/version "1.5.2"}
+                     cider/cider-nrepl {:mvn/version "0.58.0"}
                      ;; Optional: SCI for sandboxed eval (also enables CLJS support)
                      org.babashka/sci {:mvn/version "0.8.43"}
                      ;; Optional: Malli for schema validation (require sg.flybot.pullable.malli to enable)

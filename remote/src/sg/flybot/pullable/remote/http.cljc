@@ -6,7 +6,7 @@
    [clojure.string :as str]
    [clojure.walk]
    [sg.flybot.pullable.impl :as pattern]
-   [sg.flybot.pullable.util :refer [variable?]]
+   [sg.flybot.pullable.util :refer [contains-variables?]]
    [sg.flybot.pullable.collection :as coll]
    #?(:clj [cognitect.transit :as transit])
    #?(:clj [clojure.edn :as edn])
@@ -293,7 +293,23 @@
   (parse-mutation '{:users {:name "Alice"}})
   ;=> nil
 
-  (parse-mutation '{:role {:config {:debug true}}}))
+  (parse-mutation '{:role {:config {:debug true}}})
+  ;=> nil
+
+  ;; parse-mutation: nested map with variables is a read, not mutation
+  (parse-mutation '{:posts {{:id 1} {:title ?t}}})
+  ;=> nil
+
+  ;; parse-mutation: vector with variables is a read
+  (parse-mutation '{:posts {{:id 1} {:tags [?first ?rest*]}}})
+  ;=> nil
+
+  ;; parse-mutation: extended var in nested map is a read
+  (parse-mutation '{:posts {{:id 1} {:title (?t :when string?)}}})
+  ;=> nil
+
+  ;; parse-mutation: role-based nested read with variables
+  (parse-mutation '{:admin {:posts {{:id 1} {:title ?t}}}}))
   ;=> nil)
 
 ;;=============================================================================
@@ -397,7 +413,7 @@
    - {:role/member {:posts {nil data}}}     -> CREATE (path=[:role/member :posts])
    - {:role/admin {:posts {{:id 1} data}}}  -> UPDATE (path=[:role/admin :posts])
 
-   Read patterns return nil (value is ?-prefixed symbol)."
+   Read patterns return nil (value is or contains ?-prefixed symbols)."
   [pattern]
   (when (and (map? pattern) (= 1 (count pattern)))
     (let [[k1 v1] (first pattern)]
@@ -411,14 +427,14 @@
                (= 1 (count (val (first v1)))))
           (let [[k2 v2] (first v1)
                 [query value] (first v2)]
-            (when (and (not (variable? value))
+            (when (and (not (contains-variables? value))
                        (or (nil? query) (map? query)))
               {:path [k1 k2] :query query :value value}))
 
           ;; Flat: {:posts {query value}}
           (and (map? v1) (= 1 (count v1)))
           (let [[query value] (first v1)]
-            (when (and (not (variable? value))
+            (when (and (not (contains-variables? value))
                        (or (nil? query) (map? query)))
               {:path [k1] :query query :value value}))
 
