@@ -80,6 +80,13 @@ body {
   padding-bottom: 0.25rem;
   border-bottom: 2px solid transparent;
   border-image: linear-gradient(90deg, var(--accent), var(--accent-gold)) 1;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.site-logo {
+  flex-shrink: 0;
 }
 
 .header-right {
@@ -1108,8 +1115,11 @@ body {
   /* Hide inactive panels */
   .panel.mobile-hidden { display: none; }
 
-  /* Tighter panel padding */
-  .panel { padding: 0.75rem; }
+  /* Hide inactive panels */
+  .panel.mobile-hidden { display: none; }
+
+  /* Tighter panel padding (exclude pattern-results which uses gap-as-border) */
+  .panel:not(.pattern-results-panel) { padding: 0.75rem; }
 }
 
 @media (max-width: 600px) {

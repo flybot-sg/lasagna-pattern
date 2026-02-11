@@ -14,7 +14,7 @@
 (def default-schema
   "Malli hiccup form. Server wraps in m/schema, sandbox uses raw."
   [:map {:version "1.0.0"
-         :doc "Sample API for Pull Pattern Playground"}
+         :doc "Sample API for Lasagna Pattern Playground"}
    [:users {:doc "User accounts"}
     [:vector {:ilookup true}
      [:map

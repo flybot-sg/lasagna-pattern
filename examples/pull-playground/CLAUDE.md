@@ -73,6 +73,12 @@ Builds the executor once, then dispatches by operation keyword:
 
 Schema and seed are pull-able data in the store — not separate endpoints. Schema is a plain map under `:schema`, seed is a `Mutable` reify under `:seed`.
 
+### Mobile responsive layout
+
+Bottom tab bar (Pattern | Data | Examples) appears below 768px. CSS-only panel hiding — `mobile-hidden` class has no effect on desktop. State tracks `:active-tab` in app-db. Clicking an example auto-switches to Pattern tab.
+
+Breakpoints: 1024px (stack panels), 768px (tab bar + single panel), 600px (compact text + touch targets).
+
 ### Sandbox store
 
 `sandbox.cljc` is stateless — no module-level atoms. It exports constructors (`make-sources`, `make-store`) and an `execute!` function that takes store + schema as explicit args. The store is created once in `init!` and stored in app-db under `:sandbox/store`. It's a stable reference — mutations modify atom-sources in-place, so the store never needs rebuilding.
@@ -124,7 +130,9 @@ src/sg/flybot/playground/
     ├── core.cljs            # Entry point, dispatch-of, handle-pull, add-watch render
     ├── state.cljc           # Pure state updaters (db → db)
     ├── sandbox.cljc         # Stateless: constructors + execute! with explicit args
-    └── views.cljc           # Replicant hiccup (dispatch! closures)
+    ├── views.cljc           # Replicant hiccup (dispatch! closures)
+    └── views/
+        └── examples.cljc    # Pre-built example patterns (19 examples in 6 sections)
 ```
 
 ## deps.edn aliases

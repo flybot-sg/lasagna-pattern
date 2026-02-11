@@ -47,7 +47,9 @@
   [{::keys [db dispatch!]}]
   (let [{:keys [mode]} db]
     [:header.site-header
-     [:h1 "Pull Pattern Playground"]
+     [:h1
+      [:img.site-logo {:src "/favicon.svg" :alt "Lasagna Pattern" :width 28 :height 28}]
+      "Lasagna Pattern Playground"]
      [:div.header-right
       [:div.mode-toggle
        [:button {:class (when (= mode :sandbox) "active")

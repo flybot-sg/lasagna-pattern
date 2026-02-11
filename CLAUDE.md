@@ -49,6 +49,7 @@ Components are auto-discovered (any directory with `deps.edn`).
 | `collection/` | CRUD collection abstraction with DataSource protocol | Active |
 | `remote/` | Remote protocol (GraphQL-like) using pattern language | Active |
 | `examples/flybot-site/` | Flybot.sg site - public blog, employee authoring | Active |
+| `examples/pull-playground/` | Interactive SPA for learning pull patterns (sandbox + remote) | Active |
 
 ### Adding a New Component
 
@@ -102,7 +103,9 @@ Core pattern DSL enabling declarative matching and transformation of Clojure dat
 - Non-keyword keys for indexed lookup: `{{:id 1} ?result}`
 - With Malli schemas: indexed lookup requires `:ilookup true` on collection (e.g., `[:vector {:ilookup true} ...]`)
 
-**Deep dive:** See `pattern/doc/ARCHITECTURE.md` for internal design, matcher constructors, and extension points.
+**Utilities:** `sg.flybot.pullable.util` — `variable?` (check if symbol is `?`-prefixed), `contains-variables?` (recursive tree-walk for nested patterns), `vars->` (macro for destructuring vars maps).
+
+**Deep dive:** See `pattern/CLAUDE.md` for full syntax catalog, architecture, and extension points.
 
 ## Flybot Site (examples/flybot-site)
 
