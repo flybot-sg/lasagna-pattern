@@ -41,13 +41,29 @@ bb clean pattern     # Clean specific component
 
 Components are auto-discovered (any directory with `deps.edn`).
 
+## Design Principle: Patterns Are Round-Trips
+
+The three core components (`pattern`, `collection`, `remote`) compose into a single round-trip system:
+
+```
+pattern  — matches and binds data (reads AND writes use the same syntax)
+collection — makes data mutable (mutate! returns the created/updated entity)
+remote   — sends patterns over HTTP (mutation results flow back in the response)
+```
+
+**A mutation pattern is still a pull.** When a client sends `{:posts {nil {:title "New"}}}`, the response contains the full created entity: `{posts {:post/id 42 :title "New" :created-at ...}}`. The client should use this response to update local state.
+
+**Anti-pattern: discarding the mutation response and re-fetching.** This defeats the purpose of the pull-based design. Every pattern interaction — read or write — returns data. Use it.
+
+`collection` is what makes this possible. Before `collection`, patterns were read-only (SELECT). `collection/Mutable` + `remote`'s mutation detection elevated patterns to full read-write round-trips with results.
+
 ## Components
 
 | Directory | Description | Status |
 |-----------|-------------|--------|
 | `pattern/` | Core pattern DSL for matching/transforming Clojure data | Active |
-| `collection/` | CRUD collection abstraction with DataSource protocol | Active |
-| `remote/` | Remote protocol (GraphQL-like) using pattern language | Active |
+| `collection/` | CRUD collection abstraction — makes patterns bidirectional (read + write + response) | Active |
+| `remote/` | HTTP transport — sends patterns over the wire, returns mutation results | Active |
 | `examples/flybot-site/` | Flybot.sg site - public blog, employee authoring | Active |
 | `examples/pull-playground/` | Interactive SPA for learning pull patterns (sandbox + remote) | Active |
 
@@ -146,7 +162,8 @@ bb dev examples/flybot-site  # Start nREPL
 **Key patterns demonstrated:**
 - Role-as-top-level authorization (nil if session lacks role)
 - ILookup-based collections for lazy data access
-- Ownership enforcement via collection wrappers
+- Ownership enforcement via `coll/wrap-mutable`
+- Non-enumerable resources via `coll/lookup` with delay-based laziness
 
 ## Testing
 
