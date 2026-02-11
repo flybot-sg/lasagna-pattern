@@ -94,7 +94,9 @@
   (list-all [_]
     (try
       (mu/log ::db-list-all :entity :post)
-      (->> (d/q '[:find [(pull ?e [* {:post/author [*]}]) ...] :where [?e :post/id _]] @conn)
+      (->> (d/q '[:find [(pull ?e [* {:post/author [*]}]) ...]
+                  :where [?e :post/id _]]
+                @conn)
            (map normalize-post)
            (sort-by :post/created-at #(compare %2 %1)))
       (catch Exception e
@@ -161,7 +163,7 @@
   "Find entity by query at a specific database state."
   [db query]
   (let [[k v] (first query)]
-    (d/q `[:find (~'pull ~'?e [~'*]) ~'.
+    (d/q `[:find (~'pull ~'?e [~'* {:post/author [~'*]}]) ~'.
            :in ~'$ ~'?v
            :where [~'?e ~k ~'?v]]
          db v)))
@@ -192,6 +194,21 @@
                   (assoc post
                          :version/tx tx
                          :version/timestamp inst)))))))
+
+^:rct/test
+(comment
+  (require '[sg.flybot.flybot-site.server.system.db :as db])
+
+  (def conn (db/create-conn!))
+  (db/create-user! conn #:user{:id "u1" :email "a@b.com" :name "Alice" :picture ""})
+  (def p (db/posts conn))
+  (coll/mutate! p nil {:post/title "V1" :post/content "first" :post/author "u1"})
+  (coll/mutate! p {:post/id 1} {:post/title "V2" :post/content "second"})
+
+  (count (post-history @conn 1)) ;=> 2
+  (:user/name (:post/author (first (post-history @conn 1)))) ;=> "Alice"
+
+  (db/release-conn! conn))
 
 ;;=============================================================================
 ;; History Lookup (ILookup for API)
@@ -224,4 +241,4 @@
    When a post is marked featured, other featured posts sharing a page are un-featured."
   ([conn] (posts conn {}))
   ([conn {:keys [indexes] :or {indexes #{#{:post/id}}} :as opts}]
-   (coll/collection (->PostsDataSource conn) (assoc opts :indexes indexes))))
+   (coll/collection (->PostsDataSource conn) (assoc opts :id-key :post/id :indexes indexes))))

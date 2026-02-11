@@ -19,10 +19,18 @@
   [:user/id :user/email :user/name :user/slug :user/picture])
 
 (defn- normalize-user
-  "Normalize Datahike user entity to consistent map."
+  "Normalize Datahike user entity to consistent map (no roles)."
   [entity]
   (when entity
     (select-keys entity user-attr-keys)))
+
+(defn- normalize-user-with-roles
+  "Normalize Datahike user entity with roles as keyword set.
+   Used by UsersDataSource to return complete user data."
+  [entity]
+  (when entity
+    (-> (select-keys entity user-attr-keys)
+        (assoc :user/roles (set (map :role/name (:user/roles entity)))))))
 
 ;;=============================================================================
 ;; Slug Generation
@@ -209,21 +217,29 @@
   (->> (d/q '[:find [(pull ?u [* {:user/roles [*]}]) ...]
               :where [?u :user/id _]]
             @conn)
-       (map (fn [user]
-              (-> user
-                  (select-keys user-attr-keys)
-                  (assoc :user/roles
-                         (set (map :role/name (:user/roles user)))))))))
+       (map normalize-user-with-roles)))
 
 ;;=============================================================================
 ;; Collection Constructor
 ;;=============================================================================
 
+(defn- fetch-user-with-roles
+  "Fetch user by ID with roles expanded. Used by UsersDataSource."
+  [conn user-id]
+  (when user-id
+    (normalize-user-with-roles
+     (d/q '[:find (pull ?e [* {:user/roles [*]}]) .
+            :in $ ?id
+            :where [?e :user/id ?id]]
+          @conn user-id))))
+
 (defrecord UsersDataSource [conn]
   coll/DataSource
-  (fetch [_ query] (get-user conn (:user/id query)))
+  (fetch [_ query] (fetch-user-with-roles conn (:user/id query)))
   (list-all [_] (list-users conn))
-  (create! [_ data] (create-user! conn data))
+  (create! [_ data]
+    (create-user! conn data)
+    (fetch-user-with-roles conn (:user/id data)))
   (update! [_ _query _data] nil)
   (delete! [_ _query] false))
 

@@ -1,9 +1,10 @@
 (ns sg.flybot.flybot-site.ui.views
-  "UI views - pure functions returning hiccup.
+  "UI views — defalias components with namespaced props.
 
-   Views emit events by calling (dispatch! :event) or (dispatch! [:event arg])."
+   Components receive data via ::keys and dispatch effect maps directly."
   (:require [clojure.string :as str]
-            [sg.flybot.flybot-site.ui.state :as state]
+            [sg.flybot.flybot-site.ui.db :as db]
+            [replicant.alias :refer [defalias]]
             #?(:cljs [sg.flybot.flybot-site.ui.api :as api])
             #?(:cljs ["marked" :refer [marked]])
             #?(:cljs ["@toast-ui/editor" :as toastui])))
@@ -29,15 +30,8 @@
                 :on (when dispatch!
                       {:click (fn [e]
                                 (.stopPropagation e)
-                                (dispatch! [:filter-by-tag tag]))})}
+                                (dispatch! {:db #(db/filter-by-tag % tag) :history :push}))})}
          tag])])))
-
-(defn- strip-frontmatter [content]
-  (if (and (string? content) (re-find #"^(?:---|\*\*\*)\s*\n" content))
-    (if-let [match (re-find #"(?s)^(?:---|\*\*\*)\s*\n.*?\n(?:---|\*\*\*)\s*\n?" content)]
-      (subs content (count match))
-      content)
-    (or content "")))
 
 (defn- unescape-markdown [content]
   #?(:clj content
@@ -46,7 +40,7 @@
              content)))
 
 (defn render-markdown [content]
-  (let [body (-> content strip-frontmatter unescape-markdown)]
+  (let [body (-> content db/strip-frontmatter unescape-markdown)]
     #?(:clj [:pre body]
        :cljs (when (seq body)
                [:div {:innerHTML (marked body)}]))))
@@ -63,7 +57,7 @@
                  str/trim))))
 
 (defn- content-preview [content n]
-  (let [body (-> (or content "") strip-frontmatter markdown->text)]
+  (let [body (-> (or content "") db/strip-frontmatter markdown->text)]
     (if (> (count body) n)
       (str (subs body 0 n) "...")
       body)))
@@ -135,23 +129,23 @@
   "Display an error banner with appropriate styling based on error type.
 
    Error types:
-   - :forbidden → danger (red) with lock icon
-   - :not-found → warning (yellow) with X icon
-   - :network, :execution-error → warning with retry button
-   - other → danger (red) with warning icon"
-  [state dispatch!]
-  (when-let [error (:error state)]
+   - :forbidden  -> danger (red) with lock icon
+   - :not-found  -> warning (yellow) with X icon
+   - :network, :execution-error -> warning with retry button
+   - other       -> danger (red) with warning icon"
+  [db dispatch!]
+  (when-let [error (:error db)]
     [:div.alert-box {:class (alert-class error)}
      [:div.alert-content
       (alert-icon (:type error))
       [:span.alert-message (:message error)]]
      (when (:retryable? error)
-       [:button.alert-action {:on {:click #(do (dispatch! :clear-error)
-                                               (dispatch! :fetch-posts))}}
+       [:button.alert-action
+        {:on {:click (fn [_] (dispatch! {:db #(-> % db/clear-error db/set-loading) :pull :init}))}}
         "Retry"])
-     [:button.alert-dismiss {:on {:click #(dispatch! :clear-error)}
+     [:button.alert-dismiss {:on {:click #(dispatch! {:db db/clear-error})}
                              :title "Dismiss"}
-      "×"]]))
+      "\u00d7"]]))
 
 ;;=============================================================================
 ;; Markdown Editor
@@ -180,7 +174,7 @@
              :replicant/on-mount
              (fn [{:keys [replicant/node replicant/remember]}]
                (remember {:editor (init-editor! node content
-                                                #(dispatch! [:update-form :content %]))
+                                                #(dispatch! {:db (fn [db] (db/update-form db :content %))}))
                           :content content}))
              :replicant/on-unmount
              (fn [{:keys [replicant/remembered]}]
@@ -235,71 +229,74 @@
    [:path {:d "M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"}]
    [:path {:d "M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"}]])
 
-(defn- mobile-nav-drawer
+(defalias mobile-nav-drawer
   "Mobile navigation drawer - slides in from right on mobile."
-  [{:keys [tag-filter mobile-nav-open?] :as state} dispatch!]
-  (let [page-mode? (state/page-mode? state)]
+  [{::keys [db dispatch!]}]
+  (let [{:keys [tag-filter mobile-nav-open?]} db
+        page-mode? (db/page-mode? db)]
     [:div.mobile-nav-drawer {:class (when mobile-nav-open? "open")}
      [:div.mobile-nav-header
       [:span "Menu"]
       [:button.icon-btn {:title "Close menu"
-                         :on {:click #(dispatch! :close-mobile-nav)}}
+                         :on {:click #(dispatch! {:db db/close-mobile-nav})}}
        (close-icon)]]
      [:nav.mobile-nav-links
       ;; Pages in defined order
-      (for [p state/page-order]
+      (for [p db/page-order]
         [:a.mobile-nav-link {:replicant/key p
                              :class (when (and page-mode? (= tag-filter p)) "active")
                              :href "#"
                              :on {:click (fn [e]
                                            (.preventDefault e)
-                                           (dispatch! [:filter-by-tag p]))}}
+                                           (dispatch! {:db #(db/filter-by-tag % p) :history :push}))}}
          p])
       ;; Posts tab
       [:a.mobile-nav-link {:class (when (not page-mode?) "active")
                            :href "#"
                            :on {:click (fn [e]
                                          (.preventDefault e)
-                                         (dispatch! [:filter-by-tag nil]))}}
+                                         (dispatch! {:db #(db/filter-by-tag % nil) :history :push}))}}
        "Posts"]]]))
 
-(defn- mobile-nav-overlay
+(defalias mobile-nav-overlay
   "Overlay behind mobile nav drawer - click to close."
-  [{:keys [mobile-nav-open?]} dispatch!]
-  [:div.mobile-nav-overlay {:class (when mobile-nav-open? "open")
-                            :on {:click #(dispatch! :close-mobile-nav)}}])
+  [{::keys [db dispatch!]}]
+  (let [{:keys [mobile-nav-open?]} db]
+    [:div.mobile-nav-overlay {:class (when mobile-nav-open? "open")
+                              :on {:click #(dispatch! {:db db/close-mobile-nav})}}]))
 
 (defn- header-nav
   "Navigation in header - pages in order, then Posts."
-  [{:keys [tag-filter] :as state} dispatch!]
-  (let [page-mode? (state/page-mode? state)]
+  [db dispatch!]
+  (let [{:keys [tag-filter]} db
+        page-mode? (db/page-mode? db)]
     [:nav.header-nav
      ;; Pages in defined order
-     (for [p state/page-order]
+     (for [p db/page-order]
        [:a.nav-link {:replicant/key p
                      :class (when (and page-mode? (= tag-filter p)) "active")
                      :href "#"
                      :on {:click (fn [e]
                                    (.preventDefault e)
-                                   (dispatch! [:filter-by-tag p]))}}
+                                   (dispatch! {:db #(db/filter-by-tag % p) :history :push}))}}
         p])
      ;; Posts tab
      [:a.nav-link {:class (when (not page-mode?) "active")
                    :href "#"
                    :on {:click (fn [e]
                                  (.preventDefault e)
-                                 (dispatch! [:filter-by-tag nil]))}}
+                                 (dispatch! {:db #(db/filter-by-tag % nil) :history :push}))}}
       "Posts"]]))
 
-(defn site-header
+(defalias site-header
   "Site header with logo, navigation, theme toggle, and user auth."
-  [state dispatch!]
-  (let [user (:user state)]
+  [{::keys [db dispatch!]}]
+  (let [user (:user db)]
     [:header.site-header
-     [:a.logo {:href "#" :on {:click (fn [e] (.preventDefault e) (dispatch! [:filter-by-tag "Home"]))}}
+     [:a.logo {:href "#" :on {:click (fn [e] (.preventDefault e) (dispatch! {:db #(db/filter-by-tag % "Home") :history :push}))}}
       [:img {:src "/assets/flybot-logo.png" :alt "Flybot"}]]
      [:div.header-right
-      (header-nav state dispatch!)
+      (header-nav db dispatch!)
       [:button.icon-btn.theme-toggle {:title "Toggle theme"
                                       :on {:click #?(:clj identity
                                                      :cljs #(js/sg.flybot.flybot_site.ui.core.toggle_theme_BANG_))}}
@@ -310,7 +307,7 @@
          [:a.avatar-link {:href "/profile"
                           :on {:click (fn [e]
                                         (.preventDefault e)
-                                        (dispatch! :view-profile))}}
+                                        (dispatch! {:db db/view-profile-start :pull :fetch-profile :history :push}))}}
           (if-let [picture (:picture user)]
             [:img.avatar {:src picture :alt (:name user)}]
             ;; Fallback: show initials when no picture
@@ -319,13 +316,13 @@
                (-> name (subs 0 1) .toUpperCase))])]
          [:span.user-name (:name user)]
          [:button.icon-btn {:title "Sign out"
-                            :on {:click #(dispatch! :logout)}}
+                            :on {:click (fn [_] (dispatch! {:db #(assoc % :user nil) :navigate "/logout"}))}}
           (logout-icon)]]
         [:a.icon-btn {:href "/oauth2/google" :title "Sign in with Google"}
          (login-icon)])
       ;; Mobile menu button (visible only on mobile via CSS)
       [:button.icon-btn.mobile-menu-btn {:title "Open menu"
-                                         :on {:click #(dispatch! :toggle-mobile-nav)}}
+                                         :on {:click #(dispatch! {:db db/toggle-mobile-nav})}}
        (menu-icon)]]]))
 
 (defn site-footer []
@@ -355,7 +352,7 @@
                        :on {:click (fn [e]
                                      (.preventDefault e)
                                      (.stopPropagation e)
-                                     (dispatch! [:filter-by-author {:slug slug :name name}]))}}
+                                     (dispatch! {:db #(db/filter-by-author % {:slug slug :name name}) :history :push}))}}
        name]
       [:span name])))
 
@@ -371,7 +368,7 @@
                              :on (when dispatch!
                                    {:click (fn [e]
                                              (.stopPropagation e)
-                                             (dispatch! [:filter-by-tag p]))})}
+                                             (dispatch! {:db #(db/filter-by-tag % p) :history :push}))})}
          p])])))
 
 (defn- featured-icon []
@@ -382,55 +379,57 @@
 (defn post-card
   "Post card. In page mode: minimal (no metadata, no height limit).
    Shows edit button for author/admin users."
-  [post dispatch! state & [page-mode?]]
+  [{:keys [post dispatch! db page-mode?]}]
   (let [{:post/keys [id title author created-at content tags pages featured?]} post
-        can-edit? (state/can-edit-post? state post)]
+        can-edit? (db/can-edit-post? db post)]
     (if page-mode?
-      [:div.page-card {:on {:click #(dispatch! [:select-post id])}}
+      [:div.page-card {:on {:click (fn [_] (dispatch! {:db #(db/select-post-start % id) :pull :select-post :history :push}))}}
        [:div.card-header
         [:h2.post-title title]
         (when can-edit?
           [:button.edit-btn {:title "Edit"
                              :on {:click (fn [e]
                                            (.stopPropagation e)
-                                           (dispatch! [:view-edit post]))}}
+                                           (dispatch! {:db #(db/edit-from-full-post % post) :history :push}))}}
            (edit-icon)])]
        [:div.post-tags-row
         (tag-list tags dispatch!)
         (page-badges pages dispatch!)]
-       [:div.page-content (render-markdown content)]]
-      [:div.post-card {:on {:click #(dispatch! [:select-post id])}}
+       (when content
+         [:div.page-content (render-markdown content)])]
+      [:div.post-card {:on {:click (fn [_] (dispatch! {:db #(db/select-post-start % id) :pull :select-post :history :push}))}}
        [:div.card-header
         [:h2.post-title title]
         (when can-edit?
           [:button.edit-btn {:title "Edit"
                              :on {:click (fn [e]
                                            (.stopPropagation e)
-                                           (dispatch! [:view-edit post]))}}
+                                           (dispatch! {:db #(db/edit-from-full-post % post) :history :push}))}}
            (edit-icon)])]
-       [:div.post-meta "By " (author-link author dispatch!) " • " (format-date created-at)
+       [:div.post-meta "By " (author-link author dispatch!) " \u2022 " (format-date created-at)
         (when featured?
           [:a.featured-link {:href "/featured"
                              :title "View all featured posts"
                              :on {:click (fn [e]
                                            (.preventDefault e)
                                            (.stopPropagation e)
-                                           (dispatch! [:filter-by-tag "featured"]))}}
-           " • " (featured-icon)])]
+                                           (dispatch! {:db #(db/filter-by-tag % "featured") :history :push}))}}
+           " \u2022 " (featured-icon)])]
        [:div.post-tags-row
         (tag-list tags dispatch!)
         (page-badges pages dispatch!)]
-       [:div.post-content (render-markdown content)]])))
+       (when content
+         [:div.post-content (render-markdown content)])])))
 
 (defn slide-card
   "Compact card for slideshow display."
   [post dispatch!]
   (let [{:post/keys [id title author created-at content]} post]
     [:div.slide-card {:replicant/key id
-                      :on {:click #(dispatch! [:select-post id])}}
+                      :on {:click (fn [_] (dispatch! {:db #(db/select-post-start % id) :pull :select-post :history :push}))}}
      [:h4 title]
      [:div.slide-preview (content-preview content 100)]
-     [:div.slide-meta "By " (author-link author dispatch!) " • " (format-date created-at)]]))
+     [:div.slide-meta "By " (author-link author dispatch!) " \u2022 " (format-date created-at)]]))
 
 (defn slideshow
   "Horizontal slideshow of posts with navigation."
@@ -456,39 +455,40 @@
       (for [post posts]
         (slide-card post dispatch!))]]))
 
-(defn post-list-view [{:keys [loading? error tag-filter author-filter] :as state} dispatch!]
-  (let [posts (state/filtered-posts state)
-        can-edit? (state/can-edit? state)
-        page-mode? (state/page-mode? state)
-        author-mode? (state/author-mode? state)
+(defalias post-list-view [{::keys [db dispatch!]}]
+  (let [{:keys [loading? tag-filter author-filter]} db
+        posts (db/filtered-posts db)
+        can-edit? (db/can-edit? db)
+        page-mode? (db/page-mode? db)
+        author-mode? (db/author-mode? db)
         ;; Derive author name from posts if not in filter (e.g., navigated via URL)
         author-name (or (:name author-filter)
                         (when author-mode?
                           (get-in (first posts) [:post/author :user/name])))
         ;; In page mode: featured post is hero, rest go to slideshow (sorted by date)
-        hero-post (when page-mode? (state/hero-post posts))
-        slideshow-posts (when page-mode? (state/non-hero-posts posts))]
-    [:div (when page-mode? {:class "page-view"})
+        hero-post (when page-mode? (db/hero-post posts))
+        slideshow-posts (when page-mode? (db/non-hero-posts posts))]
+    [:div (cond-> {} page-mode? (assoc :class "page-view"))
      [:div.list-header
       [:h1.page-title (cond
                         page-mode? tag-filter
                         author-mode? (str "Posts by " (or author-name (:slug author-filter)))
                         :else "Blog Posts")]
       (when can-edit?
-        [:button {:on {:click #(dispatch! :view-new)}} "New Post"])]
+        [:button {:on {:click #(dispatch! {:db db/view-new :history :push})}} "New Post"])]
      ;; Show author filter chip
      (when author-mode?
        [:div.tag-filter {:style {:margin-bottom "1rem"}}
         [:span.tag {:style {:cursor "pointer"}
-                    :on {:click #(dispatch! [:filter-by-author nil])}}
-         (or author-name (:slug author-filter)) " ×"]])
+                    :on {:click (fn [_] (dispatch! {:db #(db/filter-by-author % nil) :history :push}))}}
+         (or author-name (:slug author-filter)) " \u00d7"]])
      ;; Show tag filter chip only for non-page filters
      (when (and tag-filter (not page-mode?) (not author-mode?))
        [:div.tag-filter {:style {:margin-bottom "1rem"}}
         [:span.tag {:style {:cursor "pointer"}
-                    :on {:click #(dispatch! [:filter-by-tag nil])}}
-         tag-filter " ×"]])
-     (when error (error-banner state dispatch!))
+                    :on {:click (fn [_] (dispatch! {:db #(db/filter-by-tag % nil) :history :push}))}}
+         tag-filter " \u00d7"]])
+     (when (:error db) (error-banner db dispatch!))
      (if loading?
        [:div.loading "Loading..."]
        (if page-mode?
@@ -497,31 +497,31 @@
           (when hero-post
             [:div.page-hero
              [:div {:replicant/key (:post/id hero-post)}
-              (post-card hero-post dispatch! state true)]])
+              (post-card {:post hero-post :dispatch! dispatch! :db db :page-mode? true})]])
           (slideshow slideshow-posts dispatch!)]
          ;; Normal mode: list of cards
          [:div.posts
           (for [post posts]
             [:div {:replicant/key (:post/id post)}
-             (post-card post dispatch! state false)])]))]))
+             (post-card {:post post :dispatch! dispatch! :db db})])]))]))
 
-(defn post-detail-view [state dispatch!]
-  (let [post (state/selected-post state)
-        history-count (count (:history state))
-        can-edit? (state/can-edit? state)
-        logged-in? (state/logged-in? state)]
+(defalias post-detail-view [{::keys [db dispatch!]}]
+  (let [post (:selected-post db)
+        history-count (count (:history db))
+        can-edit? (db/can-edit? db)
+        logged-in? (db/logged-in? db)]
     (if post
       [:div.post-detail
        [:div.detail-header
         [:a.back-link {:href "#"
                        :on {:click (fn [e]
                                      (.preventDefault e)
-                                     (dispatch! [:view-back :list]))}}
-         "← Back to posts"]
+                                     (dispatch! {:db #(db/set-view % :list) :history :push}))}}
+         "\u2190 Back to posts"]
         ;; History requires member role
         (when logged-in?
           [:button.secondary
-           (cond-> {:on {:click #(dispatch! :view-history)}}
+           (cond-> {:on {:click #(dispatch! {:db db/view-history :history :push})}}
              (zero? history-count) (assoc :disabled true
                                           :style {:opacity 0.5 :cursor "not-allowed"}))
            "View History"
@@ -534,84 +534,91 @@
                                    :font-size "0.85em"}}
               history-count])])]
        [:h1 (:post/title post)]
-       [:div.post-meta "By " (author-link (:post/author post) dispatch!) " • " (format-date (:post/created-at post))
+       [:div.post-meta "By " (author-link (:post/author post) dispatch!) " \u2022 " (format-date (:post/created-at post))
         (when (:post/featured? post)
           [:a.featured-link {:href "/featured"
                              :title "View all featured posts"
                              :on {:click (fn [e]
                                            (.preventDefault e)
-                                           (dispatch! [:filter-by-tag "featured"]))}}
-           " • " (featured-icon)])]
+                                           (dispatch! {:db #(db/filter-by-tag % "featured") :history :push}))}}
+           " \u2022 " (featured-icon)])]
        [:div.post-tags-row
         (tag-list (:post/tags post) dispatch!)
         (page-badges (:post/pages post) dispatch!)]
        [:div.post-body (render-markdown (:post/content post))]
        (when can-edit?
          [:div.button-group
-          [:button {:on {:click #(dispatch! [:view-edit post])}} "Edit"]
+          [:button {:on {:click (fn [_] (dispatch! {:db #(db/edit-from-full-post % post) :history :push}))}} "Edit"]
           #?(:cljs [:button {:on {:click #(js/sg.flybot.flybot_site.ui.core.export_post_BANG_
                                            (:post/title post) (:post/content post))}} "Export"])
-          [:button.danger {:on {:click #(dispatch! [:delete-post (:post/id post)])}} "Delete"]])]
-      [:div
-       [:a.back-link {:href "#"
-                      :on {:click (fn [e]
-                                    (.preventDefault e)
-                                    (dispatch! [:view-back :list]))}}
-        "← Back to posts"]
-       [:p "Post not found"]])))
+          [:button.danger {:on {:click #(dispatch! {:confirm {:message "Delete this post?"
+                                                              :on-confirm {:db db/set-loading
+                                                                           :pull [:delete-post (:post/id post)]}}})}}
+           "Delete"]])]
+      (if (:loading? db)
+        [:div.loading "Loading..."]
+        [:div
+         [:a.back-link {:href "#"
+                        :on {:click (fn [e]
+                                      (.preventDefault e)
+                                      (dispatch! {:db #(db/set-view % :list) :history :push}))}}
+          "\u2190 Back to posts"]
+         [:p "Post not found"]]))))
 
-(defn post-form-view [{:keys [form error view selected-id] :as state} dispatch!]
-  (let [editing? (= view :edit)
+(defalias post-form-view [{::keys [db dispatch!]}]
+  (let [{:keys [form error view selected-id]} db
+        editing? (= view :edit)
         ;; Unique key per view+post ensures editor remounts on navigation
         editor-key (if editing? (str "edit-" selected-id) "new")]
     [:div.post-form
      [:a.back-link {:href "#"
                     :on {:click (fn [e]
                                   (.preventDefault e)
-                                  (dispatch! [:view-back :list]))}}
-      "← Cancel"]
+                                  (dispatch! {:db #(db/set-view % :list) :history :push}))}}
+      "\u2190 Cancel"]
      [:h2 (if editing? "Edit Post" "New Post")]
-     (when error (error-banner state dispatch!))
+     (when error (error-banner db dispatch!))
      [:div.form-group
       [:label "Title"]
       [:input {:type "text" :value (:title form)
-               :on {:input #(dispatch! [:update-form :title (.. % -target -value)])}}]]
+               :on {:input #(dispatch! {:db (fn [db] (db/update-form db :title (.. % -target -value)))})}}]]
      [:div.form-group
       [:label "Pages"]
       [:div.checkbox-group
-       (for [p state/page-order]
+       (for [p db/page-order]
          [:label.checkbox-label {:replicant/key p}
           [:input {:type "checkbox"
                    :checked (contains? (:pages form) p)
-                   :on {:change #(dispatch! [:toggle-form-page p])}}]
+                   :on {:change #(dispatch! {:db (fn [db] (db/toggle-form-page db p))})}}]
           p])]]
      [:div.form-group
       [:label "Tags"]
       [:input {:type "text"
                :value (:tags form)
                :placeholder "clojure, web (comma-separated)"
-               :on {:input #(dispatch! [:update-form :tags (.. % -target -value)])}}]]
+               :on {:input #(dispatch! {:db (fn [db] (db/update-form db :tags (.. % -target -value)))})}}]]
      [:div.form-group
       [:label.checkbox-label
        [:input {:type "checkbox"
                 :checked (:featured? form)
-                :on {:change #(dispatch! [:update-form :featured? (.. % -target -checked)])}}]
+                :on {:change #(dispatch! {:db (fn [db] (db/update-form db :featured? (.. % -target -checked)))})}}]
        "Featured (hero post on page)"]]
      [:div.form-group
       [:label "Content"]
       (markdown-editor (:content form) dispatch! editor-key)]
-     [:button {:on {:click #(dispatch! (if editing? :update-post :create-post))}}
+     [:button {:on {:click #(dispatch! {:db db/set-loading
+                                        :pull (if editing? :update-post :create-post)})}}
       (if editing? "Save Changes" "Create Post")]]))
 
-(defn post-history-view [state dispatch!]
-  (let [post (state/selected-post state)
-        history (:history state)]
+(defalias post-history-view [{::keys [db dispatch!]}]
+  (let [post (:selected-post db)
+        history (:history db)]
     [:div.post-history
      [:a.back-link {:href "#"
                     :on {:click (fn [e]
                                   (.preventDefault e)
-                                  (dispatch! [:view-back :detail]))}}
-      "← Back to post"]
+                                  (dispatch! {:db #(db/set-view % :detail) :history :push}))}}
+      "\u2190 Back to post"]
      [:h1 "Post History: \"" (:post/title post) "\""]
      (if (empty? history)
        [:p "No history available for this post."]
@@ -623,34 +630,38 @@
           (map-indexed
            (fn [idx version]
              [:tr {:replicant/key (:version/tx version)
-                   :on {:click #(dispatch! [:view-version version])}}
+                   :on {:click (fn [_] (dispatch! {:db #(db/view-version % version) :history :push}))}}
               [:td (if (zero? idx) "Current" (str "v" (- (count history) idx)))]
               [:td (format-date (:version/timestamp version))]
               [:td (:post/title version)]
               [:td.preview (content-preview (:post/content version) 50)]])
            history)]]])]))
 
-(defn post-history-detail-view [state dispatch!]
-  (let [version (:history-version state)
+(defalias post-history-detail-view [{::keys [db dispatch!]}]
+  (let [version (:history-version db)
         is-current? (= (:version/tx version)
-                       (:version/tx (first (:history state))))
-        can-edit? (state/can-edit? state)]
+                       (:version/tx (first (:history db))))
+        can-edit? (db/can-edit? db)]
     [:div.post-history-detail
      [:a.back-link {:href "#"
                     :on {:click (fn [e]
                                   (.preventDefault e)
-                                  (dispatch! [:view-back :history]))}}
-      "← Back to history"]
-     [:h1 (:post/title version)
+                                  (dispatch! {:db #(db/set-view % :history) :history :push}))}}
+      "\u2190 Back to history"]
+     [:h1 (:post/title version) " "
       [:span.version-label (if is-current? "(Current)" (str "(from " (format-date (:version/timestamp version)) ")"))]]
-     [:div.post-meta "By " (author-link (:post/author version) dispatch!) " • " (format-date (:version/timestamp version))]
+     [:div.post-meta "By " (author-link (:post/author version) dispatch!) " \u2022 " (format-date (:version/timestamp version))]
      [:div.post-tags-row
       (tag-list (:post/tags version))
       (page-badges (:post/pages version) dispatch!)]
      [:div.post-body.history-content (render-markdown (:post/content version))]
      (when (and can-edit? (not is-current?))
        [:div.button-group {:style {:margin-top "2rem"}}
-        [:button {:on {:click #(dispatch! [:restore-version version])}} "Restore This Version"]])]))
+        [:button {:on {:click (fn [_] (dispatch! {:db #(db/edit-from-full-post % version) :history :push}))}} "Edit This Version"]
+        [:button {:on {:click #(dispatch! {:confirm {:message "Restore this version? Current content will be overwritten."
+                                                     :on-confirm {:db db/set-loading
+                                                                  :pull [:restore-version version]}}})}}
+         "Restore This Version"]])]))
 
 ;;=============================================================================
 ;; Profile View
@@ -680,11 +691,15 @@
             (if is-admin?
               [:button.btn-sm.btn-danger
                {:disabled loading?
-                :on {:click #(dispatch! [:revoke-admin uid])}}
+                :on {:click #(dispatch! {:confirm {:message "Revoke admin role from this user?"
+                                                   :on-confirm {:db db/set-loading
+                                                                :pull [:revoke-admin uid]}}})}}
                "Revoke admin"]
               [:button.btn-sm.btn-primary
                {:disabled loading?
-                :on {:click #(dispatch! [:grant-admin uid])}}
+                :on {:click #(dispatch! {:confirm {:message "Grant admin role to this user?"
+                                                   :on-confirm {:db db/set-loading
+                                                                :pull [:grant-admin uid]}}})}}
                "Grant admin"]))]]))
 
 (defn- admin-management-section
@@ -700,15 +715,16 @@
        (for [u (sort-by :user/name admin-users)]
          (admin-user-row u dispatch! loading?))]]]))
 
-(defn profile-view [{:keys [user profile-data] :as state} dispatch!]
-  (let [{:keys [post-count revision-count roles]} profile-data
+(defalias profile-view [{::keys [db dispatch!]}]
+  (let [{:keys [user profile-data]} db
+        {:keys [post-count revision-count roles]} profile-data
         owner? (some #(= :owner (:role/name %)) roles)]
     [:div.profile-page
      [:a.back-link {:href "#"
                     :on {:click (fn [e]
                                   (.preventDefault e)
-                                  (dispatch! [:view-back :list]))}}
-      "← Back to posts"]
+                                  (dispatch! {:db #(db/set-view % :list) :history :push}))}}
+      "\u2190 Back to posts"]
      [:div.profile-header
       (if-let [picture (:picture user)]
         [:img.profile-avatar {:src picture :alt (:name user)}]
@@ -725,7 +741,7 @@
           {:href (str "/author/" (:slug user))
            :on {:click (fn [e]
                          (.preventDefault e)
-                         (dispatch! [:filter-by-author {:slug (:slug user) :name (:name user)}]))}}
+                         (dispatch! {:db #(db/filter-by-author % {:slug (:slug user) :name (:name user)}) :history :push}))}}
           [:span.stat-value (or post-count 0)]
           [:span.stat-label "Posts authored"]]
          [:div.profile-stat
@@ -742,7 +758,7 @@
                 [:td [:span.role-badge (name (:role/name role))]]
                 [:td (format-date (:role/granted-at role))]])]]])
         (when owner?
-          (admin-management-section state dispatch!))]
+          (admin-management-section db dispatch!))]
        [:div.loading "Loading profile..."])]))
 
 ;;=============================================================================
@@ -775,23 +791,23 @@
 ;; App Root
 ;;=============================================================================
 
-(defn app-view [state dispatch!]
+(defn app-view [{::keys [db dispatch!]}]
   [:div.app-container
-   (site-header state dispatch!)
-   (mobile-nav-overlay state dispatch!)
-   (mobile-nav-drawer state dispatch!)
+   [::site-header {::db db ::dispatch! dispatch!}]
+   [::mobile-nav-overlay {::db db ::dispatch! dispatch!}]
+   [::mobile-nav-drawer {::db db ::dispatch! dispatch!}]
    [:main.main-content
-    (case (:view state)
-      :list (post-list-view state dispatch!)
-      :detail (post-detail-view state dispatch!)
-      :edit (post-form-view state dispatch!)
-      :new (post-form-view state dispatch!)
-      :history (post-history-view state dispatch!)
-      :history-detail (post-history-detail-view state dispatch!)
-      :profile (profile-view state dispatch!)
-      (post-list-view state dispatch!))]
+    (case (:view db)
+      :list [::post-list-view {::db db ::dispatch! dispatch!}]
+      :detail [::post-detail-view {::db db ::dispatch! dispatch!}]
+      :edit [::post-form-view {::db db ::dispatch! dispatch!}]
+      :new [::post-form-view {::db db ::dispatch! dispatch!}]
+      :history [::post-history-view {::db db ::dispatch! dispatch!}]
+      :history-detail [::post-history-detail-view {::db db ::dispatch! dispatch!}]
+      :profile [::profile-view {::db db ::dispatch! dispatch!}]
+      [::post-list-view {::db db ::dispatch! dispatch!}])]
    (site-footer)
-   (toast-container (:toasts state))])
+   (toast-container (:toasts db))])
 
 ;;=============================================================================
 ;; Tests
@@ -799,19 +815,15 @@
 
 ^:rct/test
 (comment
-  (strip-frontmatter "---\nauthor: Bob\n---\n\nHello") ;=> "Hello"
-  (strip-frontmatter "***\nauthor: Bob\n***\n\nHello") ;=> "Hello"
-  (strip-frontmatter "Just content") ;=> "Just content"
-  (strip-frontmatter nil) ;=> ""
   ;; post-card normal mode
-  (first (post-card {:post/id 1 :post/title "Test" :post/author {:user/name "Me"} :post/content "Hello"} identity {})) ;=> :div.post-card
+  (first (post-card {:post {:post/id 1 :post/title "Test" :post/author {:user/name "Me"} :post/content "Hello"} :dispatch! identity :db {}})) ;=> :div.post-card
   ;; post-card page mode
-  (first (post-card {:post/id 1 :post/title "Test" :post/content "Hello"} identity {} true)) ;=> :div.page-card
+  (first (post-card {:post {:post/id 1 :post/title "Test" :post/content "Hello"} :dispatch! identity :db {} :page-mode? true})) ;=> :div.page-card
   (tag-list []) ;=> nil
   (tag-list [] identity) ;=> nil
   (first (tag-list ["a" "b"])) ;=> :div.tags
   (first (tag-list ["a" "b"] identity)) ;=> :div.tags
-  (first (app-view {:view :list :posts [] :loading? false :user nil} identity)) ;=> :div.app-container
+  (first (app-view {::db {:view :list :posts [] :loading? false :user nil} ::dispatch! identity})) ;=> :div.app-container
   ;; error-banner renders when error present
   (first (error-banner {:error {:message "Test" :retryable? true :type :network}} identity)) ;=> :div.alert-box
   ;; error-banner returns nil when no error

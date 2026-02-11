@@ -17,7 +17,8 @@
         com.brunobonacci/mulog {:mvn/version "0.9.0"}
         com.cognitect.aws/api {:mvn/version "0.8.692"}
         com.cognitect.aws/endpoints {:mvn/version "1.1.12.772"}
-        com.cognitect.aws/s3 {:mvn/version "871.2.40.9"}}
+        com.cognitect.aws/s3 {:mvn/version "871.2.40.9"}
+        no.cjohansen/replicant {:mvn/version "2025.06.21"}}
  :aliases
  {:dev {:extra-paths ["dev" "test"]
         :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
@@ -32,7 +33,6 @@
            :main-opts ["-m" "kaocha.runner"]}
   :run {:main-opts ["-m" "sg.flybot.flybot-site.server.system"]}
   :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.28.22"}
-                      no.cjohansen/replicant {:mvn/version "2025.06.21"}
                       com.cognitect/transit-cljs {:mvn/version "0.8.280"}}}
   :jib {:paths ["src"]
         :extra-deps {io.github.atomisthq/jibbit {:git/url "https://github.com/skydread1/jibbit.git"

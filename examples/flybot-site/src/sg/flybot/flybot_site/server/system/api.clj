@@ -159,63 +159,48 @@
   (when-let [post (get posts query)]
     (= (post-author-id post) user-id)))
 
-(deftype MemberPosts [posts user-id]
-  ;; Collection wrapper that enforces ownership on mutations.
-  ;; - CREATE: Sets :post/author to user-id
-  ;; - UPDATE: Only allowed if user owns the post
-  ;; - DELETE: Only allowed if user owns the post
-  clojure.lang.ILookup
-  (valAt [_ query] (get posts query))
-  (valAt [_ query not-found] (get posts query not-found))
-
-  clojure.lang.Seqable
-  (seq [_] (seq posts))
-
-  clojure.lang.Counted
-  (count [_] (count posts))
-
-  coll/Mutable
-  (mutate! [_ query value]
-    (cond
-      ;; CREATE: nil query, some value -> set author
-      (and (nil? query) (some? value))
-      (coll/mutate! posts nil (assoc value :post/author user-id))
-
-      ;; DELETE: some query, nil value -> check ownership
-      (and (some? query) (nil? value))
-      (if (owns-post? posts user-id query)
-        (coll/mutate! posts query nil)
-        {:error {:type :forbidden :message "You don't own this post"}})
-
-      ;; UPDATE: some query, some value -> check ownership
-      (and (some? query) (some? value))
-      (if (owns-post? posts user-id query)
-        (coll/mutate! posts query value)
-        {:error {:type :forbidden :message "You don't own this post"}})
-
-      :else
-      {:error {:type :invalid-mutation :message "Invalid mutation operation"}}))
-
-  coll/Wireable
-  (->wire [_] (coll/->wire posts)))
-
 (defn- member-posts
-  "Create a posts collection with ownership enforcement."
+  "Posts collection with ownership enforcement via wrap-mutable.
+   - CREATE: sets :post/author to user-id
+   - UPDATE/DELETE: only allowed if user owns the post"
   [posts user-id]
-  (->MemberPosts posts user-id))
+  (coll/wrap-mutable posts
+                     (fn [posts query value]
+                       (cond
+                         (and (nil? query) (some? value))
+                         (coll/mutate! posts nil (assoc value :post/author user-id))
+
+                         (and (some? query) (nil? value))
+                         (if (owns-post? posts user-id query)
+                           (coll/mutate! posts query nil)
+                           {:error {:type :forbidden :message "You don't own this post"}})
+
+                         (and (some? query) (some? value))
+                         (if (owns-post? posts user-id query)
+                           (coll/mutate! posts query value)
+                           {:error {:type :forbidden :message "You don't own this post"}})
+
+                         :else
+                         {:error {:type :invalid-mutation :message "Invalid mutation operation"}}))))
 
 (defn- roles-lookup
   "Mutable ILookup for role management.
    Routes to per-user role collections (db/user-roles) for CRUD.
    - GET: (get lookup {:user/id \"..\"}) => list of roles for user
    - CREATE (grant): (mutate! lookup nil {:user/id \"..\" :role/name :admin})
-   - DELETE (revoke): (mutate! lookup {:user/id \"..\" :role/name :admin} nil)"
+   - DELETE (revoke): (mutate! lookup {:user/id \"..\" :role/name :admin} nil)
+
+   Uses direct protocol implementation rather than coll/wrap-mutable or
+   coll/lookup — this is a routing layer that dispatches to per-user
+   sub-collections based on the :user/id in the query. Library convenience
+   functions cover single-collection cases; composite routing like this
+   requires implementing the protocols directly."
   [conn]
   (reify
     clojure.lang.ILookup
     (valAt [_ query]
       (when-let [uid (:user/id query)]
-        (coll/->wire (db/user-roles conn uid))))
+        (db/user-roles conn uid)))
     (valAt [this query not-found]
       (or (.valAt this query) not-found))
 
@@ -247,50 +232,22 @@
 ;;=============================================================================
 
 (defn- me-lookup
-  "ILookup for current user info.
-   Most fields come from the session; :slug requires a DB lookup."
+  "Current user info — session fields + lazy DB lookup for :slug."
   [conn session]
   (let [user-id (:user-id session)]
-    (reify
-      clojure.lang.ILookup
-      (valAt [this k] (.valAt this k nil))
-      (valAt [_ k not-found]
-        (case k
-          :id user-id
-          :email (:user-email session)
-          :name (or (:user-name session) (:user-email session))
-          :picture (:user-picture session)
-          :slug (:user/slug (db/get-user conn user-id))
-          :roles (or (:roles session) #{})
-          not-found))
-
-      coll/Wireable
-      (->wire [_]
-        {:id user-id
-         :email (:user-email session)
-         :name (or (:user-name session) (:user-email session))
-         :picture (:user-picture session)
-         :slug (:user/slug (db/get-user conn user-id))
-         :roles (or (:roles session) #{})}))))
+    (coll/lookup {:id      user-id
+                  :email   (:user-email session)
+                  :name    (or (:user-name session) (:user-email session))
+                  :picture (:user-picture session)
+                  :slug    (delay (:user/slug (db/get-user conn user-id)))
+                  :roles   (or (:roles session) #{})})))
 
 (defn- profile-lookup
-  "ILookup for user profile data. DB queries only run when accessed."
+  "User profile data — all fields are lazy DB queries."
   [conn user-id]
-  (reify
-    clojure.lang.ILookup
-    (valAt [this k] (.valAt this k nil))
-    (valAt [_ k not-found]
-      (case k
-        :post-count (db/count-user-posts conn user-id)
-        :revision-count (db/count-user-revisions conn user-id)
-        :roles (db/get-user-roles-detailed conn user-id)
-        not-found))
-
-    coll/Wireable
-    (->wire [_]
-      {:post-count (db/count-user-posts conn user-id)
-       :revision-count (db/count-user-revisions conn user-id)
-       :roles (db/get-user-roles-detailed conn user-id)})))
+  (coll/lookup {:post-count     (delay (db/count-user-posts conn user-id))
+                :revision-count (delay (db/count-user-revisions conn user-id))
+                :roles          (delay (db/get-user-roles-detailed conn user-id))}))
 
 (defn- with-role
   "Return data if session has role, nil otherwise.
@@ -323,17 +280,18 @@
    All values are ILookups — DB queries only run when the pattern accesses them.
    Stable collections (posts, history, users, roles) are created once at startup."
   [{:keys [conn]}]
-  (let [posts   (db/posts conn)
-        history (db/post-history-lookup conn)
-        users   (coll/read-only (db/users conn))
-        roles   (roles-lookup conn)]
+  (let [posts       (db/posts conn)
+        guest-posts (coll/read-only posts)
+        history     (db/post-history-lookup conn)
+        users       (coll/read-only (db/users conn))
+        roles       (roles-lookup conn)]
     (fn [ring-request]
       (let [session (:session ring-request)
             user-id (:user-id session)]
 
         {:data
          {;; Guest: always available (read-only posts only)
-          :guest {:posts (coll/read-only posts)}
+          :guest {:posts guest-posts}
 
           ;; Member: ILookups — DB calls only when pattern accesses them
           :member (with-role session :member

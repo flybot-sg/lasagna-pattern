@@ -86,17 +86,17 @@ clj-nrepl-eval -p <port> "(user/start!)"
 
 ### Restarting After Code Changes (fun-map pattern)
 
-When you modify backend files (e.g., db.clj, system.clj), follow these steps:
+When you modify backend files (e.g., db/post.cljc, system.clj), follow these steps:
 
 ```bash
 # 1. Stop the system
-clj-nrepl-eval -p <port> "(sg.flybot.flybot-site.system/stop!)"
+clj-nrepl-eval -p <port> "((resolve (symbol \"sg.flybot.flybot-site.server.system\" \"stop!\")))"
 
 # 2. Reload the changed namespace
-clj-nrepl-eval -p <port> "(require 'sg.flybot.flybot-site.db :reload)"
+clj-nrepl-eval -p <port> "(require (quote sg.flybot.flybot-site.server.system.db.post) :reload)"
 
 # 3. Start the system again
-clj-nrepl-eval -p <port> "(user/start!)"
+clj-nrepl-eval -p <port> "((resolve (symbol \"user\" \"start!\")))"
 ```
 
 **Note:** Frontend files (.cljs, .cljc used by frontend) auto-reload via shadow-cljs on save.
@@ -112,19 +112,118 @@ clj-nrepl-eval -p <port> "(user/start!)"
 
 ```
 src/sg/flybot/flybot_site/
-├── api.cljc            # API schema and data structure
-├── auth.cljc           # Role-based authentication
-├── db.clj              # Datahike database + DataSource impl
-├── markdown.cljc       # Frontmatter parsing
-├── s3.clj              # S3 upload handler
-├── server.clj          # HTTP server (standalone)
-├── system.clj          # System lifecycle (fun-map)
+├── server/
+│   ├── system.clj              # System lifecycle (fun-map)
+│   └── system/
+│       ├── api.clj             # API schema, role-based collections
+│       ├── auth.clj            # OAuth + role enforcement
+│       ├── backup.clj          # DB backup utilities
+│       ├── cfg.cljc            # Configuration
+│       ├── db.cljc             # DB connection + schema
+│       ├── db/
+│       │   ├── markdown.cljc   # Frontmatter parsing
+│       │   ├── post.cljc       # PostsDataSource + history
+│       │   ├── role.cljc       # UserRolesDataSource
+│       │   └── user.cljc       # UsersDataSource
+│       └── s3.clj              # S3 upload handler
 └── ui/
-    ├── api.cljs        # Frontend API client (fetch)
-    ├── core.cljs       # App entry point, state, actions
-    ├── log.cljc        # Frontend logging (console)
-    ├── state.cljc      # Pure state transitions
-    └── views.cljc      # Replicant hiccup views
+    ├── api.cljc                # Frontend API client (transit cross-platform, fetch browser-only)
+    ├── core.cljc               # dispatch-of, scroll logic, init (browser-only lifecycle)
+    ├── db.cljc                 # Pure db -> db updater functions
+    ├── history.cljc            # URL<->state mapping (cross-platform), pushState (browser-only)
+    ├── log.cljc                # Frontend logging (console)
+    └── views.cljc              # Replicant defalias views
+```
+
+### UI Architecture (dispatch-of + handle-pull)
+
+Same pattern as pull-playground. Views dispatch effect maps directly, `dispatch-of` routes effects, `handle-pull` executes named API operations.
+
+**dispatch-of factory** (`core.cljc`):
+```clojure
+(def ^:private root-key :app/flybot)
+(defonce app-db (atom {root-key db/initial-state}))
+(def dispatch! (dispatch-of app-db root-key))
+```
+
+Creates a dispatch function that iterates over effect maps via `doseq`. Each effect type is executed independently:
+
+| Effect | Value | Executor |
+|--------|-------|----------|
+| `:db` | `(fn [db] db')` | `swap! app-db update root-key f` |
+| `:pull` | `:keyword` or `[:keyword & args]` | `handle-pull` named operation |
+| `:confirm` | `{:message :on-confirm}` | `js/confirm` → dispatch on-confirm effect map |
+| `:history` | `:push` | `pushState` URL from current state |
+| `:navigate` | URL string | `set! location` (hard navigation) |
+| `:toast` | `{:type :title :message}` | Add toast + auto-dismiss after 4s |
+
+**Pure db -> db updaters** (`db.cljc`):
+```clojure
+;; All functions are pure db -> db — no effect maps returned
+(defn set-loading [db] (assoc db :loading? true :error nil))
+(defn filter-by-tag [db tag] (assoc db :view :list :tag-filter tag ...))
+```
+
+**Views dispatch effect maps directly** (`views.cljc`):
+```clojure
+;; Select a post
+(dispatch! {:db #(db/select-post-start % id) :pull :select-post :history :push})
+
+;; Delete with confirmation
+(dispatch! {:confirm {:message "Delete this post?"
+                      :on-confirm {:db db/set-loading
+                                   :pull [:delete-post id]}}})
+
+;; Compose db functions
+(dispatch! {:db #(-> % db/clear-error db/set-loading) :pull :init})
+```
+
+**resolve-pull** — data-driven pull specs (`core.cljc`):
+
+Pull operations are data (`{:pattern ... :then ...}`), not imperative code.
+`:pull` handler in `dispatch-of` is a generic 5-line executor.
+`:then` is a function that receives the response and returns an effect map:
+
+```clojure
+;; Read spec — :then uses response to update state
+(def init-spec
+  {:pattern '{:guest {:posts ?posts} :member {:me ?user}}
+   :then    (fn [r] {:db #(db/init-fetched % r)})})
+
+;; Mutation spec — :then uses mutation response directly (no re-fetch)
+:create-post
+{:pattern {:member {:posts {nil (db/form->post-data db)}}}
+ :then    (fn [r] {:db #(db/post-created % (get r 'posts))
+                   :history :push
+                   :toast {:type :success :title "Post saved"}})}
+```
+
+**Mutation responses are used directly.** The pull pattern system returns the created/updated entity in the response. The client updates local state from this response — never discard it and re-fetch. See `remote/CLAUDE.md` for why.
+
+| Mutation | Response | Client action |
+|----------|----------|---------------|
+| CREATE `{nil data}` | `{posts <full entity>}` | `(db/post-created db entity)` — add to list |
+| UPDATE `{{:id n} data}` | `{posts <full entity>}` | `(db/post-updated db entity)` — replace in list |
+| DELETE `{{:id n} nil}` | `{posts true}` | `(db/post-deleted db id)` — remove from list |
+
+**Combined pull patterns** — single API request with multiple role keys:
+```clojure
+'{:guest {:posts ?posts} :member {:me ?user}}
+'{:guest {:posts {{:post/id 1} ?post}} :member {:posts/history {{:post/id 1} ?versions}}}
+'{:member {:me/profile ?profile} :owner {:users ?users}}
+```
+
+Callbacks extract named bindings with `(get result 'post)`.
+
+**Cached detail**: `list-all` returns full posts (including content). `select-post-start` looks up the post from `:posts` and sets `:selected-post` immediately. `:select-post` only fetches history for logged-in users, falling back to an API call if the post isn't cached (e.g., direct URL navigation).
+
+**Replicant `defalias`** — render-cached components with namespaced props:
+```clojure
+(defalias post-detail-view [{::keys [db dispatch!]}]
+  ...)
+
+;; Usage in app-view:
+[::post-detail-view {::db db ::dispatch! dispatch!}]
 ```
 
 ## Collection Patterns
@@ -132,13 +231,13 @@ src/sg/flybot/flybot_site/
 ### DataSource-backed Collections (idiomatic)
 
 All collections follow the same pattern from `collection/CLAUDE.md`:
-implement `DataSource` in `db.clj`, wrap with `coll/collection`.
+implement `DataSource` in domain namespaces under `db/`, wrap with `coll/collection`.
 
-| DataSource | Constructor | Indexes | Notes |
-|---|---|---|---|
-| `PostsDataSource` | `db/posts` | `#{:post/id}` | Full CRUD with featured logic |
-| `UsersDataSource` | `db/users` | `#{:user/id}` | Read-only via API (`coll/read-only`) |
-| `UserRolesDataSource` | `db/user-roles` | `#{:role/name}` | Per-user; grant/revoke via create/delete |
+| DataSource | File | Constructor | Indexes | Notes |
+|---|---|---|---|---|
+| `PostsDataSource` | `db/post.cljc` | `posts` | `#{:post/id}` | CRUD + featured logic, `list-all` returns summaries |
+| `UsersDataSource` | `db/user.cljc` | `users` | `#{:user/id}` | Read-only via API (`coll/read-only`) |
+| `UserRolesDataSource` | `db/role.cljc` | `user-roles` | `#{:role/name}` | Per-user; grant/revoke via create/delete |
 
 ### Stable Collections (created once at startup)
 
@@ -150,13 +249,36 @@ not inside the per-request closure. This avoids recreating stateless wrappers on
 posts, history, users, roles-lookup
 
 ;; Created per-request (depend on session/user-id):
-MemberPosts, me-lookup, profile-lookup
+member-posts (wrap-mutable), me-lookup (lookup), profile-lookup (lookup)
 ```
 
-### Authorization Wrapper (MemberPosts)
+### Authorization Wrapper (member-posts)
 
-`MemberPosts` is the only `deftype` in `api.clj`. It wraps the base `posts` collection
-to enforce ownership on mutations — this is the intended pattern from collection docs.
+Uses `coll/wrap-mutable` to wrap the base `posts` collection with ownership enforcement
+on mutations. Reads delegate to the inner collection.
+
+```clojure
+(defn- member-posts [posts user-id]
+  (coll/wrap-mutable posts
+    (fn [posts query value]
+      (cond
+        (and (nil? query) (some? value))
+        (coll/mutate! posts nil (assoc value :post/author user-id))
+        ...))))
+```
+
+### Field Lookups (me-lookup, profile-lookup)
+
+Uses `coll/lookup` for non-enumerable keyword-keyed resources.
+Delay values are computed at most once, shared between ILookup and `->wire`:
+
+```clojure
+(defn- me-lookup [conn session]
+  (coll/lookup {:id    (:user-id session)
+                :email (:user-email session)
+                :slug  (delay (:user/slug (db/get-user conn uid)))  ; lazy
+                :roles (or (:roles session) #{})}))
+```
 
 ## Logging
 
@@ -287,7 +409,7 @@ Pages are special tag filters with different styling. A "page" is just a tag in 
 
 ### Configuration
 
-In `ui/state.cljc`:
+In `ui/db.cljc`:
 
 ```clojure
 :pages #{"Home"}   ; tags that become pages
