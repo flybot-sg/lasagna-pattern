@@ -127,6 +127,37 @@ src/sg/flybot/flybot_site/
     └── views.cljc      # Replicant hiccup views
 ```
 
+## Collection Patterns
+
+### DataSource-backed Collections (idiomatic)
+
+All collections follow the same pattern from `collection/CLAUDE.md`:
+implement `DataSource` in `db.clj`, wrap with `coll/collection`.
+
+| DataSource | Constructor | Indexes | Notes |
+|---|---|---|---|
+| `PostsDataSource` | `db/posts` | `#{:post/id}` | Full CRUD with featured logic |
+| `UsersDataSource` | `db/users` | `#{:user/id}` | Read-only via API (`coll/read-only`) |
+| `UserRolesDataSource` | `db/user-roles` | `#{:role/name}` | Per-user; grant/revoke via create/delete |
+
+### Stable Collections (created once at startup)
+
+Collections that only depend on `conn` are created once in `make-api`'s outer `let`,
+not inside the per-request closure. This avoids recreating stateless wrappers on every request.
+
+```clojure
+;; Hoisted outside (fn [ring-request] ...) — created once:
+posts, history, users, roles-lookup
+
+;; Created per-request (depend on session/user-id):
+MemberPosts, me-lookup, profile-lookup
+```
+
+### Authorization Wrapper (MemberPosts)
+
+`MemberPosts` is the only `deftype` in `api.clj`. It wraps the base `posts` collection
+to enforce ownership on mutations — this is the intended pattern from collection docs.
+
 ## Logging
 
 Use mulog for structured logging. Events are keyword-namespaced with key-value pairs.
@@ -246,8 +277,8 @@ Role is always the top-level key. Each role contains the resources it can access
 ;; List users (owner)
 '{:owner {:users ?all}}
 
-;; History (public via guest)
-'{:guest {:posts/history {{:post/id 3} ?versions}}}
+;; History (member only)
+'{:member {:posts/history {{:post/id 3} ?versions}}}
 ```
 
 ## Pages

@@ -29,7 +29,6 @@
 
    See remote/doc/SPECIFICATION.md for wire protocol."
   (:require
-   [sg.flybot.flybot-site.server.system.api.role :as role]
    [sg.flybot.flybot-site.server.system.db :as db]
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.pullable.malli]
@@ -205,81 +204,9 @@
   [posts user-id]
   (->MemberPosts posts user-id))
 
-;;=============================================================================
-;; Users Collection (Owner only)
-;;=============================================================================
-
-(deftype UsersCollection [conn]
-  ;; Collection for user management (owner only).
-  ;; Supports listing users. Role grant/revoke via nested :roles collection.
-  clojure.lang.ILookup
-  (valAt [_ query] (db/get-user conn (:user/id query)))
-  (valAt [this query not-found] (or (.valAt this query) not-found))
-
-  clojure.lang.Seqable
-  (seq [_] (seq (db/list-users conn)))
-
-  clojure.lang.Counted
-  (count [_] (count (db/list-users conn)))
-
-  coll/Wireable
-  (->wire [this] (vec (seq this))))
-
-(defn- users-collection [conn]
-  (->UsersCollection conn))
-
-;;-----------------------------------------------------------------------------
-
-(deftype RolesCollection [conn user-id]
-  ;; Collection for managing roles of a specific user.
-  ;; - CREATE (nil query): Grant role
-  ;; - DELETE (query, nil value): Revoke role
-  clojure.lang.ILookup
-  (valAt [_ query]
-    (let [roles (db/get-user-roles conn user-id)]
-      (when (contains? roles (:role/name query))
-        {:role/name (:role/name query)})))
-  (valAt [this query not-found] (or (.valAt this query) not-found))
-
-  clojure.lang.Seqable
-  (seq [_]
-    (map (fn [r] {:role/name r}) (db/get-user-roles conn user-id)))
-
-  clojure.lang.Counted
-  (count [_] (count (db/get-user-roles conn user-id)))
-
-  coll/Mutable
-  (mutate! [_ query value]
-    (cond
-      ;; GRANT: nil query, value with :role/name
-      (and (nil? query) (some? value))
-      (let [role (:role/name value)
-            existing (db/get-user-roles conn user-id)]
-        (if (contains? existing role)
-          {:error {:type :already-granted :message (str "Role already granted: " (name role))}}
-          (do (db/grant-role! conn user-id role)
-              {:role/name role :granted true})))
-
-      ;; REVOKE: query with :role/name, nil value
-      (and (some? query) (nil? value))
-      (let [role (:role/name query)
-            existing (db/get-user-roles conn user-id)]
-        (if (contains? existing role)
-          (do (db/revoke-role! conn user-id role)
-              {:role/name role :revoked true})
-          {:error {:type :not-found :message (str "Role not found: " (name role))}}))
-
-      :else
-      {:error {:type :invalid-mutation :message "Invalid mutation operation"}}))
-
-  coll/Wireable
-  (->wire [this] (vec (seq this))))
-
-(defn- roles-collection [conn user-id]
-  (->RolesCollection conn user-id))
-
 (defn- roles-lookup
   "Mutable ILookup for role management.
+   Routes to per-user role collections (db/user-roles) for CRUD.
    - GET: (get lookup {:user/id \"..\"}) => list of roles for user
    - CREATE (grant): (mutate! lookup nil {:user/id \"..\" :role/name :admin})
    - DELETE (revoke): (mutate! lookup {:user/id \"..\" :role/name :admin} nil)"
@@ -288,7 +215,7 @@
     clojure.lang.ILookup
     (valAt [_ query]
       (when-let [uid (:user/id query)]
-        (vec (seq (roles-collection conn uid)))))
+        (coll/->wire (db/user-roles conn uid))))
     (valAt [this query not-found]
       (or (.valAt this query) not-found))
 
@@ -299,16 +226,14 @@
         (and (nil? query) (some? value))
         (let [{:keys [user/id role/name]} value]
           (if (and id name)
-            (do (db/grant-role! conn id name)
-                {:user/id id :role/name name :granted true})
+            (coll/mutate! (db/user-roles conn id) nil {:role/name name})
             {:error {:type :invalid-mutation :message "Requires :user/id and :role/name"}}))
 
         ;; REVOKE: query with :user/id and :role/name, nil value
         (and (some? query) (nil? value))
         (let [{:keys [user/id role/name]} query]
           (if (and id name)
-            (do (db/revoke-role! conn id name)
-                {:user/id id :role/name name :revoked true})
+            (coll/mutate! (db/user-roles conn id) {:role/name name} nil)
             {:error {:type :invalid-mutation :message "Requires :user/id and :role/name"}}))
 
         :else
@@ -322,9 +247,8 @@
 ;;=============================================================================
 
 (defn- me-lookup
-  "Lazy ILookup for current user info.
-   Most fields come from the session (free), but :slug requires a DB lookup
-   which only runs when the pattern accesses it."
+  "ILookup for current user info.
+   Most fields come from the session; :slug requires a DB lookup."
   [conn session]
   (let [user-id (:user-id session)]
     (reify
@@ -350,9 +274,7 @@
          :roles (or (:roles session) #{})}))))
 
 (defn- profile-lookup
-  "Lazy ILookup for user profile data.
-   Cheap to create (just a closure) — DB queries only run when ->wire is called,
-   i.e. when the pattern matcher binds ?profile."
+  "ILookup for user profile data. DB queries only run when accessed."
   [conn user-id]
   (reify
     clojure.lang.ILookup
@@ -369,6 +291,13 @@
       {:post-count (db/count-user-posts conn user-id)
        :revision-count (db/count-user-revisions conn user-id)
        :roles (db/get-user-roles-detailed conn user-id)})))
+
+(defn- with-role
+  "Return data if session has role, nil otherwise.
+   Nil-valued keys fail pattern matching naturally — no data leaks."
+  [session role data]
+  (when (contains? (:roles session) role)
+    data))
 
 (def ^:private error-config
   "Error handling config for remote layer.
@@ -391,38 +320,40 @@
    - :admin  - requires :admin: {:posts}
    - :owner  - requires :owner: {:users, :users/roles}
 
-   :me and :me/profile are lazy ILookups — DB queries only run when the
-   pattern matcher accesses their fields (e.g. :slug triggers db/get-user)."
+   All values are ILookups — DB queries only run when the pattern accesses them.
+   Stable collections (posts, history, users, roles) are created once at startup."
   [{:keys [conn]}]
-  (fn [ring-request]
-    (let [session (:session ring-request)
-          user-id (:user-id session)
-          posts (db/posts conn)
-          history (db/post-history-lookup conn)]
+  (let [posts   (db/posts conn)
+        history (db/post-history-lookup conn)
+        users   (coll/read-only (db/users conn))
+        roles   (roles-lookup conn)]
+    (fn [ring-request]
+      (let [session (:session ring-request)
+            user-id (:user-id session)]
 
-      {:data
-       {;; Guest: always available (read-only posts only)
-        :guest {:posts (coll/read-only posts)}
+        {:data
+         {;; Guest: always available (read-only posts only)
+          :guest {:posts (coll/read-only posts)}
 
-        ;; Member: values are lazy ILookups — no DB calls until pattern accesses them
-        :member (role/with-role session :member
-                  {:posts (member-posts posts user-id)
-                   :posts/history history
-                   :me (me-lookup conn session)
-                   :me/profile (profile-lookup conn user-id)})
+          ;; Member: ILookups — DB calls only when pattern accesses them
+          :member (with-role session :member
+                    {:posts (member-posts posts user-id)
+                     :posts/history history
+                     :me (me-lookup conn session)
+                     :me/profile (profile-lookup conn user-id)})
 
-        ;; Admin: CRUD any post
-        :admin (role/with-role session :admin
-                 {:posts posts})
+          ;; Admin: CRUD any post
+          :admin (with-role session :admin
+                   {:posts posts})
 
-        ;; Owner: user management + role grant/revoke
-        :owner (role/with-role session :owner
-                 {:users (users-collection conn)
-                  :users/roles (roles-lookup conn)})}
+          ;; Owner: user management + role grant/revoke
+          :owner (with-role session :owner
+                   {:users users
+                    :users/roles roles})}
 
-       :schema schema
-       :errors error-config
-       :sample sample-data})))
+         :schema schema
+         :errors error-config
+         :sample sample-data}))))
 
 ;;=============================================================================
 ;; Tests

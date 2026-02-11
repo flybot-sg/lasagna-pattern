@@ -41,6 +41,7 @@
 
    [sg.flybot.flybot-site.server.system.cfg :as cfg]
    [sg.flybot.flybot-site.server.system.db :as db]
+   [datahike-s3.core] ; registers :s3 backend
    [sg.flybot.flybot-site.server.system.auth :as auth]
    [sg.flybot.flybot-site.server.system.s3 :as s3]
    [sg.flybot.pullable.remote :as remote]
