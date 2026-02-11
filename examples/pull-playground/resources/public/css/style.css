@@ -171,10 +171,11 @@ body {
 }
 
 @media (max-width: 1024px) {
-  .main-content {
+  .main-content,
+  .main-content.with-sidebar {
     grid-template-columns: 1fr;
-    grid-template-rows: auto auto auto;
   }
+  .examples-panel { border-left: none; border-top: 1px solid var(--border); }
 }
 
 /* Panels */
@@ -311,13 +312,6 @@ body {
   margin-top: 0;
   padding: 0.5rem 1rem;
   font-size: 0.75rem;
-}
-
-/* Editor Panel (deprecated, keeping for compatibility) */
-.editor-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
 }
 
 .editor-section {
@@ -826,62 +820,6 @@ body {
 [data-theme="dark"] .rainbow-6 { color: #bcaaa4; }  /* Light Brown */
 
 /*=============================================================================
- * Schema Viewer (read-only display)
- *============================================================================*/
-
-.schema-viewer {
-  flex: 1;
-  min-height: 100px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-editor);
-  overflow: auto;
-}
-
-.schema-viewer .schema-code {
-  margin: 0;
-  padding: 0.75rem;
-  font-family: var(--font-mono);
-  font-size: 0.75rem;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-wrap: break-word;
-}
-
-.schema-viewer .schema-loading,
-.schema-viewer .schema-empty,
-.schema-viewer .schema-error {
-  padding: 0.75rem;
-  font-size: 0.875rem;
-}
-
-.schema-viewer .schema-loading,
-.schema-viewer .schema-empty {
-  color: var(--text-muted);
-  font-style: italic;
-}
-
-.schema-viewer .schema-error {
-  color: var(--error);
-}
-
-/* Schema tokens are hoverable */
-.schema-viewer .token-keyword {
-  cursor: help;
-  border-radius: 2px;
-  transition: background-color var(--transition-fast);
-}
-
-.schema-viewer .token-keyword:hover {
-  background-color: var(--accent);
-  color: white;
-}
-
-[data-theme="dark"] .schema-viewer .token-keyword:hover {
-  background-color: var(--accent);
-}
-
-/*=============================================================================
  * Schema Tooltip
  *============================================================================*/
 
@@ -1115,5 +1053,67 @@ body {
 
 .sandbox-content {
   overflow: auto;
+}
+
+/*=============================================================================
+ * Mobile Tab Bar
+ *============================================================================*/
+
+.mobile-tab-bar {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* Tab bar */
+  .mobile-tab-bar {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--bg-card);
+    border-top: 1px solid var(--border);
+    z-index: 100;
+  }
+
+  .tab-button {
+    flex: 1;
+    min-height: 52px;
+    background: none;
+    border: none;
+    border-top: 2px solid transparent;
+    color: var(--text-muted);
+    font-family: var(--font-sans);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: color var(--transition-fast);
+  }
+
+  .tab-button.active {
+    color: var(--accent);
+    border-top-color: var(--accent);
+  }
+
+  /* Hide mode toggle on mobile */
+  .mode-toggle { display: none; }
+
+  /* Space for fixed tab bar */
+  .app-container { padding-bottom: 56px; }
+
+  /* Header compact */
+  .site-header { padding: 0.75rem 1rem; }
+  .site-header h1 { font-size: 1.125rem; }
+
+  /* Hide inactive panels */
+  .panel.mobile-hidden { display: none; }
+
+  /* Tighter panel padding */
+  .panel { padding: 0.75rem; }
+}
+
+@media (max-width: 600px) {
+  .site-header h1 { font-size: 1rem; }
+  .execute-btn { min-height: 44px; }
 }
 

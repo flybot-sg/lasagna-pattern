@@ -67,6 +67,23 @@
           [:span.show-dark (sun-icon)]])]]))
 
 ;;-----------------------------------------------------------------------------
+;; Mobile Tab Bar
+;;-----------------------------------------------------------------------------
+
+(defalias mobile-tab-bar
+  [{::keys [active-tab dispatch!]}]
+  [:nav.mobile-tab-bar
+   (for [tab [:pattern :data :examples]]
+     [:button.tab-button
+      {:replicant/key tab
+       :class (when (= tab active-tab) "active")
+       :on {:click #(dispatch! {:db (fn [db] (state/set-active-tab db tab))})}}
+      (case tab
+        :pattern  "Pattern"
+        :data     "Data"
+        :examples "Examples")])])
+
+;;-----------------------------------------------------------------------------
 ;; Data Panel
 ;;-----------------------------------------------------------------------------
 
@@ -90,8 +107,8 @@
 
 (defalias data-panel
   [{::keys [db dispatch!]}]
-  (let [{:keys [mode server-url data schema data-view]} db]
-    [:div.panel.data-panel
+  (let [{:keys [mode server-url data schema data-view active-tab]} db]
+    [:div.panel.data-panel {:class (when (not= active-tab :data) "mobile-hidden")}
      [:div.panel-header
       [:h2 "Data"]]
      [:div.panel-content
@@ -118,8 +135,8 @@
 
 (defalias pattern-results-panel
   [{::keys [db dispatch!]}]
-  (let [{:keys [pattern-text loading? schema autocomplete result error]} db]
-    [:div.panel.pattern-results-panel
+  (let [{:keys [pattern-text loading? schema autocomplete result error active-tab]} db]
+    [:div.panel.pattern-results-panel {:class (when (not= active-tab :pattern) "mobile-hidden")}
      [:div.pattern-section
       [:div.section-header
        [:label "Pattern"]
@@ -177,8 +194,8 @@
 ;;-----------------------------------------------------------------------------
 
 (defalias examples-panel
-  [{::keys [selected-example dispatch!]}]
-  [:div.panel.examples-panel
+  [{::keys [selected-example active-tab dispatch!]}]
+  [:div.panel.examples-panel {:class (when (not= active-tab :examples) "mobile-hidden")}
    [:div.panel-header
     [:h2 "Examples"]]
    [:div.panel-content
@@ -191,7 +208,8 @@
                            {:db (fn [db]
                                   (-> db
                                       (assoc :pattern-text (:pattern example)
-                                             :selected-example idx)
+                                             :selected-example idx
+                                             :active-tab :pattern)
                                       state/clear-result))})}}
         (:name example)])]
     [:div.syntax-reference
@@ -207,13 +225,15 @@
 ;;=============================================================================
 
 (defn app-view [{::keys [db dispatch!]}]
-  (let [{:keys [selected-example]} db]
+  (let [{:keys [selected-example active-tab]} db]
     [:div.app-container
      [::site-header {::db db ::dispatch! dispatch!}]
+     [::mobile-tab-bar {::active-tab active-tab ::dispatch! dispatch!}]
      [:div.main-content.with-sidebar
       [::data-panel {::db db ::dispatch! dispatch!}]
       [::pattern-results-panel {::db db ::dispatch! dispatch!}]
       [::examples-panel {::selected-example selected-example
+                         ::active-tab active-tab
                          ::dispatch! dispatch!}]]]))
 
 ;;=============================================================================
@@ -229,6 +249,7 @@
   (format-result {:a 1}) ;=> "{:a 1}"
 
   ;; app-view returns container
-  (first (app-view {::db {:mode :sandbox :pattern-text "" :data nil :schema nil}
+  (first (app-view {::db {:mode :sandbox :pattern-text "" :data nil :schema nil
+                          :active-tab :pattern}
                     ::dispatch! identity})))
   ;=> :div.app-container)

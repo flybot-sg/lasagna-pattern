@@ -15,6 +15,7 @@
    :error nil              ; Error message string
    :loading? false
    :selected-example nil   ; Index of selected example
+   :active-tab :pattern    ; Mobile tab: :pattern | :data | :examples
    ;; Sandbox store (set once at init, stable reference, nil in remote mode)
    :sandbox/store nil
    ;; Mode-agnostic (populated by handle-pull for current mode)
@@ -51,6 +52,9 @@
 
 (defn set-data [db data]
   (assoc db :data data))
+
+(defn set-active-tab [db tab]
+  (assoc db :active-tab tab))
 
 ;;=============================================================================
 ;; Remote mode updaters
@@ -120,6 +124,11 @@
   (let [db (set-schema {:schema-error "old"} [:map [:name :string]])]
     [(:schema db) (:schema-error db)])
   ;=> [[:map [:name :string]] nil]
+
+  ;; set-active-tab switches tab
+  (let [db (set-active-tab {:active-tab :data} :pattern)]
+    (:active-tab db))
+  ;=> :pattern
 
   ;; move-autocomplete-selection wraps around
   (let [db {:autocomplete {:completions [:a :b :c] :selected 2}}]
