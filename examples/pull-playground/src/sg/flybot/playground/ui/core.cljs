@@ -5,7 +5,6 @@
    - :db    — pure state updater (swap! app-db update root-key f)
    - :pull  — pull pattern API (string or keyword)
    - :nav   — URL navigation (pushState)
-   - :batch — composed effects
 
    Mode only affects transport. make-executor returns a function
    that runs patterns — sandbox does it in-process via remote/execute,
@@ -85,7 +84,8 @@
   [db]
   (case (:mode db)
     :sandbox (fn [pattern-str on-success on-error]
-               (let [{:keys [result error]} (sandbox/execute! pattern-str)]
+               (let [{:keys [result error]}
+                     (sandbox/execute! (:sandbox/store db) sandbox/store-schema pattern-str)]
                  (if error (on-error error) (on-success result))))
     :remote  (fn [pattern-str on-success on-error]
                (pull! (:server-url db) pattern-str on-success on-error))))
@@ -154,23 +154,7 @@
         :nav   (let [path (str "/" (name effect-def))]
                  (when-not (= path (.-pathname js/location))
                    (.pushState js/history nil "" path)))
-        :batch (doseq [[dispatch! eff] (effect-def @app-db (partial dispatch-of app-db))]
-                 (dispatch! eff))
         (js/console.warn "Unknown effect type:" type)))))
-
-;;=============================================================================
-;; Rendering
-;;=============================================================================
-
-(defonce root-el (atom nil))
-
-(defn render! []
-  (when-let [el @root-el]
-    (let [db (get @app-db root-key)
-          dispatch! (dispatch-of app-db root-key)]
-      (r/render el (views/app-view {::views/db db ::views/dispatch! dispatch!})))))
-
-(add-watch app-db :render (fn [_ _ _ _] (render!)))
 
 ;;=============================================================================
 ;; Theme
@@ -187,6 +171,15 @@
     (.setAttribute (.-body js/document) "data-theme" "dark")))
 
 ;;=============================================================================
+;; Hot Reload
+;;=============================================================================
+
+(defn ^:export render!
+  "Trigger re-render after hot reload. Fires the add-watch on app-db."
+  []
+  (swap! app-db identity))
+
+;;=============================================================================
 ;; Initialization
 ;;=============================================================================
 
@@ -196,14 +189,18 @@
     :sandbox))
 
 (defn ^:export init! []
-  (reset! root-el (js/document.getElementById "app"))
-  (init-theme!)
-  (when (= (.-pathname js/location) "/")
-    (.replaceState js/history nil "" "/sandbox"))
-  (sandbox/init!)
-  (let [mode     (path->mode)
-        dispatch! (dispatch-of app-db root-key)]
-    (dispatch! {:db #(state/set-mode % mode)})
+  (let [el        (js/document.getElementById "app")
+        dispatch! (dispatch-of app-db root-key)
+        store     (sandbox/make-store (sandbox/make-sources data/default-data))]
+    (init-theme!)
+    (when (= (.-pathname js/location) "/")
+      (.replaceState js/history nil "" "/sandbox"))
+    (add-watch app-db :render
+               (fn [_ _ _ state]
+                 (r/render el (views/app-view {::views/db (root-key state) ::views/dispatch! dispatch!}))))
+    (dispatch! {:db #(-> %
+                         (assoc :sandbox/store store)
+                         (state/set-mode (path->mode)))})
     (dispatch! {:pull :init})
     (when-let [prev @popstate-listener]
       (.removeEventListener js/window "popstate" prev))
@@ -212,7 +209,5 @@
                        (dispatch! {:db #(state/set-mode % new-mode)})
                        (dispatch! {:pull :init})))]
       (.addEventListener js/window "popstate" listener)
-      (reset! popstate-listener listener)))
-  (render!))
+      (reset! popstate-listener listener))))
 
-(init!)

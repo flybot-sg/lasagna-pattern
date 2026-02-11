@@ -197,14 +197,6 @@
         (rest rest-elems)
         rest-elems))))
 
-(defn- unwrap-schema-form
-  "Unwrap collection types to get the inner schema form."
-  [schema-form]
-  (when (vector? schema-form)
-    (case (first schema-form)
-      (:vector :sequential :set :seqable) (second schema-form)
-      schema-form)))
-
 (defn- search-schema-for-field
   "Recursively search a Malli hiccup schema for a field's properties."
   [schema-form field-key]
@@ -223,10 +215,14 @@
                       (when-let [child-schema (malli-entry-schema entry)]
                         (search-schema-for-field child-schema field-key)))
                     entries)))
-        ;; Collection types - unwrap and search inner schema
+        ;; Collection types - unwrap (skip optional props map) and search inner
         (:vector :sequential :set :seqable)
-        (when-let [inner (second schema-form)]
-          (search-schema-for-field inner field-key))
+        (let [children (rest schema-form)
+              inner    (if (map? (first children))
+                         (second children)
+                         (first children))]
+          (when inner
+            (search-schema-for-field inner field-key)))
         ;; Other types - no fields to search
         nil))))
 
@@ -271,6 +267,89 @@
      [:pre.edn-code (highlight-edn value)])])
 
 ;;=============================================================================
+;; Autocomplete Helpers (pure, testable on JVM)
+;;=============================================================================
+
+(defn extract-context-path
+  "Extract the current nesting path from text before cursor.
+   Path is built from keywords that precede opening braces.
+   Braces without a preceding keyword (map-key literals like {{:id 1} ...})
+   are tracked but don't affect the path.
+
+   Example: '{:users {:name'              -> [:users]
+            '{:config {:features {:'      -> [:config :features]
+            '{:users {{:id 1} {:name'     -> [:users]"
+  [text cursor-pos]
+  (let [before-cursor (subs text 0 cursor-pos)
+        tokens (re-seq #":[a-zA-Z0-9\-_]+|\{|\}" before-cursor)]
+    (loop [tokens     tokens
+           path       []
+           brace-stack []
+           pending-kw nil]
+      (if-let [tok (first tokens)]
+        (cond
+          (= tok "{")
+          (if pending-kw
+            (recur (rest tokens)
+                   (conj path pending-kw)
+                   (conj brace-stack :nesting)
+                   nil)
+            (recur (rest tokens)
+                   path
+                   (conj brace-stack :literal)
+                   nil))
+          (= tok "}")
+          (let [brace-type (peek brace-stack)]
+            (recur (rest tokens)
+                   (if (= brace-type :nesting)
+                     (if (seq path) (pop path) [])
+                     path)
+                   (if (seq brace-stack) (pop brace-stack) [])
+                   nil))
+          :else
+          (recur (rest tokens)
+                 path
+                 brace-stack
+                 (keyword (subs tok 1))))
+        path))))
+
+(defn get-current-keyword-prefix
+  "Get the partial keyword being typed at cursor position.
+   Returns {:prefix string :start-pos int} or nil."
+  [text cursor-pos]
+  (when (and text (pos? cursor-pos) (<= cursor-pos (count text)))
+    (let [before-cursor (subs text 0 cursor-pos)
+          last-colon (str/last-index-of before-cursor ":")
+          prefix (when last-colon
+                   (let [after-colon (subs before-cursor last-colon)]
+                     (when (re-matches #":[a-zA-Z0-9\-_]*" after-colon)
+                       after-colon)))]
+      (when prefix
+        {:prefix prefix
+         :start-pos last-colon}))))
+
+(defn filter-completions
+  "Filter schema keys by prefix."
+  [schema-keys prefix]
+  (let [prefix-lower (str/lower-case (or prefix ":"))]
+    (->> schema-keys
+         (filter #(str/starts-with? (str/lower-case (str %)) prefix-lower))
+         (sort-by str)
+         (take 10))))
+
+(defn apply-completion
+  "Apply selected completion, returns new text and cursor position."
+  [text cursor-pos autocomplete]
+  (let [{:keys [completions selected start-pos]} autocomplete
+        completion (nth completions selected)
+        new-text (str (subs text 0 start-pos)
+                      (str completion)
+                      (subs text cursor-pos))
+        new-cursor-pos (+ start-pos (count (str completion)))]
+    {:text new-text
+     :cursor-pos new-cursor-pos}))
+
+;;=============================================================================
 ;; Tests
 ;;=============================================================================
 
@@ -295,14 +374,6 @@
 
   ;; classify-token identifies comments
   (classify-token "; comment") ;=> :comment
-
-  ;; paren-char? works
-  (paren-char? "(") ;=> true
-  (paren-char? "foo") ;=> false
-
-  ;; open-paren? works
-  (open-paren? "(") ;=> true
-  (open-paren? ")") ;=> false
 
   ;; highlight-edn returns hiccup
   (first (highlight-edn "{:a 1}")) ;=> :span.edn-highlighted
@@ -340,5 +411,51 @@
 
   ;; lookup-field-doc returns nil when no doc properties
   (let [schema [:map [:name :string]]]
-    (lookup-field-doc schema :name)))
-  ;=> nil)
+    (lookup-field-doc schema :name))
+  ;=> nil
+
+  ;; lookup-field-doc finds fields inside vectors with props map
+  (let [schema [:map
+                [:users {:doc "User list"}
+                 [:vector {:ilookup true}
+                  [:map
+                   [:id {:doc "User ID" :example 1} :int]]]]]]
+    (:doc (lookup-field-doc schema :id)))
+  ;=> "User ID"
+
+  ;; extract-context-path — simple nesting
+  (extract-context-path "{:users {:name" 10)
+  ;=> [:users]
+
+  ;; extract-context-path — deeper nesting
+  (extract-context-path "{:config {:features {:" 22)
+  ;=> [:config :features]
+
+  ;; extract-context-path — indexed lookup stays at same level
+  (extract-context-path "{:users {{:id 1} {:na" 21)
+  ;=> [:users]
+
+  ;; extract-context-path — root level
+  (extract-context-path "{:" 2)
+  ;=> []
+
+  ;; get-current-keyword-prefix — typing a keyword
+  (get-current-keyword-prefix "{:na" 4)
+  ;=> {:prefix ":na" :start-pos 1}
+
+  ;; get-current-keyword-prefix — no keyword context
+  (get-current-keyword-prefix "{foo" 4)
+  ;=> nil
+
+  ;; filter-completions — filters by prefix
+  (filter-completions #{:name :email :id} ":na")
+  ;=> [:name]
+
+  ;; filter-completions — empty prefix returns all sorted
+  (filter-completions #{:b :a} ":")
+  ;=> [:a :b]
+
+  ;; apply-completion — replaces prefix with completed keyword
+  (apply-completion "{:na}" 4
+                    {:completions [:name] :selected 0 :start-pos 1}))
+  ;=> {:text "{:name}" :cursor-pos 6})

@@ -6,5 +6,6 @@
  {:app {:target :browser
         :output-dir "resources/public/js"
         :asset-path "/js"
-        :modules {:main {:entries [sg.flybot.playground.ui.core]}}
+        :modules {:main {:entries [sg.flybot.playground.ui.core]
+                         :init-fn sg.flybot.playground.ui.core/init!}}
         :devtools {:after-load sg.flybot.playground.ui.core/render!}}}}

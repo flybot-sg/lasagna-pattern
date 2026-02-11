@@ -48,31 +48,6 @@
   (set! (.-selectionStart textarea) pos)
   (set! (.-selectionEnd textarea) pos))
 
-(def ^:private paired-chars
-  "Map of opening chars to their closing pairs."
-  {"(" ")" "[" "]" "{" "}"})
-
-(defn- detect-auto-pair
-  "Detect if parinfer added a closing paren and cursor should be positioned inside.
-   Returns the position adjustment (0 or -1) based on what was typed."
-  [old-text new-text cursor-pos]
-  (when (and old-text new-text
-             (> (count new-text) (count old-text))
-             (> cursor-pos 0))
-    (let [;; Character that was just typed (before cursor)
-          typed-char (when (< (dec cursor-pos) (count new-text))
-                       (subs new-text (dec cursor-pos) cursor-pos))
-          ;; Character after cursor in new text
-          char-after (when (< cursor-pos (count new-text))
-                       (subs new-text cursor-pos (inc cursor-pos)))]
-      ;; If we typed an opening paren and the char after is its closing pair,
-      ;; cursor should stay between them (no adjustment needed since cursor is already there)
-      ;; But if parinfer moved things around, we might need to adjust
-      (when (and typed-char (get paired-chars typed-char)
-                 (= char-after (get paired-chars typed-char)))
-        ;; Cursor is already between the pair, return 0
-        0))))
-
 ;;=============================================================================
 ;; Autocomplete Helpers - Malli Schema Support
 ;;=============================================================================
@@ -148,64 +123,6 @@
     (when-let [sub-schema (get-schema-at-path schema-form path)]
       (malli-map-keys sub-schema))))
 
-(defn- extract-context-path
-  "Extract the current nesting path from text before cursor.
-   Path is built from keywords that precede opening braces.
-
-   Example: '{:users {:name' -> [:users]
-            '{:config {:features {:' -> [:config :features]"
-  [text cursor-pos]
-  (let [before-cursor (subs text 0 cursor-pos)
-        ;; Tokenize: extract keywords and braces
-        tokens (re-seq #":[a-zA-Z0-9\-_]+|\{|\}" before-cursor)]
-    (loop [tokens tokens
-           path []
-           pending-kw nil]
-      (if-let [tok (first tokens)]
-        (cond
-          ;; Opening brace - push pending keyword to path
-          (= tok "{")
-          (recur (rest tokens)
-                 (if pending-kw (conj path pending-kw) path)
-                 nil)
-          ;; Closing brace - pop from path
-          (= tok "}")
-          (recur (rest tokens)
-                 (if (seq path) (pop path) [])
-                 nil)
-          ;; Keyword - remember it for next opening brace
-          :else
-          (recur (rest tokens)
-                 path
-                 (keyword (subs tok 1))))
-        path))))
-
-(defn get-current-keyword-prefix
-  "Get the partial keyword being typed at cursor position.
-   Returns {:prefix string :start-pos int} or nil."
-  [text cursor-pos]
-  (when (and text (pos? cursor-pos) (<= cursor-pos (count text)))
-    (let [before-cursor (subs text 0 cursor-pos)
-          ;; Find the start of current keyword (last :)
-          last-colon (str/last-index-of before-cursor ":")
-          ;; Check if we're in a keyword context (: followed by word chars)
-          prefix (when last-colon
-                   (let [after-colon (subs before-cursor last-colon)]
-                     (when (re-matches #":[a-zA-Z0-9\-_]*" after-colon)
-                       after-colon)))]
-      (when prefix
-        {:prefix prefix
-         :start-pos last-colon}))))
-
-(defn filter-completions
-  "Filter schema keys by prefix."
-  [schema-keys prefix]
-  (let [prefix-lower (str/lower-case (or prefix ":"))]
-    (->> schema-keys
-         (filter #(str/starts-with? (str/lower-case (str %)) prefix-lower))
-         (sort-by str)
-         (take 10))))
-
 (defn get-caret-coordinates
   "Get approximate pixel coordinates for cursor in textarea."
   [textarea]
@@ -231,11 +148,11 @@
   [textarea schema]
   (let [text (.-value textarea)
         cursor-pos (.-selectionStart textarea)]
-    (when-let [{:keys [prefix start-pos]} (get-current-keyword-prefix text cursor-pos)]
-      (let [path (extract-context-path text start-pos)
+    (when-let [{:keys [prefix start-pos]} (edn/get-current-keyword-prefix text cursor-pos)]
+      (let [path (edn/extract-context-path text start-pos)
             schema-keys (get-keys-at-path schema path)
             completions (when schema-keys
-                          (vec (filter-completions schema-keys prefix)))]
+                          (vec (edn/filter-completions schema-keys prefix)))]
         (when (seq completions)
           (let [{:keys [x y]} (get-caret-coordinates textarea)]
             {:completions completions
@@ -244,18 +161,6 @@
              :start-pos start-pos
              :x x
              :y y}))))))
-
-(defn apply-completion
-  "Apply selected completion, returns new text and cursor position."
-  [text cursor-pos autocomplete]
-  (let [{:keys [completions selected start-pos]} autocomplete
-        completion (nth completions selected)
-        new-text (str (subs text 0 start-pos)
-                      (str completion)
-                      (subs text cursor-pos))
-        new-cursor-pos (+ start-pos (count (str completion)))]
-    {:text new-text
-     :cursor-pos new-cursor-pos}))
 
 (defn autocomplete-dropdown
   "Render autocomplete dropdown.
@@ -363,16 +268,7 @@
                              ;; Apply parinfer if enabled
                              processed (if parinfer-mode
                                          (apply-parinfer new-text parinfer-mode cursor)
-                                         new-text)
-                             ;; Check if parinfer added closing parens
-                             text-grew? (and processed (> (count processed) (count new-text)))
-                             ;; Detect what was typed
-                             typed-char (when (and (> cursor-pos 0) (<= cursor-pos (count new-text)))
-                                          (subs new-text (dec cursor-pos) cursor-pos))
-                             ;; Check if we need to position cursor inside paired parens
-                             _should-adjust? (and text-grew?
-                                                  typed-char
-                                                  (get paired-chars typed-char))]
+                                         new-text)]
                          ;; Update textarea if parinfer changed something
                          (when (and parinfer-mode (not= new-text processed))
                            (set! (.-value textarea) processed)
@@ -385,8 +281,29 @@
                              (on-autocomplete ac-data)
                              (when on-autocomplete-hide (on-autocomplete-hide)))))))
             :keydown (fn [e]
-                       (when autocomplete
-                         (let [key (.-key e)]
+                       (let [key (.-key e)]
+                         ;; Auto-close string quotes
+                         (when (= key "\"")
+                           (let [textarea (.-target e)
+                                 pos (.-selectionStart textarea)
+                                 text (.-value textarea)
+                                 next-char (when (< pos (count text))
+                                             (subs text pos (inc pos)))
+                                 quote-count (count (re-seq #"\"" (subs text 0 pos)))
+                                 inside-string? (odd? quote-count)]
+                             (cond
+                               (= next-char "\"")
+                               (do (.preventDefault e)
+                                   (set-cursor-position! textarea (inc pos)))
+                               (not inside-string?)
+                               (do (.preventDefault e)
+                                   (let [new-text (str (subs text 0 pos)
+                                                       "\"\"" (subs text pos))]
+                                     (set! (.-value textarea) new-text)
+                                     (set-cursor-position! textarea (inc pos))
+                                     (when on-change (on-change new-text)))))))
+                         ;; Autocomplete keyboard navigation
+                         (when autocomplete
                            (case key
                              "ArrowDown" (do (.preventDefault e)
                                              (when on-autocomplete-move
@@ -397,7 +314,7 @@
                              ("Tab" "Enter")
                              (do (.preventDefault e)
                                  (let [textarea (.-target e)
-                                       {:keys [text cursor-pos]} (apply-completion
+                                       {:keys [text cursor-pos]} (edn/apply-completion
                                                                   (.-value textarea)
                                                                   (.-selectionStart textarea)
                                                                   autocomplete)]
@@ -450,7 +367,7 @@
       :on-select (fn [idx]
                    (let [textarea (js/document.querySelector (str "#" editor-id))
                          updated-ac (assoc autocomplete :selected idx)
-                         {:keys [text cursor-pos]} (apply-completion
+                         {:keys [text cursor-pos]} (edn/apply-completion
                                                     (.-value textarea)
                                                     (.-selectionStart textarea)
                                                     updated-ac)]
@@ -463,60 +380,3 @@
                   (when on-autocomplete-select
                     (on-autocomplete-select idx)))})))
 
-;;=============================================================================
-;; Schema Viewer
-;;=============================================================================
-
-(defn schema-viewer
-  "Read-only schema viewer with syntax highlighting.
-   Toggles between schema and sample data views.
-
-   Props:
-   - :schema - Malli schema value
-   - :sample-data - Generated sample data from schema
-   - :view-mode - :schema | :sample
-   - :on-mode-change - Callback (fn [mode]) when toggle clicked
-   - :placeholder - Placeholder text
-   - :class - CSS class
-   - :loading? - Show loading state
-   - :error - Error message"
-  [{:keys [schema sample-data view-mode on-mode-change placeholder class loading? error]}]
-  (let [view-mode (or view-mode :schema)]
-    (cond
-      loading?
-      [:div.schema-viewer {:class class}
-       [:div.schema-loading "Loading..."]]
-
-      error
-      [:div.schema-viewer {:class class}
-       [:div.schema-error error]]
-
-      (nil? schema)
-      [:div.schema-viewer {:class class}
-       [:div.schema-empty (or placeholder "No schema loaded")]]
-
-      :else
-      [:div.schema-viewer {:class class}
-       ;; View mode toggle
-       (when on-mode-change
-         [:div.schema-view-toggle
-          [:button {:class (when (= view-mode :schema) "active")
-                    :on {:click #(on-mode-change :schema)}}
-           "Schema"]
-          [:button {:class (when (= view-mode :sample) "active")
-                    :on {:click #(on-mode-change :sample)}}
-           "Sample"]])
-       ;; Content
-       [:pre.schema-code
-        (let [data (if (= view-mode :sample) sample-data schema)]
-          (if data
-            ;; Sample view gets hover tooltips for schema docs
-            (if (= view-mode :sample)
-              (edn/highlight-edn (edn/pretty-str data)
-                                 {:on-hover #(show-tooltip! % (.-target js/event) schema)
-                                  :on-leave hide-tooltip!})
-              (edn/highlight-edn (edn/pretty-str data)))
-            [:span.schema-empty "Generating sample..."]))]
-       ;; Tooltip for sample data view
-       (when (= view-mode :sample)
-         (tooltip-view))])))

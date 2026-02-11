@@ -19,5 +19,4 @@
   :run {:main-opts ["-m" "sg.flybot.playground.server.main"]}
   :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "3.3.5"}
                       com.cognitect/transit-cljs {:mvn/version "0.8.280"}
-                      org.babashka/sci {:mvn/version "0.12.51"}
-                      parinferish/parinferish {:mvn/version "0.8.0"}}}}}
+                      org.babashka/sci {:mvn/version "0.12.51"}}}}}

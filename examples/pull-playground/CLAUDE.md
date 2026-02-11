@@ -50,7 +50,6 @@ The app uses a custom dispatch pattern — NOT Replicant's built-in action syste
 | `:db` | `(fn [db] db')` | `swap! app-db update root-key f` |
 | `:pull` | `:keyword` | Operation (`:pattern`, `:init`, `:seed`, `:schema`, `:data`) |
 | `:nav` | `:sandbox` / `:remote` | `pushState` URL navigation |
-| `:batch` | `(fn [db dispatcher] [...])` | Composed effects |
 
 ### make-executor — the ONLY mode-specific function
 
@@ -73,6 +72,14 @@ Builds the executor once, then dispatches by operation keyword:
 ```
 
 Schema and seed are pull-able data in the store — not separate endpoints. Schema is a plain map under `:schema`, seed is a `Mutable` reify under `:seed`.
+
+### Sandbox store
+
+`sandbox.cljc` is stateless — no module-level atoms. It exports constructors (`make-sources`, `make-store`) and an `execute!` function that takes store + schema as explicit args. The store is created once in `init!` and stored in app-db under `:sandbox/store`. It's a stable reference — mutations modify atom-sources in-place, so the store never needs rebuilding.
+
+### Watcher
+
+`dispatch!` is created once (stable reference). `add-watch` on app-db triggers re-render — no separate `render!` function.
 
 ### State layer
 
@@ -114,9 +121,9 @@ src/sg/flybot/playground/
 ├── common/data.cljc        # Default sample data + schema
 ├── server/main.clj         # Demo backend (http-kit + remote handler)
 └── ui/core/
-    ├── core.cljs            # Entry point, dispatch-of, handle-pull, Transit client
+    ├── core.cljs            # Entry point, dispatch-of, handle-pull, add-watch render
     ├── state.cljc           # Pure state updaters (db → db)
-    ├── sandbox.cljc         # Sandbox via remote/execute with atom-sources
+    ├── sandbox.cljc         # Stateless: constructors + execute! with explicit args
     └── views.cljc           # Replicant hiccup (dispatch! closures)
 ```
 

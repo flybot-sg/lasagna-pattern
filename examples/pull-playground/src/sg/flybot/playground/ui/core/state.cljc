@@ -15,6 +15,8 @@
    :error nil              ; Error message string
    :loading? false
    :selected-example nil   ; Index of selected example
+   ;; Sandbox store (set once at init, stable reference, nil in remote mode)
+   :sandbox/store nil
    ;; Mode-agnostic (populated by handle-pull for current mode)
    :data nil               ; Snapshot: {:users [...] :posts [...] :config {...}}
    :schema nil             ; Malli hiccup form for autocomplete/tooltips

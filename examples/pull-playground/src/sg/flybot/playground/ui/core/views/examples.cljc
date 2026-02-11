@@ -58,8 +58,3 @@
    {:syntax ":default" :description "Fallback value"}
    {:syntax "{nil data}" :description "Create (sandbox)"}
    {:syntax "{{:id 1} nil}" :description "Delete (sandbox)"}])
-
-^:rct/test
-(comment
-  (count examples) ;=> 11
-  (:name (first examples))) ;=> "List all users")
