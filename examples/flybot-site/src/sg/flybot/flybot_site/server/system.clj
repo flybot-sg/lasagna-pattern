@@ -58,6 +58,7 @@
    [ring.middleware.session-timeout :refer [wrap-idle-session-timeout]]
    [ring.util.response :as resp]
    [robertluo.fun-map :refer [fnk life-cycle-map closeable halt!]]
+   [clojure.edn :as edn]
    [clojure.java.io :as io]
    [clojure.string :as str]))
 
@@ -67,6 +68,30 @@
   (let [bytes (byte-array 16)]
     (.nextBytes (java.security.SecureRandom.) bytes)
     bytes))
+
+;;=============================================================================
+;; Asset Versioning
+;;=============================================================================
+
+(defn- read-js-path
+  "Read shadow-cljs manifest.edn, return main module output filename."
+  []
+  (some-> (io/resource "public/js/manifest.edn")
+          slurp edn/read-string
+          (->> (filter #(= :main (:module-id %))) first :output-name)))
+
+(defn- md5-hex [^String s]
+  (let [bytes (.digest (java.security.MessageDigest/getInstance "MD5")
+                       (.getBytes s "UTF-8"))]
+    (apply str (map #(format "%02x" %) bytes))))
+
+(defn- asset-version [resource-path]
+  (some-> (io/resource resource-path) slurp md5-hex (subs 0 8)))
+
+(defn- render-index [js-path css-version]
+  (-> (io/resource "index-template.html") slurp
+      (str/replace "{{main-js}}" (str "/js/" js-path))
+      (str/replace "{{style-css}}" (str "/css/style.css?v=" css-version))))
 
 ;;=============================================================================
 ;; Middleware Components
@@ -89,15 +114,30 @@
             (assoc-in [:headers "Access-Control-Allow-Credentials"] "true"))))))
 
 (defn- wrap-cache-control
-  "Set Cache-Control headers to prevent stale content after redeploy.
-   HTML gets no-store (always fetch fresh), other assets get no-cache
-   (revalidate via If-Modified-Since / wrap-not-modified)."
-  [handler]
+  "Set Cache-Control headers based on asset type.
+   - HTML: no-store (always fresh)
+   - Hashed JS (main.ABCD1234.js): immutable, max-age=1y
+   - CSS: no-cache with ETag for 304 revalidation
+   - Other: no-cache"
+  [handler css-etag]
   (fn [request]
     (when-let [response (handler request)]
-      (let [ct (get-in response [:headers "Content-Type"] "")]
-        (if (str/includes? ct "text/html")
+      (let [ct  (get-in response [:headers "Content-Type"] "")
+            uri (or (:uri request) "")]
+        (cond
+          (str/includes? ct "text/html")
           (assoc-in response [:headers "Cache-Control"] "no-store")
+
+          (re-find #"\.[a-fA-F0-9]{8}\.js$" uri)
+          (assoc-in response [:headers "Cache-Control"]
+                    "public, max-age=31536000, immutable")
+
+          (and css-etag (str/ends-with? uri ".css"))
+          (-> response
+              (assoc-in [:headers "Cache-Control"] "no-cache")
+              (assoc-in [:headers "ETag"] (str "\"" css-etag "\"")))
+
+          :else
           (assoc-in response [:headers "Cache-Control"] "no-cache"))))))
 
 (defn- wrap-error-handler
@@ -287,30 +327,34 @@
       ::ring-app
       (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger ::db ::owner-emails]
            (mu/log ::ring-app-building)
-           (-> (fn [_] (-> (resp/resource-response "index.html" {:root "public"})
-                           (resp/content-type "text/html")))
-               (wrap-resource "public")
-               wrap-content-type
-               wrap-not-modified
-               wrap-cache-control
-               (remote/wrap-api api-fn {:path "/api"})
-               (wrap-upload-route upload-handler)
-               wrap-multipart-params
-               auth/wrap-logout
-               (auth/wrap-oauth-success {:allowed-email-pattern email-pattern
-                                         :owner-emails owner-emails
-                                         :conn (:conn db)})
-               (auth/wrap-google-auth {:client-id google-client-id
-                                       :client-secret google-client-secret
-                                       :base-url base-url})
-               (wrap-dev-user dev-user)
-               (wrap-idle-session-timeout {:timeout timeout
-                                           :timeout-handler session-timeout-handler})
-               (wrap-session session-config)
-               wrap-keyword-params
-               wrap-params
-               wrap-cors
-               wrap-error-handler))
+           (let [js-path    (or (read-js-path) "main.js")
+                 css-ver    (or (asset-version "public/css/style.css") "0")
+                 index-html (render-index js-path css-ver)]
+             (mu/log ::assets-resolved :js-path js-path :css-version css-ver)
+             (-> (fn [_] (-> (resp/response index-html)
+                             (resp/content-type "text/html")))
+                 (wrap-resource "public")
+                 wrap-content-type
+                 (wrap-cache-control css-ver)
+                 wrap-not-modified
+                 (remote/wrap-api api-fn {:path "/api"})
+                 (wrap-upload-route upload-handler)
+                 wrap-multipart-params
+                 auth/wrap-logout
+                 (auth/wrap-oauth-success {:allowed-email-pattern email-pattern
+                                           :owner-emails owner-emails
+                                           :conn (:conn db)})
+                 (auth/wrap-google-auth {:client-id google-client-id
+                                         :client-secret google-client-secret
+                                         :base-url base-url})
+                 (wrap-dev-user dev-user)
+                 (wrap-idle-session-timeout {:timeout timeout
+                                             :timeout-handler session-timeout-handler})
+                 (wrap-session session-config)
+                 wrap-keyword-params
+                 wrap-params
+                 wrap-cors
+                 wrap-error-handler)))
 
       ;;-----------------------------------------------------------------------
       ;; HTTP Server

@@ -1,7 +1,8 @@
 # Build artifacts
 resources/public/js/cljs-runtime/
-resources/public/js/main.js
+resources/public/js/main*.js
 resources/public/js/manifest.edn
+resources/public/index.html
 
 # Node
 node_modules/

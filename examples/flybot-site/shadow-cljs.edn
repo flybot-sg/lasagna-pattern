@@ -8,4 +8,5 @@
         :output-dir "resources/public/js"
         :asset-path "/js"
         :modules {:main {:entries [sg.flybot.flybot-site.ui.core]}}
+        :release {:module-hash-names 8}
         :devtools {:after-load sg.flybot.flybot-site.ui.core/render!}}}}

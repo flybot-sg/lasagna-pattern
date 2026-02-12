@@ -1,5 +1,6 @@
 {:tasks
- {:requires [[clojure.edn :as edn]]
+ {:requires [[clojure.edn :as edn]
+             [clojure.string :as str]]
 
   :init (defn current-env [] (into {} (System/getenv)))
 
@@ -9,10 +10,17 @@
    :task (clojure {:env (current-env)} "-M:dev:cljs -m nrepl.cmdline --middleware \"[shadow.cljs.devtools.server.nrepl/middleware,cider.nrepl/cider-middleware]\"")}
 
   serve
-  {:doc "Build and serve static frontend on port 3000 (requires backend on 8080)"
+  {:doc "Build and serve release frontend on port 3000 (requires backend on 8080)"
    :task (do
            (shell "npm install")
            (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
+           ;; Render index-template.html with hashed asset paths
+           (let [manifest (edn/read-string (slurp "resources/public/js/manifest.edn"))
+                 js-name (->> manifest (filter (fn [m] (= :main (:module-id m)))) first :output-name)
+                 rendered (-> (slurp "resources/index-template.html")
+                              (str/replace "{{main-js}}" (str "/js/" js-name))
+                              (str/replace "{{style-css}}" "/css/style.css"))]
+             (spit "resources/public/index.html" rendered))
            (println "\nServing at http://localhost:3000")
            (println "Note: Backend must be running on port 8080 for API calls")
            (shell "npx http-server resources/public -p 3000 -c-1 --proxy http://localhost:8080"))}
