@@ -9,7 +9,7 @@
         io.replikativ/datahike {:mvn/version "0.6.1555"} ;; pinned: datahike-s3 0.1.13 requires this version
         io.replikativ/datahike-s3 {:mvn/version "0.1.13"}
         clj-commons/clj-yaml {:mvn/version "1.0.29"}
-        io.github.studer-l/ring-oauth2 {:git/sha "551475ee3f795a3e5e6942a68e40c64ad18f3c8c"} ;; fork with refresh token support
+        io.github.studer-l/ring-oauth2 {:git/sha "db75c05284aa2a3458025ebb124efe9d3c14439b"} ;; fork: adds refresh token support (unmerged upstream)
         clj-http/clj-http {:mvn/version "3.13.1"}
         cheshire/cheshire {:mvn/version "6.1.0"}
         metosin/malli {:mvn/version "0.20.0"}
@@ -36,6 +36,6 @@
                       com.cognitect/transit-cljs {:mvn/version "0.8.280"}}}
   :jib {:paths ["src"]
         :extra-deps {io.github.atomisthq/jibbit {:git/url "https://github.com/skydread1/jibbit.git"
-                                                 :git/sha "ffae0bab2a33eb415500b7aa851081586ea08a64"}}
+                                                 :git/sha "7bcb146c911431541fde86c3eebac95ac32d98e3"}} ;; fork: adds entry-point to jibbit config (atomisthq/jibbit#24)
         :ns-default jibbit.core
         :ns-aliases {jib jibbit.core}}}}

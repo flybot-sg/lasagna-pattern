@@ -90,6 +90,7 @@
   --tag-bg: #e3f3f9;
   --code-bg: #f4f4f4;
   --overlay-bg: rgba(0, 0, 0, 0.5);
+  --shadow-modal: 0 8px 24px rgba(0, 0, 0, 0.2);
 }
 
 [data-theme="dark"] {
@@ -124,6 +125,7 @@
 
   --tag-bg: #1a3a45;
   --code-bg: #1f2428;
+  --shadow-modal: 0 8px 24px rgba(0, 0, 0, 0.5);
 }
 
 /*==============================================================================
@@ -1711,7 +1713,7 @@ button.danger {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: var(--space-6);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: var(--shadow-modal);
   min-width: 320px;
   max-width: 440px;
 }
