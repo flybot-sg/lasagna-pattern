@@ -1,6 +1,6 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.12.4"}
-        metosin/malli {:mvn/version "0.20.0"}}
+        metosin/malli {:mvn/version "0.16.4"}}
  :aliases
  {:dev {:extra-paths ["notebook"]
         :extra-deps {io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}}}

@@ -12,7 +12,7 @@
         io.github.studer-l/ring-oauth2 {:git/sha "db75c05284aa2a3458025ebb124efe9d3c14439b"} ;; fork: adds refresh token support (unmerged upstream)
         clj-http/clj-http {:mvn/version "3.13.1"}
         cheshire/cheshire {:mvn/version "6.1.0"}
-        metosin/malli {:mvn/version "0.20.0"}
+        metosin/malli {:mvn/version "0.16.4"} ;; pinned: 0.20.0 breaks nil-branch matching in pattern
         pinyin4clj/pinyin4clj {:mvn/version "0.3.0"}
         com.brunobonacci/mulog {:mvn/version "0.10.1"}
         com.cognitect.aws/api {:mvn/version "0.8.800"}
