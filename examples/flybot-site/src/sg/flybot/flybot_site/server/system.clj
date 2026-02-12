@@ -36,6 +36,7 @@
       :session {:secret \"32-hex-chars\" :timeout 43200}
       :init {:seed? true}
       :dev {:user {:id \"...\" :name \"...\" :email \"...\"}}}"
+  (:gen-class)
   (:require
    [sg.flybot.flybot-site.server.system.api :as api]
 

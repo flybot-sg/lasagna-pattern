@@ -1,4 +1,5 @@
-{:main         sg.flybot.flybot-site.server.system
+{:aot          true
+ :main         sg.flybot.flybot-site.server.system
  :user         "root"
  :base-image   {:image-name "eclipse-temurin:21-jre"
                 :type       :registry}
