@@ -9,12 +9,76 @@
    - :navigate — hard navigation (set! location)
    - :toast    — auto-dismiss toast notification"
   (:require #?(:cljs [replicant.dom :as r])
-            [sg.flybot.flybot-site.ui.db :as db]
-            [sg.flybot.flybot-site.ui.pull :as pull]
-            #?(:cljs [sg.flybot.flybot-site.ui.views :as views])
-            #?(:cljs [sg.flybot.flybot-site.ui.api :as api])
-            [sg.flybot.flybot-site.ui.log :as log]
-            [sg.flybot.flybot-site.ui.history :as history]))
+            [cognitect.transit :as t]
+            [sg.flybot.flybot-site.ui.core.db :as db]
+            [sg.flybot.flybot-site.ui.core.pull :as pull]
+            #?(:cljs [sg.flybot.flybot-site.ui.core.views :as views])
+            [sg.flybot.flybot-site.ui.core.log :as log]
+            [sg.flybot.flybot-site.ui.core.history :as history])
+  #?(:clj (:import [java.io ByteArrayOutputStream ByteArrayInputStream])))
+
+(def ^:private api-url "/api")
+
+(defn encode [data]
+  #?(:clj  (let [out (ByteArrayOutputStream.)]
+             (t/write (t/writer out :json) data)
+             (.toString out "UTF-8"))
+     :cljs (t/write (t/writer :json) data)))
+
+(defn decode [s]
+  #?(:clj  (t/read (t/reader (ByteArrayInputStream. (.getBytes ^String s "UTF-8")) :json))
+     :cljs (t/read (t/reader :json) s)))
+
+^:rct/test
+(comment
+  ;; Transit encode/decode roundtrip — keywords
+  (decode (encode {:a 1 :b "hello"}))
+  ;=> {:a 1 :b "hello"}
+
+  ;; Transit encode/decode roundtrip — nested maps
+  (decode (encode {:posts [{:post/id 1 :post/title "Hi"}]}))
+  ;=> {:posts [{:post/id 1 :post/title "Hi"}]}
+
+  ;; Transit encode/decode roundtrip — symbols (used in pull patterns)
+  (decode (encode '{:guest {:posts ?all}})))
+  ;=> {:guest {:posts ?all}})
+
+#?(:cljs
+   (defn pull!
+     "Execute a pull query against the API.
+
+      pattern - Pull pattern like '{:posts ?posts}
+      on-success - fn of response data
+      on-error - fn of error map {:code :forbidden :reason \"...\" :status 403} or string"
+     [pattern on-success on-error]
+     (log/log-api-request pattern)
+     (-> (js/fetch api-url
+                   #js {:method "POST"
+                        :headers #js {"Content-Type" "application/transit+json"
+                                      "Accept" "application/transit+json"}
+                        :credentials "include"
+                        :body (encode {:pattern pattern})})
+         (.then (fn [resp]
+                  ;; Always read body - errors have structured data
+                  (-> (.text resp)
+                      (.then (fn [text]
+                               {:status (.-status resp)
+                                :ok (.-ok resp)
+                                :body (when (seq text) (decode text))})))))
+         (.then (fn [{:keys [status ok body]}]
+                  (if ok
+                    (do (log/log-api-response body)
+                        (on-success body))
+                    ;; Extract structured error from response
+                    (let [error (if-let [err (first (:errors body))]
+                                  (assoc err :status status)
+                                  {:code :unknown :reason (str "HTTP " status) :status status})]
+                      (log/log-api-error error pattern)
+                      (on-error error)))))
+         (.catch (fn [err]
+                   (let [msg (log/error->string err)]
+                     (log/log-api-error msg pattern)
+                     (on-error {:code :network :reason msg :status 0})))))))
 
 (def ^:private root-key :app/flybot)
 
@@ -89,9 +153,9 @@
                                         effect-def
                                         (pull/resolve-pull effect-def (get @app-db root-key)))]
                              (when-let [{:keys [pattern then]} spec]
-                               (api/pull! pattern
-                                          (fn [r] (@self (if (fn? then) (then r) then)))
-                                          (fn [e] (@self {:db #(db/set-error % e)})))))
+                               (pull! pattern
+                                      (fn [r] (@self (if (fn? then) (then r) then)))
+                                      (fn [e] (@self {:db #(db/set-error % e)})))))
                  :history  (history/push-state! (get @app-db root-key))
                  :toast    (let [id (inc (:toast-counter (get @app-db root-key)))]
                              (@self {:db #(db/add-toast % (:type effect-def) (:title effect-def) (:message effect-def))})
@@ -118,8 +182,8 @@
                 (let [old-db (root-key old-state)
                       new-db (root-key new-state)]
                   (when-let [el (js/document.getElementById "app")]
-                    (r/render el (views/app-view {:sg.flybot.flybot-site.ui.views/db new-db
-                                                  :sg.flybot.flybot-site.ui.views/dispatch! dispatch!})))
+                    (r/render el (views/app-view {:sg.flybot.flybot-site.ui.core.views/db new-db
+                                                  :sg.flybot.flybot-site.ui.core.views/dispatch! dispatch!})))
                   (when-not (= (:view old-db) (:view new-db))
                     (log/log-state-change "watcher" old-db new-db))
                   (when (should-scroll-top? old-db new-db)

@@ -1,4 +1,4 @@
-(ns sg.flybot.flybot-site.ui.pull
+(ns sg.flybot.flybot-site.ui.core.pull
   "Pull spec definitions — pattern + :then as data.
 
    Each named operation resolves to {:pattern ... :then ...}.
@@ -6,8 +6,8 @@
    :then is either (fn [response] effect-map) or a static effect-map.
 
    Pure data functions — no JS dependencies, testable on JVM via RCT."
-  (:require [sg.flybot.flybot-site.ui.db :as db]
-            [sg.flybot.flybot-site.ui.log :as log]))
+  (:require [sg.flybot.flybot-site.ui.core.db :as db]
+            [sg.flybot.flybot-site.ui.core.log :as log]))
 
 ;;=============================================================================
 ;; Static Specs

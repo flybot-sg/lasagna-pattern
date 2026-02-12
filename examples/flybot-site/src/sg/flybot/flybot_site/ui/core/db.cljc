@@ -1,4 +1,4 @@
-(ns sg.flybot.flybot-site.ui.db
+(ns sg.flybot.flybot-site.ui.core.db
   "Application state — pure db -> db updater functions.
 
    Every function takes db (and optional args) and returns the new db.

@@ -1,11 +1,11 @@
-(ns sg.flybot.flybot-site.ui.views
+(ns sg.flybot.flybot-site.ui.core.views
   "UI views — defalias components with namespaced props.
 
    Components receive data via ::keys and dispatch effect maps directly."
   (:require [clojure.string :as str]
-            [sg.flybot.flybot-site.ui.db :as db]
+            [sg.flybot.flybot-site.ui.core.db :as db]
+            [sg.flybot.flybot-site.ui.core.log :as log]
             [replicant.alias :refer [defalias]]
-            #?(:cljs [sg.flybot.flybot-site.ui.api :as api])
             #?(:cljs ["marked" :refer [marked]])
             #?(:cljs ["@toast-ui/editor" :as toastui])))
 
@@ -152,6 +152,26 @@
 ;;=============================================================================
 
 #?(:cljs
+   (defn upload-image!
+     "Upload image blob to server. Returns promise resolving to image URL."
+     [blob]
+     (log/debug "Uploading image:" (.-name blob) "size:" (.-size blob))
+     (let [form-data (js/FormData.)]
+       (.append form-data "image" blob (.-name blob))
+       (-> (js/fetch "/api/upload" #js {:method "POST" :body form-data})
+           (.then (fn [resp]
+                    (if (.-ok resp)
+                      (.json resp)
+                      (throw (js/Error. (str "HTTP " (.-status resp)))))))
+           (.then (fn [json]
+                    (if-let [url (.-url json)]
+                      (do (log/info "Image uploaded:" url) url)
+                      (throw (js/Error. (or (.-error json) "Upload failed"))))))
+           (.catch (fn [err]
+                     (log/error "Image upload failed:" (log/error->string err))
+                     (throw err)))))))
+
+#?(:cljs
    (defn- init-editor! [node content on-change]
      (let [Editor (or (.-default toastui) (.-Editor toastui) toastui)
            editor (Editor. #js {:el node
@@ -161,7 +181,7 @@
                                 :initialValue (or content "")
                                 :hooks #js {:addImageBlobHook
                                             (fn [blob callback]
-                                              (-> (api/upload-image! blob)
+                                              (-> (upload-image! blob)
                                                   (.then #(callback % (.-name blob))))
                                               false)}})]
        (.on editor "change" #(on-change (.getMarkdown editor)))

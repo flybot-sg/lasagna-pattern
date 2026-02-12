@@ -127,12 +127,13 @@ src/sg/flybot/flybot_site/
 │       │   └── user.cljc       # UsersDataSource
 │       └── s3.clj              # S3 upload handler
 └── ui/
-    ├── api.cljc                # Frontend API client (transit cross-platform, fetch browser-only)
-    ├── core.cljc               # dispatch-of, scroll logic, init (browser-only lifecycle)
-    ├── db.cljc                 # Pure db -> db updater functions
-    ├── history.cljc            # URL<->state mapping (cross-platform), pushState (browser-only)
-    ├── log.cljc                # Frontend logging (console)
-    └── views.cljc              # Replicant defalias views
+    ├── core.cljc               # Entry point: dispatch-of, transit, pull!, init
+    └── core/
+        ├── db.cljc             # Pure db -> db updater functions
+        ├── history.cljc        # URL<->state mapping (cross-platform), pushState (browser-only)
+        ├── log.cljc            # Frontend logging (console) + error->string
+        ├── pull.cljc           # Pull spec definitions (pattern + :then as data)
+        └── views.cljc          # Replicant defalias views + upload-image!
 ```
 
 ### UI Architecture (dispatch-of + handle-pull)
@@ -305,12 +306,12 @@ Use mulog for structured logging. Events are keyword-namespaced with key-value p
 
 ### Frontend Logging
 
-**File:** `src/sg/flybot/flybot_site/ui/log.cljc`
+**File:** `src/sg/flybot/flybot_site/ui/core/log.cljc`
 
 Cross-platform (.cljc) so logic can be tested on JVM.
 
 ```clojure
-(require '[sg.flybot.flybot-site.ui.log :as log])
+(require '[sg.flybot.flybot-site.ui.core.log :as log])
 
 ;; Basic
 (log/debug "Component mounted:" id)
@@ -409,7 +410,7 @@ Pages are special tag filters with different styling. A "page" is just a tag in 
 
 ### Configuration
 
-In `ui/db.cljc`:
+In `ui/core/db.cljc`:
 
 ```clojure
 :pages #{"Home"}   ; tags that become pages

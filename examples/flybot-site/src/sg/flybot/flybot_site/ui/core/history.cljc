@@ -1,6 +1,6 @@
-(ns sg.flybot.flybot-site.ui.history
+(ns sg.flybot.flybot-site.ui.core.history
   "Browser history integration for SPA navigation."
-  (:require [sg.flybot.flybot-site.ui.db :as db]))
+  (:require [sg.flybot.flybot-site.ui.core.db :as db]))
 
 ;;=============================================================================
 ;; Cross-platform helpers

@@ -1,4 +1,4 @@
-(ns sg.flybot.flybot-site.ui.log
+(ns sg.flybot.flybot-site.ui.core.log
   "Frontend logging mechanism - cross-platform for testability.")
 
 ;;=============================================================================
@@ -108,12 +108,34 @@
   (debug "State change:" action
          "view:" (:view old-state) "->" (:view new-state)))
 
+(defn error->string
+  "Convert error to string for classification."
+  [err]
+  (cond
+    (instance? #?(:clj Throwable :cljs js/Error) err)
+    #?(:clj  (.getMessage ^Throwable err)
+       :cljs (.-message err))
+    (string? err) err
+    :else (str err)))
+
 ;;=============================================================================
 ;; Tests
 ;;=============================================================================
 
 ^:rct/test
 (comment
+  ;; error->string — string passthrough
+  (error->string "network error")
+  ;=> "network error"
+
+  ;; error->string — other types
+  (error->string 42)
+  ;=> "42"
+
+  ;; error->string — Throwable on JVM
+  (error->string (ex-info "test error" {}))
+  ;=> "test error"
+
   ;; Test level ordering
   (< (levels :debug) (levels :info) (levels :warn) (levels :error))
   ;=> true
