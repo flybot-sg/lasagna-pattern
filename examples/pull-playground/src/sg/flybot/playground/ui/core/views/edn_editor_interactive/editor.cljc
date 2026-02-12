@@ -457,5 +457,6 @@
 
   ;; apply-completion — replaces prefix with completed keyword
   (apply-completion "{:na}" 4
-                    {:completions [:name] :selected 0 :start-pos 1}))
-  ;=> {:text "{:name}" :cursor-pos 6})
+                    {:completions [:name] :selected 0 :start-pos 1})
+  ;=> {:text "{:name}" :cursor-pos 6}
+  nil)

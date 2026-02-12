@@ -29,49 +29,63 @@ bb dev examples/pull-playground
 
 ## Architecture
 
-### dispatch-of + handle-pull (effects-as-data)
+### dispatch-of + pull specs (effects-as-data)
 
-The app uses a custom dispatch pattern — NOT Replicant's built-in action system. Components close over `dispatch!` and call it directly with effect maps:
+Same architecture as flybot-site. The app uses a custom dispatch pattern — NOT Replicant's built-in action system. Components close over `dispatch!` and call it directly with effect maps:
 
 ```clojure
 ;; Views dispatch effect maps
-(dispatch! {:db state/set-loading        ; pure state update
+(dispatch! {:db db/set-loading            ; pure db update
             :pull :pattern})             ; execute user's pattern
 
-(dispatch! {:db #(state/set-mode % :remote)
+(dispatch! {:db #(db/set-mode % :remote)
             :nav :remote                 ; pushState URL
             :pull :init})                ; fetch remote data
 ```
+
+### dispatch-of (core.cljc)
+
+Creates a **single stable dispatch closure** via volatile self-reference — no recreation on callbacks. Effects execute in `effect-order` (`[:db :pull :nav]`) — not map iteration order.
+
+```clojure
+(def dispatch! (dispatch-of app-db root-key))
+```
+
+Top-level `def` — accessible from REPL and hot-reload.
 
 ### Effect types
 
 | Effect | Value | What happens |
 |--------|-------|--------------|
 | `:db` | `(fn [db] db')` | `swap! app-db update root-key f` |
-| `:pull` | `:keyword` | Operation (`:pattern`, `:init`, `:seed`, `:schema`, `:data`) |
+| `:pull` | `:keyword` or `{:pattern ... :then ...}` | Resolved via `pull/resolve-pull`, executed via mode executor |
 | `:nav` | `:sandbox` / `:remote` | `pushState` URL navigation |
+
+### Pull specs (pull.cljc) — data-driven API operations
+
+Pull operations are **data, not imperative code**. Each named operation resolves to `{:pattern ... :then ...}`:
+
+```clojure
+;; Named specs resolve via (pull/resolve-pull op db)
+:init     ; Combined pattern: data + schema in one request
+:pattern  ; User's editor text, parsed to data. Mutations update snapshot directly.
+:data     ; Read all collections
+:schema   ; {:schema ?s}
+:seed     ; {:seed {nil true}} → chains to :data
+```
+
+**Mutation responses are used directly.** After a mutation, `apply-mutation-result` merges the response into the data snapshot — no re-fetch. This demonstrates the core pull pattern round-trip design.
+
+**`:then` receives response, returns effect map:**
+```clojure
+:then (fn [result]
+        {:db #(-> % (db/set-result result)
+                    (db/apply-mutation-result pattern result))})
+```
 
 ### make-executor — the ONLY mode-specific function
 
-Returns `(fn [pattern-str on-success on-error])`. Sandbox calls `remote/execute` in-process, remote sends HTTP POST. Everything else is mode-agnostic.
-
-### handle-pull — operation dispatch
-
-Builds the executor once, then dispatches by operation keyword:
-
-```clojure
-(defn- handle-pull [dispatch! db op]
-  (let [exec (make-executor db)]
-    (case op
-      :pattern ...  ; execute (:pattern-text db) via exec
-      :data    ...  ; fetch all collections
-      :schema  ...  ; {:schema ?s} pattern
-      :seed    ...  ; {:seed {nil true}} mutation
-      :init    ...  ; (handle-pull ... :data) + (handle-pull ... :schema)
-      )))
-```
-
-Schema and seed are pull-able data in the store — not separate endpoints. Schema is a plain map under `:schema`, seed is a `Mutable` reify under `:seed`.
+Returns `(fn [pattern on-success on-error])`. Takes pattern as **data** (not string). Sandbox calls `remote/execute` in-process (deferred via `queueMicrotask` to prevent recursive dispatch), remote sends HTTP POST. Everything else is mode-agnostic.
 
 ### Mobile responsive layout
 
@@ -81,19 +95,15 @@ Breakpoints: 1024px (stack panels), 768px (tab bar + single panel), 600px (compa
 
 ### Sandbox store
 
-`sandbox.cljc` is stateless — no module-level atoms. It exports constructors (`make-sources`, `make-store`) and an `execute!` function that takes store + schema as explicit args. The store is created once in `init!` and stored in app-db under `:sandbox/store`. It's a stable reference — mutations modify atom-sources in-place, so the store never needs rebuilding.
+`sandbox.cljc` is stateless — no module-level atoms. It exports constructors (`make-sources`, `make-store`) and an `execute!` function that takes store, schema, and **pattern data** as explicit args. The store is created once in `init!` and stored in app-db under `:sandbox/store`. It's a stable reference — mutations modify atom-sources in-place, so the store never needs rebuilding. The sandbox store includes sample data alongside the schema (same as the server).
 
-### Watcher
+### DB layer
 
-`dispatch!` is created once (stable reference). `add-watch` on app-db triggers re-render — no separate `render!` function.
-
-### State layer
-
-Pure `db → db` updater functions in `state.cljc`. Testable on JVM (no browser needed). All state lives under `:app/playground` in the app-db atom.
+Pure `db → db` updater functions in `db.cljc`. Testable on JVM (no browser needed). All state lives under `:app/playground` in the app-db atom. Includes `apply-mutation-result` for merging mutation responses into the data snapshot.
 
 ## Testing
 
-Uses Rich Comment Tests (RCT). State and views are `.cljc` — tests run on JVM:
+Uses Rich Comment Tests (RCT). State, pull specs, and views are `.cljc` — tests run on JVM:
 
 ```bash
 bb test examples/pull-playground
@@ -103,22 +113,28 @@ bb test examples/pull-playground
 
 | Layer | File | Testable on JVM? |
 |-------|------|-----------------|
-| State updaters | `state.cljc` | Yes — pure functions |
+| DB updaters | `db.cljc` | Yes — pure functions |
+| Pull specs | `pull.cljc` | Yes — pure data |
 | View structure | `views.cljc` | Yes — hiccup data |
-| handle-pull / dispatch | `core.cljs` | No — requires browser (SCI, fetch) |
+| dispatch-of | `core.cljc` | Partially — transit + format-error testable on JVM |
 | Sandbox eval | `sandbox.cljc` | Yes — SCI runs on JVM |
 
 ### RCT conventions
 
+Tests go directly below the function they test — they serve as documentation:
+
 ```clojure
+(defn set-mode [db mode] ...)
+
 ^:rct/test
 (comment
-  (set-mode {:mode :sandbox :result {:data 1}} :remote)
-  ;=> contains {:mode :remote :result nil}
-  )
+  (let [db (set-mode {:mode :sandbox :result {:data 1}} :remote)]
+    [(:mode db) (:result db)])
+  ;=> [:remote nil]
+  nil)
 ```
 
-Every new state updater or view helper needs an RCT test.
+Every new db updater, pull spec, or view helper needs an RCT test.
 
 ## Key Files
 
@@ -127,8 +143,9 @@ src/sg/flybot/playground/
 ├── common/data.cljc        # Default sample data + schema
 ├── server/main.clj         # Demo backend (http-kit + remote handler)
 └── ui/core/
-    ├── core.cljs            # Entry point, dispatch-of, handle-pull, add-watch render
-    ├── state.cljc           # Pure state updaters (db → db)
+    ├── core.cljc            # Entry point, dispatch-of, make-executor, init
+    ├── pull.cljc            # Pull spec definitions (pattern + :then as data)
+    ├── db.cljc              # Pure db updaters (db → db) + apply-mutation-result
     ├── sandbox.cljc         # Stateless: constructors + execute! with explicit args
     ├── views.cljc           # Replicant hiccup (dispatch! closures)
     └── views/

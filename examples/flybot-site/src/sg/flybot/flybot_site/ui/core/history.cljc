@@ -258,11 +258,8 @@
      (.-pathname js/location)))
 
 #?(:cljs
-   (defn init-history!
-     "Initialize history listener. Calls on-navigate when back/forward pressed.
-      Called once via defonce in core — no duplicate listener risk."
-     [on-navigate]
-     (.addEventListener js/window "popstate"
-                        (fn [_e]
-                          (when-let [parsed (path->state (current-path))]
-                            (on-navigate parsed))))))
+   (defn on-popstate!
+     "Handle popstate event. Parses current URL and calls on-navigate."
+     [on-navigate _e]
+     (when-let [parsed (path->state (current-path))]
+       (on-navigate parsed))))

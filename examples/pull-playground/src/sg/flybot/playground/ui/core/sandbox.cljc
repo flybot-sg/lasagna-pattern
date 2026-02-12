@@ -6,9 +6,7 @@
    Uses remote/execute directly: same execution engine as the server,
    but backed by atom-sources instead of a database.
    Schema and reset are pull-able data in the store, not special endpoints."
-  (:require #?(:clj [clojure.edn :as edn]
-               :cljs [cljs.reader :as reader])
-            [sg.flybot.playground.common.data :as data]
+  (:require [sg.flybot.playground.common.data :as data]
             [sg.flybot.pullable.collection :as coll]
             [sg.flybot.pullable.remote :as remote]
             [sg.flybot.pullable.malli]
@@ -72,7 +70,7 @@
   {:users   (coll/collection (:users sources))
    :posts   (coll/collection (:posts sources))
    :config  (:config data/default-data)
-   :schema {:schema data/default-schema}
+   :schema {:schema data/default-schema :sample data/default-data}
    :seed  (reify
             coll/Mutable
             (mutate! [_ _query _value]
@@ -96,19 +94,14 @@
 ;; Execution
 ;;=============================================================================
 
-(defn- read-pattern [s]
-  #?(:clj (edn/read-string s)
-     :cljs (reader/read-string s)))
-
 (defn execute!
-  "Execute a pattern string against sandbox collections.
+  "Execute a pattern against sandbox collections.
+   Takes store, schema, and pattern (data, not string).
    Delegates to remote/execute — same engine the server uses.
-   Takes store and schema as args (no module-level state).
    Returns {:result vars} or {:error message}."
-  [store schema pattern-str]
+  [store schema pattern]
   (try
-    (let [pattern (read-pattern pattern-str)
-          opts    #?(:clj  {}
+    (let [opts    #?(:clj  {}
                      :cljs {:resolve sci-resolve :eval-fn sci-eval})
           api-fn  (fn [_ctx] {:data store :schema schema})
           result  (remote/execute api-fn pattern opts)]
@@ -119,41 +112,32 @@
     (catch #?(:clj Exception :cljs :default) e
       {:error (str "Error: " #?(:clj (.getMessage e) :cljs (.-message e)))})))
 
-;;=============================================================================
-;; Tests
-;;=============================================================================
-
 ^:rct/test
 (comment
-  ;; execute! takes store + schema
+  ;; read a scalar
   (let [srcs  (make-sources data/default-data)
         store (make-store srcs)]
-    (:result (execute! store store-schema "{:config ?cfg}")))
+    (:result (execute! store store-schema '{:config ?cfg})))
   ;=>> {'cfg map?}
 
+  ;; read a collection (ILookup-backed)
   (let [srcs  (make-sources data/default-data)
         store (make-store srcs)]
-    (get-in (execute! store store-schema "{:users ?all}") [:result 'all]))
+    (get-in (execute! store store-schema '{:users ?all}) [:result 'all]))
   ;=>> vector?
 
-  ;; schema is pull-able
+  ;; schema is pull-able data in the store
   (let [srcs  (make-sources data/default-data)
         store (make-store srcs)]
-    (get-in (execute! store store-schema "{:schema ?s}") [:result 's :schema]))
+    (get-in (execute! store store-schema '{:schema ?s}) [:result 's :schema]))
   ;=>> vector?
 
-  ;; seed via mutation restores initial data
+  ;; seed mutation restores initial data with correct IDs
   (let [srcs  (make-sources data/default-data)
         store (make-store srcs)]
-    (execute! store store-schema "{:users {nil {:id 99 :name \"Dave\" :email \"d@e\" :role :user}}}")
-    (execute! store store-schema "{:seed {nil true}}")
-    (-> (execute! store store-schema "{:users ?all}") :result (get 'all) count))
-  ;=> 3
-
-  ;; seed preserves original IDs (no auto-increment bumping)
-  (let [srcs  (make-sources data/default-data)
-        store (make-store srcs)]
-    (execute! store store-schema "{:users {nil {:id 99 :name \"Dave\" :email \"d@e\" :role :user}}}")
-    (execute! store store-schema "{:seed {nil true}}")
-    (->> (execute! store store-schema "{:users ?all}") :result (get 'all) (mapv :id) sort)))
-  ;=> [1 2 3])
+    (execute! store store-schema {:users {nil {:id 99 :name "Dave" :email "d@e" :role :user}}})
+    (execute! store store-schema {:seed {nil true}})
+    (let [users (-> (execute! store store-schema '{:users ?all}) :result (get 'all))]
+      (sort (mapv :id users))))
+  ;=> [1 2 3]
+  nil)

@@ -4,7 +4,7 @@
    Components receive data via ::keys and dispatch effects directly."
   (:require [sg.flybot.playground.ui.core.views.examples :as examples]
             [sg.flybot.playground.ui.core.views.edn-editor-interactive.editor :as edn]
-            [sg.flybot.playground.ui.core.state :as state]
+            [sg.flybot.playground.ui.core.db :as db]
             [clojure.string :as str]
             [replicant.alias :refer [defalias]]
             #?(:cljs [sg.flybot.playground.ui.core.views.edn-editor-interactive :as edn-i])))
@@ -15,6 +15,12 @@
 
 (defn- format-result [v]
   (if (nil? v) "nil" (pr-str v)))
+
+^:rct/test
+(comment
+  (format-result nil) ;=> "nil"
+  (format-result {:a 1}) ;=> "{:a 1}"
+  nil)
 
 (defn- format-result-pretty [v]
   (str/trim (edn/pretty-str v)))
@@ -53,12 +59,12 @@
      [:div.header-right
       [:div.mode-toggle
        [:button {:class (when (= mode :sandbox) "active")
-                 :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :sandbox))
+                 :on {:click #(dispatch! {:db   (fn [db] (db/set-mode db :sandbox))
                                           :nav  :sandbox
                                           :pull :init})}}
         "Sandbox"]
        [:button {:class (when (= mode :remote) "active")
-                 :on {:click #(dispatch! {:db   (fn [db] (state/set-mode db :remote))
+                 :on {:click #(dispatch! {:db   (fn [db] (db/set-mode db :remote))
                                           :nav  :remote
                                           :pull :init})}}
         "Remote"]]
@@ -79,7 +85,7 @@
      [:button.tab-button
       {:replicant/key tab
        :class (when (= tab active-tab) "active")
-       :on {:click #(dispatch! {:db (fn [db] (state/set-active-tab db tab))})}}
+       :on {:click #(dispatch! {:db (fn [db] (db/set-active-tab db tab))})}}
       (case tab
         :pattern  "Pattern"
         :data     "Data"
@@ -89,8 +95,7 @@
 ;; Data Panel
 ;;-----------------------------------------------------------------------------
 
-(defn- data-display
-  "Read-only display of data with :data/:schema toggle and reset."
+(defalias data-display
   [{::keys [displayed-data displayed-schema data-view dispatch!]}]
   [:div.sandbox-data-section
    [:div.sandbox-header
@@ -123,11 +128,11 @@
                    :value server-url
                    :placeholder "http://localhost:8081/api"
                    :on {:input #(dispatch! {:db (fn [db] (assoc db :server-url (.. % -target -value)))})}}]]])
-      (data-display
+      [::data-display
        {::displayed-data data
         ::displayed-schema schema
         ::data-view data-view
-        ::dispatch! dispatch!})]]))
+        ::dispatch! dispatch!}]]]))
 
 ;;-----------------------------------------------------------------------------
 ;; Pattern + Results Panel
@@ -143,7 +148,7 @@
       [:div.section-header
        [:label "Pattern"]
        [:button.execute-btn
-        {:on {:click #(dispatch! {:db state/set-loading
+        {:on {:click #(dispatch! {:db db/set-loading
                                   :pull :pattern})}
          :disabled loading?}
         (if loading? "Executing..." "Execute")]]
@@ -158,10 +163,10 @@
             :schema schema
             :hover-tooltips? (some? schema)
             :autocomplete autocomplete
-            :on-autocomplete #(dispatch! {:db (fn [db] (state/show-autocomplete db %))})
-            :on-autocomplete-hide #(dispatch! {:db state/hide-autocomplete})
-            :on-autocomplete-select #(dispatch! {:db (fn [db] (state/select-autocomplete db %))})
-            :on-autocomplete-move #(dispatch! {:db (fn [db] (state/move-autocomplete-selection db %))})})
+            :on-autocomplete #(dispatch! {:db (fn [db] (db/show-autocomplete db %))})
+            :on-autocomplete-hide #(dispatch! {:db db/hide-autocomplete})
+            :on-autocomplete-select #(dispatch! {:db (fn [db] (db/select-autocomplete db %))})
+            :on-autocomplete-move #(dispatch! {:db (fn [db] (db/move-autocomplete-selection db %))})})
           :clj
           [:textarea {:value pattern-text
                       :placeholder "Enter a pull pattern, e.g. {:name ?n}"}])]
@@ -171,8 +176,8 @@
             {:editor-id pattern-editor-id
              :autocomplete autocomplete
              :on-change #(dispatch! {:db (fn [db] (assoc db :pattern-text %))})
-             :on-autocomplete-hide #(dispatch! {:db state/hide-autocomplete})
-             :on-autocomplete-select #(dispatch! {:db (fn [db] (state/select-autocomplete db %))})})))]
+             :on-autocomplete-hide #(dispatch! {:db db/hide-autocomplete})
+             :on-autocomplete-select #(dispatch! {:db (fn [db] (db/select-autocomplete db %))})})))]
      [:div.results-section
       [:div.section-header
        [:label "Results"]]
@@ -212,7 +217,7 @@
                                       (assoc :pattern-text (:pattern example)
                                              :selected-example idx
                                              :active-tab :pattern)
-                                      state/clear-result))})}}
+                                      db/clear-result))})}}
         (:name example)])]
     [:div.syntax-reference
      [:h3 "Syntax Reference"]
@@ -238,20 +243,10 @@
                          ::active-tab active-tab
                          ::dispatch! dispatch!}]]]))
 
-;;=============================================================================
-;; Tests
-;;=============================================================================
-
 ^:rct/test
 (comment
-  ;; format-result handles nil
-  (format-result nil) ;=> "nil"
-
-  ;; format-result handles maps
-  (format-result {:a 1}) ;=> "{:a 1}"
-
-  ;; app-view returns container
   (first (app-view {::db {:mode :sandbox :pattern-text "" :data nil :schema nil
                           :active-tab :pattern}
-                    ::dispatch! identity})))
-  ;=> :div.app-container)
+                    ::dispatch! identity}))
+  ;=> :div.app-container
+  nil)

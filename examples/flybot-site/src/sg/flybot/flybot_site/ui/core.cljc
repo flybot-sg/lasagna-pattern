@@ -274,12 +274,14 @@
 #?(:cljs
    (defn ^:export init! []
      (log/info "Flybot site initializing...")
-     (history/init-history! on-popstate)
      (init-theme!)
      (when-let [v (read-meta-version)]
        (swap! app-db update root-key assoc :version v))
      (init-from-url!)
      (dispatch! {:db db/set-loading :pull :init})
      (log/info "Flybot site initialized")))
+
+;; One-time popstate listener — defonce prevents duplicates on hot reload.
+#?(:cljs (defonce _popstate (.addEventListener js/window "popstate" (partial history/on-popstate! on-popstate))))
 
 #?(:cljs (defonce _init (init!)))
