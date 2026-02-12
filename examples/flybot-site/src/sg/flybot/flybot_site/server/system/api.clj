@@ -250,11 +250,12 @@
                 :roles          (delay (db/get-user-roles-detailed conn user-id))}))
 
 (defn- with-role
-  "Return data if session has role, nil otherwise.
-   Nil-valued keys fail pattern matching naturally — no data leaks."
+  "Return data if session has role, empty map otherwise.
+   Empty map lets pattern matching succeed with nil bindings — no data leaks."
   [session role data]
-  (when (contains? (:roles session) role)
-    data))
+  (if (contains? (:roles session) role)
+    data
+    {}))
 
 (def ^:private error-config
   "Error handling config for remote layer.
@@ -328,12 +329,12 @@
   (count (seq (get-in (api-fn {}) [:data :guest :posts]))) ;=> 11
   (:post/title (get (get-in (api-fn {}) [:data :guest :posts]) {:post/id 1})) ;=> "Welcome to Flybot"
 
-  ;; Guest: :guest always present, other roles nil
+  ;; Guest: :guest always present, other roles empty map
   (let [{:keys [data]} (api-fn {})]
     [(some? (:guest data))
-     (nil? (:member data))
-     (nil? (:admin data))
-     (nil? (:owner data))])
+     (= {} (:member data))
+     (= {} (:admin data))
+     (= {} (:owner data))])
   ;=> [true true true true]
 
   ;; Member: has :member with :posts, :posts/history, :me
@@ -345,7 +346,7 @@
      (some? (get-in data [:member :posts]))
      (some? (get-in data [:member :me]))
      (get-in data [:member :me :email])
-     (nil? (:admin data))])
+     (= {} (:admin data))])
   ;=> [true true true "m@test.com" true]
 
   ;; Member: can create post via :member :posts

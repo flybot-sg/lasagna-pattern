@@ -15,8 +15,7 @@
 
 (def ^:private init-spec
   "Fetch posts and current user in a single pull request.
-   Multi-role pattern: :guest always present, :member nil when not logged in —
-   pattern matching skips nil branches naturally."
+   Always includes :member — server returns {} for guests (safe nil bindings)."
   {:pattern '{:guest {:posts ?posts} :member {:me ?user}}
    :then    (fn [r] {:db #(db/init-fetched % r)})})
 
@@ -85,7 +84,8 @@
                            :toast {:type :success :title "Post saved"}})})
 
       :fetch-profile
-      {:pattern '{:member {:me/profile ?profile} :owner {:users ?users}}
+      {:pattern (cond-> '{:member {:me/profile ?profile}}
+                  (db/admin-or-owner? db) (assoc :owner '{:users ?users}))
        :then    (fn [r] {:db #(db/profile-fetched % r)})}
 
       :grant-admin
@@ -112,18 +112,22 @@
 (comment
   ;; --- init ---
 
-  (:pattern (resolve-pull :init {}))
+  ;; init pattern always includes :guest and :member
+  (:pattern (resolve-pull :init {:user nil}))
+  ;=> {:guest {:posts ?posts} :member {:me ?user}}
+
+  (:pattern (resolve-pull :init {:user {:roles #{:member}}}))
   ;=> {:guest {:posts ?posts} :member {:me ?user}}
 
   ;; :then merges posts and user into db
-  (let [effect ((:then (resolve-pull :init {}))
+  (let [effect ((:then (resolve-pull :init {:user {:roles #{:member}}}))
                 {'posts [{:post/id 1}] 'user {:email "t@t.com"}})
         db ((:db effect) db/initial-state)]
     [(:loading? db) (count (:posts db)) (:email (:user db))])
   ;=> [false 1 "t@t.com"]
 
   ;; guest (no user in response)
-  (let [effect ((:then (resolve-pull :init {})) {'posts [{:post/id 1}]})
+  (let [effect ((:then (resolve-pull :init {:user nil})) {'posts [{:post/id 1}]})
         db ((:db effect) db/initial-state)]
     (:user db))
   ;=> nil
@@ -207,7 +211,12 @@
 
   ;; --- fetch-profile ---
 
-  (:pattern (resolve-pull :fetch-profile {}))
+  ;; member: only :member branch
+  (:pattern (resolve-pull :fetch-profile {:user {:roles #{:member}}}))
+  ;=> {:member {:me/profile ?profile}}
+
+  ;; owner: includes :owner branch
+  (:pattern (resolve-pull :fetch-profile {:user {:roles #{:owner}}}))
   ;=> {:member {:me/profile ?profile} :owner {:users ?users}}
 
   ;; --- grant/revoke admin ---

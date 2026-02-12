@@ -8,10 +8,10 @@
                      ;; Optional: SCI for sandboxed eval (also enables CLJS support)
                      org.babashka/sci {:mvn/version "0.12.51"}
                      ;; Optional: Malli for schema validation (require sg.flybot.pullable.malli to enable)
-                     metosin/malli {:mvn/version "0.16.4"}}}
+                     metosin/malli {:mvn/version "0.20.0"}}}
   :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
         :exec-args {:dirs #{"src"}}}
   :cljs {:extra-paths ["test"]
          :extra-deps {thheller/shadow-cljs {:mvn/version "3.3.5"}
                       org.babashka/sci {:mvn/version "0.12.51"}
-                      metosin/malli {:mvn/version "0.16.4"}}}}}
+                      metosin/malli {:mvn/version "0.20.0"}}}}}

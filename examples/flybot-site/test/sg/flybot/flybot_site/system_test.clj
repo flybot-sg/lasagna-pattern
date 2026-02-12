@@ -192,14 +192,14 @@
             "History contains multiple versions")))))
 
 (deftest collection-based-api-test
-  (testing "Guest has :guest with :posts (read-only), other roles nil"
+  (testing "Guest has :guest with :posts (read-only), other roles empty"
     (let [api-fn (::system/api-fn *sys*)
           {:keys [data]} (api-fn {})]  ; No session = guest
       (is (some? (:guest data)) "Guest has :guest")
       (is (some? (get-in data [:guest :posts])) "Guest has :guest :posts")
-      (is (nil? (:member data)) "Guest has no :member")
-      (is (nil? (:admin data)) "Guest has no :admin")
-      (is (nil? (:owner data)) "Guest has no :owner")))
+      (is (= {} (:member data)) "Guest has empty :member")
+      (is (= {} (:admin data)) "Guest has empty :admin")
+      (is (= {} (:owner data)) "Guest has empty :owner")))
 
   (testing "Member has :member with :posts and :me"
     (let [api-fn (::system/api-fn *sys*)
