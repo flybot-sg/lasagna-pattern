@@ -1,41 +1,41 @@
 {:paths ["src" "resources"]
- :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
         local/pattern {:local/root "../../pattern"}
         local/remote {:local/root "../../remote"}
         io.github.robertluo/fun-map {:mvn/version "0.5.124"}
-        http-kit/http-kit {:mvn/version "2.8.0"}
-        ring/ring-core {:mvn/version "1.12.2"}
+        http-kit/http-kit {:mvn/version "2.8.1"}
+        ring/ring-core {:mvn/version "1.15.3"}
         ring/ring-session-timeout {:mvn/version "0.3.0"}
-        io.replikativ/datahike {:mvn/version "0.6.1555"} ;; same as used in datahike-s3
+        io.replikativ/datahike {:mvn/version "0.6.1555"} ;; pinned: datahike-s3 0.1.13 requires this version
         io.replikativ/datahike-s3 {:mvn/version "0.1.13"}
         clj-commons/clj-yaml {:mvn/version "1.0.29"}
-        io.github.studer-l/ring-oauth2 {:git/sha "db75c05284aa2a3458025ebb124efe9d3c14439b"} ;; fork with refresh token support
-        clj-http/clj-http {:mvn/version "3.13.0"}
-        cheshire/cheshire {:mvn/version "5.13.0"}
-        metosin/malli {:mvn/version "0.16.4"}
+        io.github.studer-l/ring-oauth2 {:git/sha "551475ee3f795a3e5e6942a68e40c64ad18f3c8c"} ;; fork with refresh token support
+        clj-http/clj-http {:mvn/version "3.13.1"}
+        cheshire/cheshire {:mvn/version "6.1.0"}
+        metosin/malli {:mvn/version "0.20.0"}
         pinyin4clj/pinyin4clj {:mvn/version "0.3.0"}
-        com.brunobonacci/mulog {:mvn/version "0.9.0"}
-        com.cognitect.aws/api {:mvn/version "0.8.692"}
-        com.cognitect.aws/endpoints {:mvn/version "1.1.12.772"}
-        com.cognitect.aws/s3 {:mvn/version "871.2.40.9"}
-        no.cjohansen/replicant {:mvn/version "2025.06.21"}}
+        com.brunobonacci/mulog {:mvn/version "0.10.1"}
+        com.cognitect.aws/api {:mvn/version "0.8.800"}
+        com.cognitect.aws/endpoints {:mvn/version "871.2.41.25"}
+        com.cognitect.aws/s3 {:mvn/version "871.2.41.20"}
+        no.cjohansen/replicant {:mvn/version "2025.12.1"}}
  :aliases
  {:dev {:extra-paths ["dev" "test"]
         :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
                      io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
-                     ring/ring-mock {:mvn/version "0.4.0"}
-                     nrepl/nrepl {:mvn/version "1.3.0"}
-                     cider/cider-nrepl {:mvn/version "0.50.2"}}}
+                     ring/ring-mock {:mvn/version "0.6.2"}
+                     nrepl/nrepl {:mvn/version "1.5.2"}
+                     cider/cider-nrepl {:mvn/version "0.58.0"}}}
   :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
         :exec-args {:dirs #{"src" "test"}}}
   :kaocha {:extra-paths ["test"]
            :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
            :main-opts ["-m" "kaocha.runner"]}
   :run {:main-opts ["-m" "sg.flybot.flybot-site.server.system"]}
-  :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "2.28.22"}
+  :cljs {:extra-deps {thheller/shadow-cljs {:mvn/version "3.3.5"}
                       com.cognitect/transit-cljs {:mvn/version "0.8.280"}}}
   :jib {:paths ["src"]
         :extra-deps {io.github.atomisthq/jibbit {:git/url "https://github.com/skydread1/jibbit.git"
-                                                 :git/sha "7bcb146c911431541fde86c3eebac95ac32d98e3"}}
+                                                 :git/sha "ffae0bab2a33eb415500b7aa851081586ea08a64"}}
         :ns-default jibbit.core
         :ns-aliases {jib jibbit.core}}}}

@@ -89,6 +89,17 @@
                         "-M" "-m" "nrepl.cmdline")))
            (println "Usage: bb nrepl <component>"))}
 
+  outdated
+  {:doc "Check outdated deps: bb outdated [component]"
+   :depends [-components]
+   :task (let [target (first *command-line-args*)
+               dirs (if target [target] (cons "." -components))]
+           (doseq [d dirs]
+             (println (str "\n=== " (if (= d ".") "root" d) " ==="))
+             (clojure {:dir d :continue true}
+                      "-Sdeps" "{:deps {com.github.liquidz/antq {:mvn/version \"RELEASE\"}}}"
+                      "-M" "-m" "antq.core")))}
+
   clean
   {:doc "Clean: bb clean [component]"
    :depends [-components]

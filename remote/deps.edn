@@ -1,16 +1,16 @@
 {:paths ["src"]
- :deps {org.clojure/clojure {:mvn/version "1.12.0"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
         local/pattern {:local/root "../pattern"}
         local/collection {:local/root "../collection"}
-        com.cognitect/transit-clj {:mvn/version "1.0.333"}
-        ring/ring-core {:mvn/version "1.12.1"}}
+        com.cognitect/transit-clj {:mvn/version "1.1.347"}
+        ring/ring-core {:mvn/version "1.15.3"}}
  :aliases
  {:dev {:extra-paths ["notebook" "dev" "test"]
         :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
                      io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
-                     ring/ring-mock {:mvn/version "0.4.0"}
+                     ring/ring-mock {:mvn/version "0.6.2"}
                      io.github.robertluo/fun-map {:mvn/version "0.5.124"}
-                     metosin/malli {:mvn/version "0.16.4"}}}
+                     metosin/malli {:mvn/version "0.20.0"}}}
   :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
         :exec-args {:dirs #{"src"}}}
   :kaocha {:main-opts ["-m" "kaocha.runner"]}}}
