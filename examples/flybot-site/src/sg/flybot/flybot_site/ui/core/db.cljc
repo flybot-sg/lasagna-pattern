@@ -34,7 +34,8 @@
    :user nil          ; {:id :email :name :picture :roles :slug} when logged in
    :mobile-nav-open? false  ; mobile navigation drawer state
    :toasts []         ; [{:id :type :title :message} ...] active toast notifications
-   :toast-counter 0}) ; auto-increment ID for toasts
+   :toast-counter 0  ; auto-increment ID for toasts
+   :version nil})    ; app version from meta tag (e.g. "0.1.10")
 
 ;;=============================================================================
 ;; Error Classification

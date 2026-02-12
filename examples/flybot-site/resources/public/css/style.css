@@ -1010,6 +1010,14 @@ button.danger {
   color: var(--accent);
 }
 
+.footer-version {
+  text-align: center;
+  margin-top: var(--space-6);
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
 /*==============================================================================
   Mobile Navigation
 ==============================================================================*/

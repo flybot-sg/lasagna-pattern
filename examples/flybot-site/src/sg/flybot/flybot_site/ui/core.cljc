@@ -267,10 +267,17 @@
       (dispatch! {:toast {:type (keyword toast-type) :title title :message message}}))))
 
 #?(:cljs
+   (defn- read-meta-version []
+     (some-> (js/document.querySelector "meta[name='app-version']")
+             (.getAttribute "content"))))
+
+#?(:cljs
    (defn ^:export init! []
      (log/info "Flybot site initializing...")
      (history/init-history! on-popstate)
      (init-theme!)
+     (when-let [v (read-meta-version)]
+       (swap! app-db update root-key assoc :version v))
      (init-from-url!)
      (dispatch! {:db db/set-loading :pull :init})
      (log/info "Flybot site initialized")))

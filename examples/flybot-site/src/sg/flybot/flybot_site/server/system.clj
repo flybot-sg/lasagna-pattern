@@ -88,10 +88,17 @@
 (defn- asset-version [resource-path]
   (some-> (io/resource resource-path) slurp md5-hex (subs 0 8)))
 
-(defn- render-index [js-path css-version]
+(defn- read-version
+  "Read app version from version.edn on classpath. Falls back to \"dev\"."
+  []
+  (or (some-> (io/resource "version.edn") slurp edn/read-string :version)
+      "dev"))
+
+(defn- render-index [js-path css-version app-version]
   (-> (io/resource "index-template.html") slurp
       (str/replace "{{main-js}}" (str "/js/" js-path))
-      (str/replace "{{style-css}}" (str "/css/style.css?v=" css-version))))
+      (str/replace "{{style-css}}" (str "/css/style.css?v=" css-version))
+      (str/replace "{{version}}" app-version)))
 
 ;;=============================================================================
 ;; Middleware Components
@@ -329,8 +336,9 @@
            (mu/log ::ring-app-building)
            (let [js-path    (or (read-js-path) "main.js")
                  css-ver    (or (asset-version "public/css/style.css") "0")
-                 index-html (render-index js-path css-ver)]
-             (mu/log ::assets-resolved :js-path js-path :css-version css-ver)
+                 app-ver    (read-version)
+                 index-html (render-index js-path css-ver app-ver)]
+             (mu/log ::assets-resolved :js-path js-path :css-version css-ver :app-version app-ver)
              (-> (fn [_] (-> (resp/response index-html)
                              (resp/content-type "text/html")))
                  (wrap-resource "public")

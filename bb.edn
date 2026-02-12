@@ -1,7 +1,8 @@
 {:min-bb-version "1.0.0"
  :tasks
  {:requires [[babashka.fs :as fs]
-             [clojure.string :as str]]
+             [clojure.string :as str]
+             [clojure.edn :as edn]]
 
   -comp-task?
   {:task (fn [dir task]
@@ -125,16 +126,23 @@
            (println "Usage: bb deploy <component>"))}
 
   tag
-  {:doc "Create release tag: bb tag <component> <version>"
-   :task (let [[component version] *command-line-args*]
-           (if (and component version)
+  {:doc "Create release tag: bb tag <component>"
+   :task (let [[component] *command-line-args*]
+           (if component
              (let [comp-name (last (str/split component (re-pattern "/")))
-                   tag (str comp-name "-v" version)]
-               (println "Creating tag:" tag)
-               (shell "git" "tag" "-a" tag "-m" (str "Release " comp-name " " version))
-               (println "Pushing tag to origin...")
-               (shell "git" "push" "origin" tag)
-               (println (str "Done! CI/CD will deploy " component " with tag " tag)))
+                   version-file (fs/file component "resources" "version.edn")
+                   version (when (fs/exists? version-file)
+                             (:version (edn/read-string (slurp (str version-file)))))]
+               (if version
+                 (let [tag (str comp-name "-v" version)]
+                   (println "Creating tag:" tag)
+                   (shell "git" "tag" "-a" tag "-m" (str "Release " comp-name " " version))
+                   (println "Pushing tag to origin...")
+                   (shell "git" "push" "origin" tag)
+                   (println (str "Done! CI/CD will deploy " component " with tag " tag)))
+                 (println "Error: No resources/version.edn found in" component)))
              (do
-               (println "Usage: bb tag <component> <version>")
-               (println "Example: bb tag examples/flybot-site 0.1.0"))))}}}
+               (println "Usage: bb tag <component>")
+               (println "Example: bb tag examples/flybot-site")
+               (println "")
+               (println "Reads version from resources/version.edn, creates and pushes the tag."))))}}}

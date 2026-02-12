@@ -345,7 +345,7 @@
                                          :on {:click #(dispatch! {:db db/toggle-mobile-nav})}}
        (menu-icon)]]]))
 
-(defn site-footer []
+(defn site-footer [version]
   [:footer.site-footer
    [:div.footer-content
     [:div.footer-section
@@ -361,7 +361,9 @@
     [:div.footer-section
      [:h4 "Contact"]
      [:p [:a {:href "mailto:zhengliming@basecity.com"} "zhengliming@basecity.com"]]
-     [:p [:a {:href "https://www.linkedin.com/company/flybot-pte-ltd" :target "_blank"} "LinkedIn"]]]]])
+     [:p [:a {:href "https://www.linkedin.com/company/flybot-pte-ltd" :target "_blank"} "LinkedIn"]]]]
+   (when version
+     [:div.footer-version (str "v" version)])])
 
 (defn- author-link
   "Clickable author name that links to /author/:slug."
@@ -851,7 +853,7 @@
       :history-detail [::post-history-detail-view {::db db ::dispatch! dispatch!}]
       :profile [::profile-view {::db db ::dispatch! dispatch!}]
       [::post-list-view {::db db ::dispatch! dispatch!}])]
-   (site-footer)
+   (site-footer (:version db))
    (toast-container (:toasts db))
    (confirm-dialog db dispatch!)])
 
@@ -869,7 +871,11 @@
   (tag-list [] identity) ;=> nil
   (first (tag-list ["a" "b"])) ;=> :div.tags
   (first (tag-list ["a" "b"] identity)) ;=> :div.tags
-  (first (app-view {::db {:view :list :posts [] :loading? false :user nil} ::dispatch! identity})) ;=> :div.app-container
+  (first (app-view {::db {:view :list :posts [] :loading? false :user nil :version "0.1.10"} ::dispatch! identity})) ;=> :div.app-container
+  ;; site-footer with version
+  (first (site-footer "0.1.10")) ;=> :footer.site-footer
+  ;; site-footer without version
+  (first (site-footer nil)) ;=> :footer.site-footer
   ;; error-banner renders when error present
   (first (error-banner {:error {:message "Test" :retryable? true :type :network}} identity)) ;=> :div.alert-box
   ;; error-banner returns nil when no error
