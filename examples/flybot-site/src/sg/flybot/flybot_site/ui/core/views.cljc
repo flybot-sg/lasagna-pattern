@@ -808,6 +808,31 @@
        (toast-item toast))]))
 
 ;;=============================================================================
+;; Confirm Dialog
+;;=============================================================================
+
+(defn- confirm-dialog
+  "Custom confirmation modal replacing native js/confirm.
+   Renders when :confirm-dialog is present in db state.
+   Uses merge-with comp to combine close + on-confirm into a single dispatch."
+  [db dispatch!]
+  (when-let [{:keys [message on-confirm]} (:confirm-dialog db)]
+    (let [close! (fn [_] (dispatch! {:db #(dissoc % :confirm-dialog)}))]
+      [:div.confirm-overlay
+       {:on {:click close!}}
+       [:div.confirm-modal
+        {:on {:click (fn [e] (.stopPropagation e))}}
+        [:p.confirm-message message]
+        [:div.confirm-actions
+         [:button.confirm-cancel {:on {:click close!}} "Cancel"]
+         [:button.confirm-ok
+          {:on {:click (fn [_]
+                         (dispatch! (merge-with comp
+                                                {:db #(dissoc % :confirm-dialog)}
+                                                on-confirm)))}}
+          "OK"]]]])))
+
+;;=============================================================================
 ;; App Root
 ;;=============================================================================
 
@@ -827,7 +852,8 @@
       :profile [::profile-view {::db db ::dispatch! dispatch!}]
       [::post-list-view {::db db ::dispatch! dispatch!}])]
    (site-footer)
-   (toast-container (:toasts db))])
+   (toast-container (:toasts db))
+   (confirm-dialog db dispatch!)])
 
 ;;=============================================================================
 ;; Tests

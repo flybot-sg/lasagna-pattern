@@ -147,8 +147,8 @@
                      :when (some? effect-def)]
                (case type
                  :db       (swap! app-db update root-key effect-def)
-                 :confirm  (when (js/confirm (:message effect-def))
-                             (@self (:on-confirm effect-def)))
+                 :confirm  (swap! app-db update root-key
+                                  assoc :confirm-dialog effect-def)
                  :pull     (let [spec (if (and (map? effect-def) (:pattern effect-def))
                                         effect-def
                                         (pull/resolve-pull effect-def (get @app-db root-key)))]
