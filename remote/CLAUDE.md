@@ -52,14 +52,19 @@ Ring Handler (make-handler / wrap-api)
     ├── parse-mutation(pattern) → mutation | nil
     │         │                        │
     │    MUTATION PATH            READ PATH
-    │    mutate!(coll, q, v)      compile + match pattern
-    │    detect errors            against lazy data
+    │    Walk path to find       Compile pattern via
+    │      the collection          pattern/match-fn
+    │    mutate!(coll, q, v)     Match against collections
+    │    detect errors             (ILookup + Seqable)
+    │    Return full entity      Return variable bindings
     │         │                        │
     │         └────────┬───────────────┘
     │                  ▼
     ├── prepare-for-wire (Wireable → serializable)
     └── encode response → Ring response
 ```
+
+**Key**: `pattern` (match-fn) is only used on the READ path. On the MUTATION path, `remote` walks the pattern path itself and calls `coll/mutate!` directly — `pattern` is not involved.
 
 ## Public API
 
@@ -116,7 +121,7 @@ The function passed to `make-handler` receives a Ring request and returns:
 
 **Endpoints:**
 - `POST /api` — Execute pull pattern
-- `GET /api/_schema` — Schema introspection (session-aware)
+- `GET /api/_schema` — Schema introspection. Returns `{:schema {...} :sample {...}}` where `:schema` is the Malli schema map and `:sample` is handcrafted example data. Both keys are optional (`:sample` omitted if api-fn doesn't provide one).
 
 **Content negotiation** via Accept/Content-Type:
 - `application/transit+json` (default)

@@ -43,19 +43,19 @@ Components are auto-discovered (any directory with `deps.edn`).
 
 ## Design Principle: Patterns Are Round-Trips
 
-The three core components (`pattern`, `collection`, `remote`) compose into a single round-trip system:
+The same pattern syntax describes both reads and writes. Each component handles a distinct part of the round-trip:
 
 ```
-pattern  — matches and binds data (reads AND writes use the same syntax)
-collection — makes data mutable (mutate! returns the created/updated entity)
-remote   — sends patterns over HTTP (mutation results flow back in the response)
+pattern    — compiles patterns into matcher functions, matches against ILookup data (READ path)
+collection — wraps data sources in ILookup + Mutable, returns full entities from mutations
+remote     — receives patterns over HTTP, detects mutations vs reads, routes accordingly
 ```
 
-**A mutation pattern is still a pull.** When a client sends `{:posts {nil {:title "New"}}}`, the response contains the full created entity: `{posts {:post/id 42 :title "New" :created-at ...}}`. The client should use this response to update local state.
+**Reads** flow through `pattern`: `remote` compiles the pattern via `match-fn`, matches it against collections (which implement `ILookup`), returns bindings.
 
-**Anti-pattern: discarding the mutation response and re-fetching.** This defeats the purpose of the pull-based design. Every pattern interaction — read or write — returns data. Use it.
+**Writes** flow through `collection`: `remote` detects the mutation via `parse-mutation` (variables in value = read, literals = write), calls `coll/mutate!` directly, returns the full entity. `pattern` is not involved in mutations.
 
-`collection` is what makes this possible. Before `collection`, patterns were read-only (SELECT). `collection/Mutable` + `remote`'s mutation detection elevated patterns to full read-write round-trips with results.
+**A mutation pattern is still a pull.** When a client sends `{:posts {nil {:title "New"}}}`, the response contains the full created entity: `{posts {:post/id 42 :title "New" :created-at ...}}`. The client should use this response to update local state — not discard it and re-fetch.
 
 ## Components
 
@@ -75,10 +75,9 @@ remote   — sends patterns over HTTP (mutation results flow back in the respons
     :deps {org.clojure/clojure {:mvn/version "1.12.4"}}
     :aliases
     {:dev {:extra-paths ["notebook"]
-           :extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}
-                        io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}}}
-     :test {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
-            :exec-args {:dirs #{"src"}}}}}
+           :extra-deps {io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}}}
+     :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
+           :exec-args {:dirs #{"src"}}}}}
    ```
 
 2. For local dependencies on other components:
@@ -164,6 +163,23 @@ bb dev examples/flybot-site  # Start nREPL
 - ILookup-based collections for lazy data access
 - Ownership enforcement via `coll/wrap-mutable`
 - Non-enumerable resources via `coll/lookup` with delay-based laziness
+
+## Deployment
+
+Deploy any component by tagging from the repo root:
+
+```bash
+bb tag <component>           # e.g. bb tag examples/pull-playground
+```
+
+This reads `resources/version.edn`, creates a git tag (`<comp-name>-v<version>`), and pushes it to origin. CI picks up the tag and deploys automatically.
+
+| Component | Tag pattern | CI workflow | Target |
+|-----------|-------------|-------------|--------|
+| `examples/pull-playground` | `pull-playground-v*` | S3 + CloudFront | https://pattern.flybot.sg |
+| `examples/flybot-site` | `flybot-site-v*` | ECR container + App Runner | https://www.flybot.sg |
+
+Bump `resources/version.edn` before tagging.
 
 ## Testing
 

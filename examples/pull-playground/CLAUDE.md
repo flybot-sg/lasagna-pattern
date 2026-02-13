@@ -1,6 +1,6 @@
 # Pull Playground
 
-Interactive SPA for learning pull patterns. Sandbox mode runs entirely in-browser (SCI); Remote mode talks to a demo server.
+Interactive SPA for learning pull patterns. Sandbox mode runs entirely in-browser (SCI); Remote mode connects to [flybot.sg](https://www.flybot.sg) by default (or any pull-compatible server).
 
 ## Quick Start
 
@@ -58,8 +58,13 @@ Top-level `def` — accessible from REPL and hot-reload.
 | Effect | Value | What happens |
 |--------|-------|--------------|
 | `:db` | `(fn [db] db')` | `swap! app-db update root-key f` |
-| `:pull` | `:keyword` or `{:pattern ... :then ...}` | Resolved via `pull/resolve-pull`, executed via mode executor |
+| `:pull` | `:keyword` or `{:pattern ... :then ...}` | Resolved via `pull/resolve-pull`, then dispatched by spec shape (see below) |
 | `:nav` | `:sandbox` / `:remote` | `pushState` URL navigation |
+
+The `:pull` handler in `dispatch-of` routes specs by shape:
+- `{:error msg}` — sets error state
+- `{:fetch url :then callback}` — GET request (used by remote `:init` for `/_schema`)
+- `{:pattern data :then callback}` — executes via `make-executor` (sandbox in-process, remote HTTP POST)
 
 ### Pull specs (pull.cljc) — data-driven API operations
 
@@ -67,7 +72,8 @@ Pull operations are **data, not imperative code**. Each named operation resolves
 
 ```clojure
 ;; Named specs resolve via (pull/resolve-pull op db)
-:init     ; Combined pattern: data + schema in one request
+:init     ; Mode-aware: sandbox → pull pattern for data + schema;
+          ;             remote → GET /_schema for schema + sample data
 :pattern  ; User's editor text, parsed to data. Mutations update snapshot directly.
 :data     ; Read all collections
 :schema   ; {:schema ?s}
@@ -83,9 +89,11 @@ Pull operations are **data, not imperative code**. Each named operation resolves
                     (db/apply-mutation-result pattern result))})
 ```
 
-### make-executor — the ONLY mode-specific function
+### make-executor — the ONLY mode-specific function (pattern execution)
 
 Returns `(fn [pattern on-success on-error])`. Takes pattern as **data** (not string). Sandbox calls `remote/execute` in-process (deferred via `queueMicrotask` to prevent recursive dispatch), remote sends HTTP POST. Everything else is mode-agnostic.
+
+Initialization (`:init`) is also mode-aware but routes differently: sandbox pulls data + schema via pattern, remote fetches schema + sample via GET `/_schema`. See `resolve-pull :init` in `pull.cljc`.
 
 ### Mobile responsive layout
 
@@ -149,7 +157,7 @@ src/sg/flybot/playground/
     ├── sandbox.cljc         # Stateless: constructors + execute! with explicit args
     ├── views.cljc           # Replicant hiccup (dispatch! closures)
     └── views/
-        └── examples.cljc    # Pre-built example patterns (19 examples in 6 sections)
+        └── examples.cljc    # Pre-built example patterns: sandbox (20) + remote (11)
 ```
 
 ## deps.edn aliases

@@ -83,13 +83,13 @@ For in-memory / testing / browser-side use:
 
 ## Critical: How Collection Interacts with Pattern and Remote
 
-### Pattern sees ILookup
+### READ path: pattern sees ILookup
 
-`pattern` matches against any `ILookup`. When it encounters a map key like `{:post/id 3}`, it calls `(get coll {:post/id 3})`. Collection validates the query against its indexes, then delegates to `DataSource/fetch`. Pattern never calls `mutate!` — it only reads.
+For reads, `remote` compiles the pattern via `pattern/match-fn` and matches it against the data. When `pattern` encounters a map key like `{:post/id 3}`, it calls `(get coll {:post/id 3})`. Collection validates the query against its indexes, then delegates to `DataSource/fetch`. Pattern never calls `mutate!` — it only reads.
 
-### Remote detects mutations and calls mutate!
+### WRITE path: remote calls mutate! directly
 
-`remote/http.cljc` parses the incoming pattern to detect mutations:
+For writes, `pattern` is not involved. `remote/http.cljc` detects the mutation via `parse-mutation` (variables in value = read, literals = write), walks the pattern path to find the collection, then calls `mutate!`:
 
 | Pattern shape | Operation | What remote does |
 |---|---|---|

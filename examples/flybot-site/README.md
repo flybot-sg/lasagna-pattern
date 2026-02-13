@@ -1,6 +1,6 @@
 # Flybot Site
 
-Public company blog with employee-authored content.
+Live at [flybot.sg](https://www.flybot.sg) — public company blog with employee-authored content.
 
 ## Rationale
 
@@ -99,3 +99,15 @@ bb test examples/flybot-site   # Run full Kaocha suite (RCT + integration tests)
 ```
 
 This component has both RCT tests in source files and integration tests in `test/`.
+
+## Deployment
+
+From the repo root:
+
+```bash
+bb tag examples/flybot-site
+```
+
+Reads `resources/version.edn`, creates a `flybot-site-v<version>` tag, and pushes it. CI builds the container via `bb deploy` and pushes to ECR. App Runner picks up the `latest` tag automatically.
+
+Bump `resources/version.edn` before tagging.

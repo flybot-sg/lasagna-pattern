@@ -14,8 +14,18 @@ Building APIs typically requires defining schemas, writing resolvers, and mainta
 ## Installation
 
 ```clojure
+;; deps.edn — git dependency
+{:deps
+ {io.github.flybot-sg/lasagna-pattern
+  {:git/url "https://github.com/flybot-sg/lasagna-pattern.git"
+   :git/sha "..."
+   :deps/root "remote"}}}
+
+;; or local (monorepo development)
 {:deps {local/remote {:local/root "../remote"}}}
 ```
+
+Clojars publication is planned — `remote` will get its own artifact.
 
 ## Usage
 

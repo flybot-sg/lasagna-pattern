@@ -52,6 +52,12 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Stamp version into index.html
+        working-directory: examples/pull-playground
+        run: |
+          VERSION=$(clojure -e '(:version (read-string (slurp "resources/version.edn")))' | tr -d '"')
+          sed -i "s/{{version}}/$VERSION/" resources/public/index.html
+
       - name: Build SPA
         working-directory: examples/pull-playground
         run: |

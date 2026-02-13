@@ -16,9 +16,18 @@ Extracting data from nested structures typically requires manual traversal code 
 ## Installation
 
 ```clojure
-;; deps.edn (local)
+;; deps.edn — git dependency
+{:deps
+ {io.github.flybot-sg/lasagna-pattern
+  {:git/url "https://github.com/flybot-sg/lasagna-pattern.git"
+   :git/sha "..."
+   :deps/root "pattern"}}}
+
+;; or local (monorepo development)
 {:deps {local/pattern {:local/root "../pattern"}}}
 ```
+
+Clojars publication is planned — `pattern` will get its own artifact.
 
 Only hard dependency is `org.clojure/clojure`. Optional deps: `org.babashka/sci` (sandboxed eval, required for CLJS), `metosin/malli` (schema validation).
 

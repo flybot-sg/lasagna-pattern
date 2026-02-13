@@ -1,6 +1,12 @@
 # <img src="examples/pull-playground/resources/public/favicon.svg" width="32" height="32" alt="Lasagna Pattern logo" style="vertical-align: middle;"> Lasagna Pattern
 
+![CI](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/ci.yml/badge.svg)
+![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)
+![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
+
 A monorepo for pull-based pattern matching and data transformation in Clojure/ClojureScript.
+
+*Alpha — APIs are evolving. Not yet published to Clojars.*
 
 *Why "lasagna"? Three layers that stack: **pattern** matches your data, **collection** stores it, **remote** sends it over the wire. Use one, two, or all three.*
 
@@ -17,45 +23,66 @@ Traditional data access requires writing custom traversal code for each query sh
 
 Explore the pattern syntax interactively at [pattern.flybot.sg](https://pattern.flybot.sg) — no setup required. Write patterns, see results instantly, and work through progressively structured examples covering bindings, collections, sequences, constraints, and mutations.
 
-## Architecture
+Switch to **Remote mode** to pull live data from [flybot.sg](https://www.flybot.sg) — the same patterns query real blog posts, demonstrating role-based access, schema validation, and autocomplete against a production API. You can also point it at your own pull-compatible server.
 
-```mermaid
----
-config:
-  theme: base
-  themeVariables:
-    primaryColor: '#e3f3f9'
-    primaryBorderColor: '#2891b8'
-    primaryTextColor: '#1a1a2e'
-    lineColor: '#2891b8'
-    secondaryColor: '#f0f0f0'
-    tertiaryColor: '#fafafa'
-    clusterBkg: '#f0f0f0'
-    clusterBorder: '#e0e0e0'
----
-flowchart LR
-    subgraph Core
-        pattern[pattern]
-        collection[collection]
-        remote[remote]
-    end
+## Installation
 
-    remote --> pattern
-    remote --> collection
+Add as a git dependency in `deps.edn`, using `:deps/root` to select the component you need:
 
-    subgraph Examples
-        flybot[flybot-site]
-        playground[pull-playground]
-    end
-
-    flybot --> pattern
-    flybot --> remote
-    playground --> pattern
-    playground --> collection
-    playground --> remote
+```clojure
+;; deps.edn
+{:deps
+ {io.github.flybot-sg/lasagna-pattern
+  {:git/url "https://github.com/flybot-sg/lasagna-pattern.git"
+   :git/sha "..."       ; pin to a specific commit
+   :deps/root "pattern"  ; or "collection", "remote"
+   }}}
 ```
 
-*`pattern` and `collection` are independent foundations; `remote` builds on both*
+Each component can be added independently:
+
+| Component | `:deps/root` | What you get |
+|-----------|-------------|--------------|
+| [pattern](./pattern) | `"pattern"` | Core pattern DSL — matching and transforming data |
+| [collection](./collection) | `"collection"` | CRUD abstraction — includes `pattern` |
+| [remote](./remote) | `"remote"` | HTTP transport — includes `pattern` + `collection` |
+
+Clojars publication is planned — each component will get its own artifact.
+
+## Architecture
+
+READ and CREATE on a blog post at [flybot.sg](https://www.flybot.sg) — same pattern syntax, different paths through the stack:
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as remote
+    participant P as pattern
+    participant Coll as collection
+    participant DS as DataSource
+
+    Note over C,DS: READ — pattern matches against collections
+    C->>R: {:guest {:posts {{:post/id 1} ?post}}}
+    R->>P: match-fn(pattern)
+    P->>Coll: get(posts, {:post/id 1})
+    Coll->>DS: fetch
+    DS-->>P: entity
+    R-->>C: {'post {:post/id 1 :title "Hello" ...}}
+
+    Note over C,DS: CREATE — nil key = new entity
+    C->>R: {:member {:posts {nil {:title "New"}}}}
+    R->>R: parse-mutation → create
+    R->>Coll: mutate!(posts, nil, {:title "New"})
+    Coll->>DS: create!
+    DS-->>R: {:post/id 42 :title "New" :created-at ...}
+    R-->>C: {'posts {:post/id 42 :title "New" ...}}
+
+    Note over C: merge each response into local state — no re-fetch
+```
+
+UPDATE and DELETE follow the same pattern — see component READMEs for details.
+
+**pattern** matches and binds data (READ path only). **collection** makes data mutable via `mutate!`. **remote** detects reads vs writes and routes accordingly — mutation responses contain the full entity, used directly by the client without re-fetching.
 
 ## Components
 
@@ -67,34 +94,38 @@ flowchart LR
 | [flybot-site](./examples/flybot-site) | Production blog demonstrating pull pattern in web development |
 | [pull-playground](./examples/pull-playground) | Interactive browser playground |
 
-## Workspace Structure
-
-```
-lasagna-pattern/
-├── pattern/              # Core pattern DSL
-├── collection/           # CRUD collection abstraction
-├── remote/               # HTTP transport layer
-├── examples/
-│   ├── flybot-site/      # Production blog example
-│   └── pull-playground/  # Interactive playground
-├── claude-ctx/           # Optional LLM plugins
-└── bb.edn                # Monorepo task runner
-```
-
 ## Pattern Syntax
 
+See [pattern/README.md](./pattern/README.md) for the full syntax reference and usage examples.
+
 ```clojure
-?x                    ; Bind value to x
-?_                    ; Wildcard (match anything)
-{:key ?v}             ; Map pattern
-[?first ?rest*]       ; Sequence with rest
-(?x :when pred)       ; Constrained match
-(?x :default val)     ; Default on failure
-{{:id 1} ?result}     ; Indexed lookup
-$                     ; Original input (in body)
+;; Bind a value
+((match-fn '{:name ?n} ?n) {:name "Alice"})  ;=> "Alice"
+
+;; Wildcard — match without binding
+((match-fn '[?_ ?second] ?second) [1 2])  ;=> 2
+
+;; Map pattern — extract multiple values
+((match-fn '{:name ?n :age ?a} [?n ?a]) {:name "Alice" :age 30})  ;=> ["Alice" 30]
+
+;; Sequence with rest
+((match-fn '[?first ?rest*] {:first ?first :rest ?rest}) [1 2 3])
+;=> {:first 1, :rest (2 3)}
+
+;; Constrained match
+((match-fn '{:age (?a :when #(>= % 18))} ?a) {:age 25})  ;=> 25
+
+;; Default on missing key
+((match-fn '{:name (?n :default "Anonymous")} ?n) {})  ;=> "Anonymous"
+
+;; Indexed lookup (ILookup)
+((match-fn '{{:id 1} ?result} ?result) my-collection)
+
+;; Original input in body
+((match-fn '{:a ?x} (assoc $ :sum ?x)) {:a 1 :b 2})  ;=> {:a 1 :b 2 :sum 1}
 ```
 
-## Getting Started
+## Development
 
 ### Prerequisites
 
@@ -110,7 +141,20 @@ bb list                        # List all components
 bb dev examples/flybot-site    # Start REPL for component
 ```
 
-## Tasks
+### Workspace Structure
+
+```
+lasagna-pattern/
+├── pattern/              # Core pattern DSL
+├── collection/           # CRUD collection abstraction
+├── remote/               # HTTP transport layer
+├── examples/
+│   ├── flybot-site/      # Production blog example
+│   └── pull-playground/  # Interactive playground
+└── bb.edn                # Monorepo task runner
+```
+
+### Tasks
 
 All tasks are run from the repository root.
 
@@ -134,21 +178,6 @@ Each component has **Rich Comment Tests (RCT)** embedded in source files. Some c
 
 - `bb rct` - Fast feedback, runs only RCT assertions
 - `bb test` - Full test suite via Kaocha (RCT + integration tests)
-
-## LLM Tooling
-
-Optional Claude Code plugins are available in `claude-ctx/` for enforced workflows:
-
-```bash
-/plugin marketplace add ./claude-ctx
-```
-
-| Plugin | Description |
-|--------|-------------|
-| `lasagna-clj` | Clojure conventions, paren repair |
-| `lasagna-jj` | jj-only workflow (blocks git), test reminders |
-
-You are of course free to use the context enhancing and LLM you like.
 
 ## License
 

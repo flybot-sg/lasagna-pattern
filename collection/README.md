@@ -14,8 +14,18 @@ Different data stores (databases, APIs, in-memory maps) have different interface
 ## Installation
 
 ```clojure
+;; deps.edn — git dependency
+{:deps
+ {io.github.flybot-sg/lasagna-pattern
+  {:git/url "https://github.com/flybot-sg/lasagna-pattern.git"
+   :git/sha "..."
+   :deps/root "collection"}}}
+
+;; or local (monorepo development)
 {:deps {local/collection {:local/root "../collection"}}}
 ```
+
+Clojars publication is planned — `collection` will get its own artifact.
 
 ## Usage
 

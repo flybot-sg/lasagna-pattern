@@ -1,6 +1,6 @@
 # Pull Playground
 
-Interactive browser-based playground for experimenting with the pull pattern DSL.
+Live at [pattern.flybot.sg](https://pattern.flybot.sg) — interactive browser-based playground for experimenting with the pull pattern DSL.
 
 ## Rationale
 
@@ -26,61 +26,48 @@ bb serve examples/pull-playground
 
 ### Remote Mode
 
-Query a live server with sample data.
+Pull data from a live server — defaults to [flybot.sg](https://www.flybot.sg), no setup needed.
 
 ```bash
-# Terminal 1: Start the UI
 bb serve examples/pull-playground
-
-# Terminal 2: Start the backend
-bb server examples/pull-playground
+# Open http://localhost:3001, switch to "Remote"
 ```
 
-Open http://localhost:3001, switch to "Remote Mode".
+The playground connects to flybot.sg as a guest (read-only, no login). You can also point it at any pull-compatible server by changing the URL and clicking Connect.
 
 ## Usage
 
-### Local Mode
+### Sandbox Mode
 
 1. Enter a pull pattern in the Pattern editor
-2. Enter EDN data in the Data editor
-3. Click Execute to see matched data and variable bindings
+2. Click Execute to see matched bindings from the in-browser sample data
+3. Try mutations too — create, update, delete with Reset to restore
 
 ### Remote Mode
 
-1. Switch to Remote mode
-2. Server URL defaults to http://localhost:8081/api
-3. Enter a pull pattern
-4. Click Execute to query the demo server
+1. Switch to Remote mode (connects to flybot.sg by default)
+2. Enter a pull pattern using the role-as-top-level API
+3. Click Execute to query live blog posts
 
-## Example Patterns
-
-| Pattern | Description |
-|---------|-------------|
-| `{:name ?n}` | Bind `:name` value to `n` |
-| `{:name ?n :age ?a}` | Extract multiple values |
-| `{:user {:name ?n}}` | Match nested maps |
-| `[?first ?rest*]` | Sequence destructuring |
-| `(?x :when pos?)` | Predicate constraint |
-| `(?x :default 0)` | Default value |
-
-## Demo Server Data
-
-The demo server (Remote Mode) provides sample data:
+Example queries against flybot.sg:
 
 ```clojure
-{:users [{:id 1 :name "Alice" :email "alice@example.com" :role :admin}
-         {:id 2 :name "Bob" :email "bob@example.com" :role :user}
-         {:id 3 :name "Carol" :email "carol@example.com" :role :user}]
- :posts [{:id 1 :title "Hello World" :author "Alice" :tags ["intro"]}
-         {:id 2 :title "Pattern Matching" :author "Bob" :tags ["tutorial"]}]
- :config {:version "1.0.0" :features {:dark-mode true}}}
+'{:guest {:posts ?all}}                                       ; list all posts
+'{:guest {:posts {{:post/id 2} {:post/title ?t :post/tags ?tags}}}} ; select fields
+'{:member ?m}                                                 ; nil — no auth
 ```
 
-Example queries:
-- `{:users ?all}` - Get all users
-- `{:posts {{:id 1} ?post}}` - Get post by ID (indexed lookup)
-- `{:config {:version ?v}}` - Extract config version
+## Deployment
+
+From the repo root:
+
+```bash
+bb tag examples/pull-playground
+```
+
+Reads `resources/version.edn`, creates a `pull-playground-v<version>` tag, and pushes it. CI builds the SPA, stamps the version into `index.html`, and syncs to S3 + CloudFront.
+
+Bump `resources/version.edn` before tagging.
 
 ## Development
 
