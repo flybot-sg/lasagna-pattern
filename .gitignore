@@ -12,6 +12,10 @@
 .env
 .envrc
 
+# Build artifacts
+target/
+classes/
+
 # JS build artifacts
 .shadow-cljs/
 node_modules/
