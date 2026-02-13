@@ -219,9 +219,18 @@
                    :pull :init}))))
 
 #?(:cljs
+   (defn read-meta-version []
+     (let [v (some-> (js/document.querySelector "meta[name='app-version']")
+                     (.getAttribute "content"))]
+       (when (and v (not= v "{{version}}"))
+         v))))
+
+#?(:cljs
    (defn ^:export init! []
      (let [store (sandbox/make-store (sandbox/make-sources data/default-data))]
        (init-theme!)
+       (when-let [v (read-meta-version)]
+         (swap! app-db update root-key assoc :version v))
        (when (= (.-pathname js/location) "/")
          (.replaceState js/history nil "" "/sandbox"))
        (add-watch app-db :render

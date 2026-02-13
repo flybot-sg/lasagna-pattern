@@ -1,5 +1,8 @@
 {:tasks
- {dev
+ {:requires [[clojure.edn :as edn]
+             [clojure.string :as str]]
+
+  dev
   {:doc "Start nREPL with CLJS support. Then in REPL:
          (shadow.cljs.devtools.server/start!)
          (shadow.cljs.devtools.api/watch :app)
@@ -20,6 +23,13 @@
            (when-not bucket
              (println "Error: S3_BUCKET not set. Add it to .env or export it.")
              (System/exit 1))
-           (shell "npm install")
-           (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
-           (shell "aws s3 sync resources/public" (str "s3://" bucket) "--delete"))}}}
+           (let [version   (-> (slurp "resources/version.edn") edn/read-string :version)
+                 index-tpl (slurp "resources/public/index.html")]
+             (println (str "Stamping version " version " into index.html"))
+             (spit "resources/public/index.html" (str/replace index-tpl "{{version}}" version))
+             (try
+               (shell "npm install")
+               (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
+               (shell "aws s3 sync resources/public" (str "s3://" bucket) "--delete")
+               (finally
+                 (spit "resources/public/index.html" index-tpl)))))}}}

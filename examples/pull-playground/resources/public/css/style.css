@@ -1122,6 +1122,18 @@ body {
   .panel:not(.pattern-results-panel) { padding: 0.75rem; }
 }
 
+/* Footer */
+.site-footer {
+  text-align: center;
+  padding: 0.5rem;
+}
+
+.footer-version {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  opacity: 0.6;
+}
+
 @media (max-width: 600px) {
   .site-header h1 { font-size: 1rem; }
   .execute-btn { min-height: 44px; }

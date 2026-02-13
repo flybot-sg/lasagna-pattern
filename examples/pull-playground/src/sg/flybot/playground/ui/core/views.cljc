@@ -228,11 +228,29 @@
          [:span description]])]]]])
 
 ;;=============================================================================
+;; Footer
+;;=============================================================================
+
+(defn site-footer [version]
+  (when version
+    [:footer.site-footer
+     [:div.footer-version (str "v" version)]]))
+
+^:rct/test
+(comment
+  (site-footer "0.1.0")
+  ;=> [:footer.site-footer [:div.footer-version "v0.1.0"]]
+
+  (site-footer nil)
+  ;=> nil
+  nil)
+
+;;=============================================================================
 ;; App Root
 ;;=============================================================================
 
 (defn app-view [{::keys [db dispatch!]}]
-  (let [{:keys [selected-example active-tab]} db]
+  (let [{:keys [selected-example active-tab version]} db]
     [:div.app-container
      [::site-header {::db db ::dispatch! dispatch!}]
      [::mobile-tab-bar {::active-tab active-tab ::dispatch! dispatch!}]
@@ -241,7 +259,8 @@
       [::pattern-results-panel {::db db ::dispatch! dispatch!}]
       [::examples-panel {::selected-example selected-example
                          ::active-tab active-tab
-                         ::dispatch! dispatch!}]]]))
+                         ::dispatch! dispatch!}]]
+     (site-footer version)]))
 
 ^:rct/test
 (comment

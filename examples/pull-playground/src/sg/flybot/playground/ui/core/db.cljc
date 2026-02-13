@@ -26,7 +26,8 @@
    :server-url "http://localhost:8081/api"
    :schema-error nil
    ;; Autocomplete
-   :autocomplete nil})     ; {:completions [...] :selected 0 :prefix ":" :x :y}
+   :autocomplete nil       ; {:completions [...] :selected 0 :prefix ":" :x :y}
+   :version nil})          ; app version from meta tag
 
 ;;=============================================================================
 ;; Pure Updaters (db → db)
