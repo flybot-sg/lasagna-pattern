@@ -41,6 +41,25 @@
 ;; Resolve
 ;;=============================================================================
 
+(defn- role-map->schema
+  "Wrap a role-keyed schema map into a single Malli hiccup form.
+   {:guest [:map ...] :member [:maybe ...]} → [:map [:guest [:map ...]] [:member [:maybe ...]]]"
+  [m]
+  (when (map? m)
+    (into [:map] (map (fn [[k v]] [k v])) m)))
+
+^:rct/test
+(comment
+  ;; wraps role-keyed map into [:map ...] form
+  (let [result (role-map->schema {:guest [:map [:posts :any]]
+                                  :member [:maybe [:map [:me :any]]]})]
+    [(first result) (set (rest result))])
+  ;=> [:map #{[:guest [:map [:posts :any]]] [:member [:maybe [:map [:me :any]]]]}]
+
+  (role-map->schema nil)
+  ;=> nil
+  nil)
+
 (defn resolve-pull
   "Resolve a named pull operation to {:pattern ... :then ...}.
    :pattern is data (already parsed). :then receives response, returns effect map.
@@ -48,12 +67,18 @@
   [op db]
   (case op
     :init
-    {:pattern (assoc read-all-pattern :schema '?s)
-     :then (fn [r]
-             (let [schema-data (get r 's)]
-               {:db #(-> %
-                         (db/set-data (vars->data (dissoc r 's)))
-                         (db/set-schema (:schema schema-data)))}))}
+    (case (:mode db)
+      :remote
+      {:fetch (str (:server-url db) "/_schema")
+       :then (fn [r] {:db #(db/set-remote-init % (update r :schema role-map->schema))})}
+
+      ;; :sandbox (default)
+      {:pattern (assoc read-all-pattern :schema '?s)
+       :then (fn [r]
+               (let [schema-data (get r 's)]
+                 {:db #(-> %
+                           (db/set-data (vars->data (dissoc r 's)))
+                           (db/set-schema (:schema schema-data)))}))})
 
     :pattern
     (try
@@ -89,10 +114,15 @@
 
 ^:rct/test
 (comment
-  ;; :init pattern includes data collections and schema
-  (let [p (:pattern (resolve-pull :init {}))]
+  ;; :init sandbox — pattern includes data collections and schema
+  (let [p (:pattern (resolve-pull :init {:mode :sandbox}))]
     [(contains? p :users) (contains? p :schema)])
   ;=> [true true]
+
+  ;; :init remote — returns :fetch spec pointing to _schema endpoint
+  (let [spec (resolve-pull :init {:mode :remote :server-url "http://localhost:8081/api"})]
+    [(:fetch spec) (fn? (:then spec))])
+  ;=> ["http://localhost:8081/api/_schema" true]
 
   ;; :pattern resolves user's text into data
   (:pattern (resolve-pull :pattern {:pattern-text "{:config ?cfg}"}))

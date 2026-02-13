@@ -23,8 +23,9 @@
    :schema nil             ; Malli hiccup form for autocomplete/tooltips
    :data-view :data        ; :data | :schema toggle
    ;; Remote mode config
-   :server-url "http://localhost:8081/api"
+   :server-url "https://www.flybot.sg/api"
    :schema-error nil
+   :schema-loading? false
    ;; Autocomplete
    :autocomplete nil       ; {:completions [...] :selected 0 :prefix ":" :x :y}
    :version nil})          ; app version from meta tag
@@ -43,7 +44,7 @@
   (-> db
       (assoc :mode mode)
       (assoc :result nil :error nil :selected-example nil)
-      (assoc :data nil :schema nil :schema-error nil)))
+      (assoc :data nil :schema nil :schema-error nil :schema-loading? false)))
 
 (defn set-result [db result]
   (assoc db :loading? false :result result :error nil))
@@ -65,7 +66,19 @@
   (assoc db :schema schema :schema-error nil))
 
 (defn set-schema-error [db error]
-  (assoc db :schema nil :schema-error error))
+  (assoc db :schema nil :schema-error error :schema-loading? false))
+
+(defn set-remote-init [db {:keys [schema sample]}]
+  (assoc db :schema schema :data sample :schema-error nil :schema-loading? false))
+
+^:rct/test
+(comment
+  (let [db (set-remote-init {:schema nil :data nil :schema-error "old" :schema-loading? true}
+                            {:schema [:map [:name :string]]
+                             :sample {:users [{:name "Alice"}]}})]
+    [(:schema db) (:data db) (:schema-error db) (:schema-loading? db)])
+  ;=> [[:map [:name :string]] {:users [{:name "Alice"}]} nil false]
+  nil)
 
 ;;=============================================================================
 ;; Mutation response → data snapshot

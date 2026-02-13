@@ -1042,6 +1042,34 @@ body {
   color: white;
 }
 
+.connect-btn {
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius-lg);
+  padding: 0.5rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--transition-normal);
+  white-space: nowrap;
+}
+
+.connect-btn:hover {
+  background: var(--accent-hover);
+}
+
+.url-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.url-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
 .reset-btn {
   background: var(--bg);
   border: 1px solid var(--border);

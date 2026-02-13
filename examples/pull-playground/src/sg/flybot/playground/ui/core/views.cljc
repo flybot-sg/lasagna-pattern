@@ -96,25 +96,34 @@
 ;;-----------------------------------------------------------------------------
 
 (defalias data-display
-  [{::keys [displayed-data displayed-schema data-view dispatch!]}]
+  [{::keys [displayed-data displayed-schema schema-error schema-loading? data-view mode dispatch!]}]
   [:div.sandbox-data-section
    [:div.sandbox-header
     [:div.data-view-toggle
      [:button {:class (when (= data-view :data) "active")
                :on {:click #(dispatch! {:db (fn [db] (assoc db :data-view :data))})}}
-      "Data"]
+      (if (= mode :remote) "Sample" "Data")]
      [:button {:class (when (= data-view :schema) "active")
                :on {:click #(dispatch! {:db (fn [db] (assoc db :data-view :schema))})}}
       "Schema"]]
-    [:button.reset-btn {:on {:click #(dispatch! {:pull :seed})}}
-     "Reset"]]
+    (when (= mode :sandbox)
+      [:button.reset-btn {:on {:click #(dispatch! {:pull :seed})}}
+       "Reset"])]
    [:div.sandbox-content
-    (let [text (format-result-pretty (if (= data-view :schema) displayed-schema displayed-data))]
-      (edn/edn-display {:value text :placeholder "No data"}))]])
+    (cond
+      schema-loading?
+      [:div.loading "Connecting..."]
+
+      schema-error
+      [:div.schema-error schema-error]
+
+      :else
+      (let [text (format-result-pretty (if (= data-view :schema) displayed-schema displayed-data))]
+        (edn/edn-display {:value text :placeholder "No data"})))]])
 
 (defalias data-panel
   [{::keys [db dispatch!]}]
-  (let [{:keys [mode server-url data schema data-view active-tab]} db]
+  (let [{:keys [mode server-url data schema schema-error schema-loading? data-view active-tab]} db]
     [:div.panel.data-panel {:class (when (not= active-tab :data) "mobile-hidden")}
      [:div.panel-header
       [:h2 "Data"]]
@@ -123,15 +132,24 @@
         [:div.remote-sections
          [:div.editor-section.url-section
           [:label "Server URL"
-           [:span.info-hint {:data-tooltip "Remote mode connects to a running Pull Pattern server. Clone the repository and run the demo server locally."} "i"]]
-          [:input {:type "text"
-                   :value server-url
-                   :placeholder "http://localhost:8081/api"
-                   :on {:input #(dispatch! {:db (fn [db] (assoc db :server-url (.. % -target -value)))})}}]]])
+           [:span.info-hint {:data-tooltip "Connects to a pull-compatible server. flybot.sg is guest-only (read, no mutations)."} "i"]]
+          [:div.url-row
+           [:input {:type "text"
+                    :value server-url
+                    :placeholder "https://www.flybot.sg/api"
+                    :on {:input #(dispatch! {:db (fn [db] (assoc db :server-url (.. % -target -value)))})}}]
+           [:button.connect-btn
+            {:on {:click #(dispatch! {:db   (fn [db] (assoc db :schema-error nil :data nil :schema nil
+                                                            :result nil :error nil :schema-loading? true))
+                                      :pull :init})}}
+            "Connect"]]]])
       [::data-display
        {::displayed-data data
         ::displayed-schema schema
+        ::schema-error schema-error
+        ::schema-loading? schema-loading?
         ::data-view data-view
+        ::mode mode
         ::dispatch! dispatch!}]]]))
 
 ;;-----------------------------------------------------------------------------
@@ -201,13 +219,13 @@
 ;;-----------------------------------------------------------------------------
 
 (defalias examples-panel
-  [{::keys [selected-example active-tab dispatch!]}]
+  [{::keys [mode selected-example active-tab dispatch!]}]
   [:div.panel.examples-panel {:class (when (not= active-tab :examples) "mobile-hidden")}
    [:div.panel-header
     [:h2 "Examples"]]
    [:div.panel-content
     [:ul.example-list
-     (for [[idx example] (map-indexed vector examples/examples)]
+     (for [[idx example] (map-indexed vector (examples/examples-for-mode mode))]
        [:li {:replicant/key idx
              :class (when (= idx selected-example) "active")
              :title (:description example)
@@ -250,14 +268,15 @@
 ;;=============================================================================
 
 (defn app-view [{::keys [db dispatch!]}]
-  (let [{:keys [selected-example active-tab version]} db]
+  (let [{:keys [mode selected-example active-tab version]} db]
     [:div.app-container
      [::site-header {::db db ::dispatch! dispatch!}]
      [::mobile-tab-bar {::active-tab active-tab ::dispatch! dispatch!}]
      [:div.main-content.with-sidebar
       [::data-panel {::db db ::dispatch! dispatch!}]
       [::pattern-results-panel {::db db ::dispatch! dispatch!}]
-      [::examples-panel {::selected-example selected-example
+      [::examples-panel {::mode mode
+                         ::selected-example selected-example
                          ::active-tab active-tab
                          ::dispatch! dispatch!}]]
      (site-footer version)]))

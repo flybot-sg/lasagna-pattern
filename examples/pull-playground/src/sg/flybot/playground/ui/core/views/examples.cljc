@@ -1,7 +1,7 @@
 (ns sg.flybot.playground.ui.core.views.examples
   "Pre-built example patterns for the playground.")
 
-(def examples
+(def sandbox-examples
   [;; --- Basics: binding variables from plain maps ---
    {:name "Bind a value"
     :description "Bind an entire map to a single variable"
@@ -63,6 +63,10 @@
     :description "Query users and posts in a single pattern"
     :pattern "{:users {{:id 1} {:name ?user}} :posts {{:id 1} {:title ?title}}}"}
 
+   {:name "Multiple lookups"
+    :description "Fetch two posts at once by ID in a single pattern"
+    :pattern "{:posts {{:id 1} {:title ?t1} {:id 2} {:title ?t2}}}"}
+
    {:name "Mixed features"
     :description "Selective fields + sequence destructure in one lookup"
     :pattern "{:posts {{:id 2} {:title ?title :tags [?first ?rest*]}}}"}
@@ -84,6 +88,61 @@
     :description "nil value = delete — use Reset in Data panel to restore"
     :pattern "{:users {{:id 2} nil}}"}])
 
+(def remote-examples
+  [;; --- Basics: role-as-top-level API ---
+   {:name "List all posts"
+    :description "Read all blog posts as a guest (no auth needed)"
+    :pattern "{:guest {:posts ?all}}"}
+
+   {:name "Lookup by ID"
+    :description "Find a specific post by its ID"
+    :pattern "{:guest {:posts {{:post/id 2} ?post}}}"}
+
+   {:name "Select fields"
+    :description "Extract only title, author and tags from a post"
+    :pattern "{:guest {:posts {{:post/id 4} {:post/title ?t :post/author ?a :post/tags ?tags}}}}"}
+
+   {:name "Multiple posts"
+    :description "Fetch two posts at once by ID"
+    :pattern "{:guest {:posts {{:post/id 2} {:post/title ?t1} {:post/id 4} {:post/title ?t2}}}}"}
+
+   ;; --- Sequences ---
+   {:name "First tag"
+    :description "Bind the first tag of a post"
+    :pattern "{:guest {:posts {{:post/id 4} {:post/tags [?first ?rest*]}}}}"}
+
+   {:name "All tags [?t+]"
+    :description "Collect all tags — fails if vector is empty"
+    :pattern "{:guest {:posts {{:post/id 2} {:post/tags [?t+]}}}}"}
+
+   ;; --- Modifiers ---
+   {:name "Wildcard (?_)"
+    :description "Skip title, only extract tags"
+    :pattern "{:guest {:posts {{:post/id 2} {:post/title ?_ :post/tags ?tags}}}}"}
+
+   {:name "Default value"
+    :description "Provide a fallback when a field is missing"
+    :pattern "{:guest {:posts {{:post/id 2} {:post/featured? (?f :default false)}}}}"}
+
+   {:name "Constraint (:when)"
+    :description "Match only if the value passes a predicate"
+    :pattern "{:guest {:posts {{:post/id 2} {:post/title (?t :when string?)}}}}"}
+
+   ;; --- Auth-gated role ---
+   {:name "Nil role (no auth)"
+    :description "Member requires login — returns nil for anonymous users"
+    :pattern "{:member ?m}"}
+
+   ;; --- Schema validation ---
+   {:name "Schema error"
+    :description "Invalid key — server validates patterns against the schema"
+    :pattern "{:guest {:posts2 ?all}}"}])
+
+(defn examples-for-mode [mode]
+  (case mode
+    :remote remote-examples
+    sandbox-examples))
+
 (def syntax-reference
   [{:syntax "?x" :description "Bind value to x"}
    {:syntax "?_" :description "Wildcard (match any)"}
@@ -94,5 +153,6 @@
    {:syntax "[]" :description "Sequence pattern"}
    {:syntax ":when" :description "Predicate constraint"}
    {:syntax ":default" :description "Fallback value"}
-   {:syntax "{nil data}" :description "Create (sandbox)"}
-   {:syntax "{{:id 1} nil}" :description "Delete (sandbox)"}])
+   {:syntax "{nil data}" :description "Create entity"}
+   {:syntax "{{:id 1} data}" :description "Update entity"}
+   {:syntax "{{:id 1} nil}" :description "Delete entity"}])

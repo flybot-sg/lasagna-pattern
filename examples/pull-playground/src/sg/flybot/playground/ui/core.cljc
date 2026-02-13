@@ -80,6 +80,29 @@
 ;; HTTP Transport (remote mode, browser only)
 ;;=============================================================================
 
+(defn- safe-decode
+  "Decode transit text, returning nil on failure."
+  [text]
+  (when (seq text)
+    (try
+      (decode text)
+      (catch #?(:clj Exception :cljs :default) _ nil))))
+
+^:rct/test
+(comment
+  (safe-decode (encode {:a 1}))
+  ;=> {:a 1}
+
+  (safe-decode "<html>Not transit</html>")
+  ;=> nil
+
+  (safe-decode "")
+  ;=> nil
+
+  (safe-decode nil)
+  ;=> nil
+  nil)
+
 #?(:cljs
    (defn- pull!
      "Execute a pull pattern against a remote server via HTTP POST.
@@ -96,14 +119,45 @@
                       (.then (fn [text]
                                {:ok (.-ok resp)
                                 :status (.-status resp)
-                                :body (when (seq text) (decode text))})))))
-         (.then (fn [{:keys [ok body status]}]
+                                :text text})))))
+         (.then (fn [{:keys [ok text status]}]
                   (if ok
-                    (on-success body)
-                    (let [error (if-let [err (first (:errors body))]
-                                  (format-error [err])
-                                  (str "HTTP " status))]
-                      (on-error error)))))
+                    (if-let [body (safe-decode text)]
+                      (on-success body)
+                      (on-error "Invalid response — is this a Pull Pattern server?"))
+                    (if-let [body (safe-decode text)]
+                      (let [error (if-let [err (first (:errors body))]
+                                    (format-error [err])
+                                    (str "HTTP " status))]
+                        (on-error error))
+                      (on-error (str "HTTP " status))))))
+         (.catch (fn [err]
+                   (on-error (.-message err)))))))
+
+;;=============================================================================
+;; HTTP GET (schema fetch, browser only)
+;;=============================================================================
+
+#?(:cljs
+   (defn- fetch-schema!
+     "Fetch schema+sample from a server's _schema endpoint via GET.
+      Callback-based: (on-success {:schema ... :sample ...}) or (on-error message)."
+     [url on-success on-error]
+     (-> (js/fetch url
+                   #js {:method "GET"
+                        :headers #js {"Accept" "application/transit+json"}})
+         (.then (fn [resp]
+                  (-> (.text resp)
+                      (.then (fn [text]
+                               {:ok (.-ok resp)
+                                :status (.-status resp)
+                                :text text})))))
+         (.then (fn [{:keys [ok text status]}]
+                  (if ok
+                    (if-let [body (safe-decode text)]
+                      (on-success body)
+                      (on-error "Invalid response — is this a Pull Pattern server?"))
+                    (on-error (str "HTTP " status)))))
          (.catch (fn [err]
                    (on-error (.-message err)))))))
 
@@ -161,6 +215,12 @@
                          (cond
                            (:error spec)
                            (@self {:db #(db/set-error % (:error spec))})
+
+                           (:fetch spec)
+                           (let [{:keys [fetch then]} spec]
+                             (fetch-schema! fetch
+                                            (fn [r] (@self (if (fn? then) (then r) then)))
+                                            (fn [e] (@self {:db #(db/set-schema-error % e)}))))
 
                            (:pattern spec)
                            (let [{:keys [pattern then]} spec
