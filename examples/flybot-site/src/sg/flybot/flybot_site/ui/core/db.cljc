@@ -31,7 +31,7 @@
    :admin-users nil    ; [{:user/id :user/name :user/roles ...}] for owner management
    :tag-filter "Home" ; nil = show all posts, string = filter by tag or page
    :author-filter nil ; nil = show all, {:slug "..." :name "..."} = filter by author
-   :user nil          ; {:id :email :name :picture :roles :slug} when logged in
+   :user nil          ; {:email :name :picture :roles :slug} when logged in
    :mobile-nav-open? false  ; mobile navigation drawer state
    :toasts []         ; [{:id :type :title :message} ...] active toast notifications
    :toast-counter 0  ; auto-increment ID for toasts
@@ -265,18 +265,18 @@
   [db post]
   (let [user (:user db)
         roles (or (:roles user) #{})
-        author-id (get-in post [:post/author :user/id])]
+        author-email (get-in post [:post/author :user/email])]
     (boolean
      (and user
           (or (some #{:admin :owner} roles)
-              (= author-id (:id user)))))))
+              (= author-email (:email user)))))))
 
 ^:rct/test
 (comment
-  (can-edit-post? {:user nil} {:post/author {:user/id "a"}}) ;=> false
-  (can-edit-post? {:user {:roles #{:admin} :id "x"}} {:post/author {:user/id "a"}}) ;=> true
-  (can-edit-post? {:user {:roles #{:member} :id "a"}} {:post/author {:user/id "a"}}) ;=> true
-  (can-edit-post? {:user {:roles #{:member} :id "b"}} {:post/author {:user/id "a"}})) ;=> false)
+  (can-edit-post? {:user nil} {:post/author {:user/email "a@b.com"}}) ;=> false
+  (can-edit-post? {:user {:roles #{:admin} :email "x@b.com"}} {:post/author {:user/email "a@b.com"}}) ;=> true
+  (can-edit-post? {:user {:roles #{:member} :email "a@b.com"}} {:post/author {:user/email "a@b.com"}}) ;=> true
+  (can-edit-post? {:user {:roles #{:member} :email "b@b.com"}} {:post/author {:user/email "a@b.com"}})) ;=> false)
 
 (defn admin-or-owner?
   "Is the current user an admin or owner?"

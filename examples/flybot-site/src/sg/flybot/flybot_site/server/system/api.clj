@@ -32,7 +32,6 @@
    [sg.flybot.flybot-site.server.system.db :as db]
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.pullable.malli]
-   [sg.flybot.pullable.sample :as sample]
    [malli.core :as m]
    [malli.util :as mu]))
 
@@ -40,8 +39,25 @@
 ;; Schema (for remote validation)
 ;;=============================================================================
 
+(def ^:private public-author-schema
+  "Schema for post author visible to guests (no PII)."
+  (m/schema
+   [:map {:doc "Public author info"}
+    [:user/name {:doc "Display name"} :string]
+    [:user/slug {:doc "URL-safe identifier"} :string]
+    [:user/picture {:doc "Profile picture URL"} :string]]))
+
+(def ^:private author-schema
+  "Schema for post author visible to authenticated users (no Google ID)."
+  (m/schema
+   [:map {:doc "Author info"}
+    [:user/email {:doc "User email"} :string]
+    [:user/name {:doc "Display name"} :string]
+    [:user/slug {:doc "URL-safe identifier"} :string]
+    [:user/picture {:doc "Profile picture URL"} :string]]))
+
 (def user-schema
-  "Schema for a user."
+  "Schema for a user (full, owner-only)."
   (m/schema
    [:map {:doc "User account"}
     [:user/id {:doc "Google user ID"} :string]
@@ -57,7 +73,7 @@
     [:post/id {:doc "Unique identifier"} :int]
     [:post/title {:doc "Post title"} :string]
     [:post/content {:doc "Markdown content"} :string]
-    [:post/author {:doc "Author (user reference)" :optional true} [:maybe user-schema]]
+    [:post/author {:doc "Author (user reference)" :optional true} [:maybe author-schema]]
     [:post/tags {:doc "List of tags"} [:vector :string]]
     [:post/pages {:doc "Page memberships" :optional true} [:vector :string]]
     [:post/featured? {:doc "Featured post" :optional true} :boolean]
@@ -71,14 +87,22 @@
     [:map [:post/id :int]]
     [:map [:post/author :string]]]))
 
+(def ^:private guest-post-schema
+  "Schema for a post as seen by guests (no author PII)."
+  (mu/assoc post-schema :post/author [:maybe public-author-schema]))
+
 (def version-schema
-  "Schema for a historical version of a post."
+  "Schema for a historical version of a post (no author email)."
   (mu/merge
-   post-schema
+   guest-post-schema
    (m/schema
     [:map {:doc "Historical version"}
      [:version/tx {:doc "Transaction ID"} :int]
      [:version/timestamp {:doc "When this version was created"} :any]])))
+
+(def ^:private guest-posts-schema
+  "Schema for guest posts collection."
+  (m/schema [:or [:vector guest-post-schema] [:map-of post-query guest-post-schema]]))
 
 (def ^:private posts-schema
   "Schema for posts collection (list or lookup)."
@@ -91,7 +115,6 @@
 (def ^:private me-schema
   "Schema for current user info."
   (m/schema [:map
-             [:id :string]
              [:email :string]
              [:name :string]
              [:picture :string]
@@ -115,7 +138,7 @@
   "Public API schema (used by remote for validation).
    Role-as-top-level structure - each role key contains its accessible resources."
   {:guest (m/schema [:map
-                     [:posts posts-schema]])
+                     [:posts guest-posts-schema]])
    :member (m/schema [:maybe [:map
                               [:posts posts-schema]
                               [:posts/history history-schema]
@@ -130,15 +153,88 @@
                                             [:vector [:map [:role/name :keyword]]]]]]])})
 
 (def ^:private sample-data
-  "Sample data for GET /api/_schema introspection."
-  (sample/generate
-   [:map
-    [:guest [:map
-             [:posts [:vector post-schema]]]]
-    [:member [:map
-              [:posts [:vector post-schema]]
-              [:me me-schema]]]]
-   {:size 10 :seed 42 :min 5}))
+  "Handcrafted sample data for GET /api/_schema introspection.
+   Showcases different branches: posts with/without authors, varied tags,
+   featured flags, and a realistic member profile."
+  {:guest
+   {:posts
+    [{:post/id 1
+      :post/title "Getting Started with Clojure"
+      :post/content "A guide to setting up your first Clojure project."
+      :post/author {:user/name "Alice" :user/slug "alice"
+                    :user/picture "/img/alice.png"}
+      :post/tags ["clojure" "tutorial"]
+      :post/featured? true
+      :post/created-at "2024-01-15"
+      :post/updated-at "2024-01-15"}
+     {:post/id 2
+      :post/title "Rich Comment Tests"
+      :post/content "Tests that live next to your code."
+      :post/author {:user/name "Bob" :user/slug "bob"
+                    :user/picture "/img/bob.png"}
+      :post/tags ["clojure" "testing"]
+      :post/created-at "2024-02-10"
+      :post/updated-at "2024-03-01"}
+     {:post/id 3
+      :post/title "Building with Pull Patterns"
+      :post/content "How pull patterns unify reads and writes."
+      :post/tags ["clojure" "architecture"]
+      :post/featured? true
+      :post/created-at "2024-03-20"
+      :post/updated-at "2024-03-20"}
+     {:post/id 4
+      :post/title "AI-Assisted Development"
+      :post/content "Using LLMs as pair-programming partners."
+      :post/author {:user/name "Josh" :user/slug "josh"
+                    :user/picture "/img/josh.png"}
+      :post/tags ["ai" "tooling" "clojure"]
+      :post/created-at "2024-04-05"
+      :post/updated-at "2024-04-10"}
+     {:post/id 5
+      :post/title "Malli Schema Validation"
+      :post/content "Declarative data validation for Clojure."
+      :post/author {:user/name "Alice" :user/slug "alice"
+                    :user/picture "/img/alice.png"}
+      :post/tags ["clojure" "malli"]
+      :post/featured? false
+      :post/created-at "2024-05-12"
+      :post/updated-at "2024-05-12"}]}
+   :member
+   {:posts
+    [{:post/id 1
+      :post/title "Getting Started with Clojure"
+      :post/content "A guide to setting up your first Clojure project."
+      :post/author {:user/email "alice@flybot.sg"
+                    :user/name "Alice" :user/slug "alice"
+                    :user/picture "/img/alice.png"}
+      :post/tags ["clojure" "tutorial"]
+      :post/featured? true
+      :post/created-at "2024-01-15"
+      :post/updated-at "2024-01-15"}]
+    :posts/history
+    {{:post/id 1}
+     [{:post/id 1
+       :post/title "Getting Started with Clojure"
+       :post/content "A guide to setting up your first Clojure project."
+       :post/author {:user/name "Alice" :user/slug "alice"
+                     :user/picture "/img/alice.png"}
+       :post/tags ["clojure" "tutorial"]
+       :post/featured? true
+       :post/created-at "2024-01-15"
+       :post/updated-at "2024-01-15"
+       :version/tx 1001
+       :version/timestamp "2024-01-15"}]}
+    :me
+    {:email "alice@flybot.sg"
+     :name "Alice"
+     :picture "/img/alice.png"
+     :slug "alice"
+     :roles #{:member :admin}}
+    :me/profile
+    {:post-count 3
+     :revision-count 7
+     :roles [{:role/name :member :role/granted-at "2024-01-01"}
+             {:role/name :admin :role/granted-at "2024-02-15"}]}}})
 
 ^:rct/test
 (comment
@@ -146,24 +242,88 @@
   (m/schema? post-query) ;=> true
   (m/schema? version-schema) ;=> true
   (m/schema? (:guest schema)) ;=> true
-  (m/schema? (:member schema))) ;=> true
+  (m/schema? (:member schema)) ;=> true
+
+  (m/validate [:map [:guest (:guest schema)] [:member (:member schema)]]
+              sample-data) ;=> true
+  )
 
 ;;=============================================================================
 ;; Collection Wrappers
 ;;=============================================================================
 
-(defn- post-author-id [post]
-  (get-in post [:post/author :user/id]))
+(def ^:private public-author-keys
+  "Author keys visible to guests (no PII)."
+  [:user/name :user/slug :user/picture])
 
-(defn- owns-post? [posts user-id query]
+(defn- strip-author-email
+  "Remove :user/email from post author for guest access."
+  [post]
+  (cond-> post
+    (:post/author post)
+    (update :post/author select-keys public-author-keys)))
+
+(defn- public-posts
+  "Read-transform decorator over a read-only posts collection.
+   Strips author PII (:user/email) on every read for guest access.
+
+   The collection library provides `read-only` (restricts writes) and
+   `wrap-mutable` (intercepts writes), but no built-in way to transform
+   read results. A reify decorator is necessary here to intercept
+   ILookup/Seqable and apply `strip-author-email` to every output,
+   while delegating storage to the inner read-only collection."
+  [posts]
+  (let [inner (coll/read-only posts)]
+    ;; Decorator: same interfaces as ReadOnly (ILookup, Seqable, Counted,
+    ;; Wireable) but transforms output through strip-author-email.
+    (reify
+      clojure.lang.ILookup
+      (valAt [_ query]
+        (when-let [post (.valAt inner query)]
+          (strip-author-email post)))
+      (valAt [this query not-found]
+        (or (.valAt this query) not-found))
+
+      clojure.lang.Seqable
+      (seq [_]
+        (map strip-author-email (seq inner)))
+
+      clojure.lang.Counted
+      (count [_]
+        (count inner))
+
+      coll/Wireable
+      (->wire [this]
+        (some-> (seq this) vec)))))
+
+(defn- public-history
+  "Decorator that strips author email from history versions.
+   Same reify-decorator pattern as `public-posts` — intercepts ILookup
+   and applies `strip-author-email` to every version in the result."
+  [history-lookup]
+  (reify
+    clojure.lang.ILookup
+    (valAt [_ query]
+      (when-let [versions (.valAt history-lookup query)]
+        (mapv strip-author-email versions)))
+    (valAt [this query not-found]
+      (or (.valAt this query) not-found))
+
+    coll/Wireable
+    (->wire [_] nil)))
+
+(defn- post-author-email [post]
+  (get-in post [:post/author :user/email]))
+
+(defn- owns-post? [posts user-email query]
   (when-let [post (get posts query)]
-    (= (post-author-id post) user-id)))
+    (= (post-author-email post) user-email)))
 
 (defn- member-posts
   "Posts collection with ownership enforcement via wrap-mutable.
-   - CREATE: sets :post/author to user-id
-   - UPDATE/DELETE: only allowed if user owns the post"
-  [posts user-id]
+   - CREATE: sets :post/author to user-id (Datahike ref)
+   - UPDATE/DELETE: only allowed if user owns the post (checked by email)"
+  [posts user-id user-email]
   (coll/wrap-mutable posts
                      (fn [posts query value]
                        (cond
@@ -171,12 +331,12 @@
                          (coll/mutate! posts nil (assoc value :post/author user-id))
 
                          (and (some? query) (nil? value))
-                         (if (owns-post? posts user-id query)
+                         (if (owns-post? posts user-email query)
                            (coll/mutate! posts query nil)
                            {:error {:type :forbidden :message "You don't own this post"}})
 
                          (and (some? query) (some? value))
-                         (if (owns-post? posts user-id query)
+                         (if (owns-post? posts user-email query)
                            (coll/mutate! posts query value)
                            {:error {:type :forbidden :message "You don't own this post"}})
 
@@ -235,8 +395,7 @@
   "Current user info — session fields + lazy DB lookup for :slug."
   [conn session]
   (let [user-id (:user-id session)]
-    (coll/lookup {:id      user-id
-                  :email   (:user-email session)
+    (coll/lookup {:email   (:user-email session)
                   :name    (or (:user-name session) (:user-email session))
                   :picture (:user-picture session)
                   :slug    (delay (:user/slug (db/get-user conn user-id)))
@@ -282,8 +441,8 @@
    Stable collections (posts, history, users, roles) are created once at startup."
   [{:keys [conn]}]
   (let [posts       (db/posts conn)
-        guest-posts (coll/read-only posts)
-        history     (db/post-history-lookup conn)
+        guest-posts (public-posts posts)
+        history     (public-history (db/post-history-lookup conn))
         users       (coll/read-only (db/users conn))
         roles       (roles-lookup conn)]
     (fn [ring-request]
@@ -296,7 +455,7 @@
 
           ;; Member: ILookups — DB calls only when pattern accesses them
           :member (with-role session :member
-                    {:posts (member-posts posts user-id)
+                    {:posts (member-posts posts user-id (:user-email session))
                      :posts/history history
                      :me (me-lookup conn session)
                      :me/profile (profile-lookup conn user-id)})
@@ -329,6 +488,19 @@
   (count (seq (get-in (api-fn {}) [:data :guest :posts]))) ;=> 11
   (:post/title (get (get-in (api-fn {}) [:data :guest :posts]) {:post/id 1})) ;=> "Welcome to Flybot"
 
+  ;; Guest: author PII stripped (no email, no Google ID)
+  (let [post (get (get-in (api-fn {}) [:data :guest :posts]) {:post/id 1})
+        author (:post/author post)]
+    [(some? (:user/name author))
+     (nil? (:user/email author))
+     (nil? (:user/id author))])
+  ;=> [true true true]
+
+  ;; Guest: PII also stripped from seq path
+  (let [posts (seq (get-in (api-fn {}) [:data :guest :posts]))]
+    (every? #(nil? (:user/email (:post/author %))) posts))
+  ;=> true
+
   ;; Guest: :guest always present, other roles empty map
   (let [{:keys [data]} (api-fn {})]
     [(some? (:guest data))
@@ -348,6 +520,14 @@
      (get-in data [:member :me :email])
      (= {} (:admin data))])
   ;=> [true true true "m@test.com" true]
+
+  ;; Member: author email visible, Google ID still stripped
+  (let [session {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
+        post (get (get-in (api-fn {:session session}) [:data :member :posts]) {:post/id 1})
+        author (:post/author post)]
+    [(some? (:user/email author))
+     (nil? (:user/id author))])
+  ;=> [true true]
 
   ;; Member: can create post via :member :posts
   (let [session {:user-id "m1" :user-email "m@test.com" :roles #{:member}}

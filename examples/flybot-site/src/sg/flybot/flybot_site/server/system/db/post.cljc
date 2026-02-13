@@ -19,7 +19,7 @@
 
 (def ^:private user-display-keys
   "User keys needed for post author display."
-  [:user/id :user/email :user/name :user/slug :user/picture])
+  [:user/email :user/name :user/slug :user/picture])
 
 (defn- normalize-user-for-post
   "Normalize Datahike user entity to consistent map for embedding in post."

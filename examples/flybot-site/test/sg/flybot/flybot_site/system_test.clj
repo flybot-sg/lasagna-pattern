@@ -239,7 +239,7 @@
                                 :post/content "test"
                                 :post/tags []})]
       (is (= "Collection Test" (:post/title result)))
-      (is (= "tester" (get-in result [:post/author :user/id])) "Author auto-set")))
+      (is (= "tester@test.com" (get-in result [:post/author :user/email])) "Author auto-set")))
 
   (testing "Ownership enforcement - member cannot update other's post"
     ;; First, create a post as owner

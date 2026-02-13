@@ -199,7 +199,7 @@
 
   ;; Now simulate Google login - should claim the placeholder
   (db/upsert-user! conn #:user{:id "google-zhang" :email "zhang@flybot.sg" :name "张伟" :picture ""})
-  (:user/id (:post/author (get p {:post/id 1}))) ;=> "google-zhang"
+  (:user/email (:post/author (get p {:post/id 1}))) ;=> "zhang@flybot.sg"
   (str/starts-with? (:user/id (db/get-user conn "google-zhang")) "placeholder:") ;=> false
 
   ;; Cleanup
