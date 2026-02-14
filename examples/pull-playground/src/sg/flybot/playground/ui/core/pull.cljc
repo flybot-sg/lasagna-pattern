@@ -81,19 +81,22 @@
                            (db/set-schema (:schema schema-data)))}))})
 
     :pattern
-    (try
-      (let [pattern (read-pattern (:pattern-text db))
-            mut? (mutation? pattern)]
-        {:pattern pattern
-         :then (if mut?
-                 (fn [result]
-                   {:db #(-> %
-                             (db/set-result result)
-                             (db/apply-mutation-result pattern result))})
-                 (fn [result]
-                   {:db #(db/set-result % result)}))})
-      (catch #?(:clj Exception :cljs :default) e
-        {:error (str "Parse error: " #?(:clj (.getMessage e) :cljs (.-message e)))}))
+    (let [text (:pattern-text db)]
+      (if (or (nil? text) (re-matches #"\s*" text))
+        {:error "Enter a pattern to execute"}
+        (try
+          (let [pattern (read-pattern text)
+                mut? (mutation? pattern)]
+            {:pattern pattern
+             :then (if mut?
+                     (fn [result]
+                       {:db #(-> %
+                                 (db/set-result result)
+                                 (db/apply-mutation-result pattern result))})
+                     (fn [result]
+                       {:db #(db/set-result % result)}))})
+          (catch #?(:clj Exception :cljs :default) e
+            {:error (str "Parse error: " #?(:clj (.getMessage e) :cljs (.-message e)))}))))
 
     :data
     {:pattern read-all-pattern
@@ -134,6 +137,13 @@
         effect ((:then spec) {:users {:id 4 :name "Dave"}})]
     (get-in ((:db effect) db) [:data :users 1 :name]))
   ;=> "Dave"
+
+  ;; :pattern empty text returns error
+  (:error (resolve-pull :pattern {:pattern-text ""}))
+  ;=> "Enter a pattern to execute"
+
+  (:error (resolve-pull :pattern {:pattern-text "   "}))
+  ;=> "Enter a pattern to execute"
 
   ;; :pattern parse error returns {:error ...}
   (string? (:error (resolve-pull :pattern {:pattern-text "{invalid"})))

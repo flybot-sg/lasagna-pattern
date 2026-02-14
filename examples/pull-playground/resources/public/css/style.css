@@ -1094,57 +1094,119 @@ body {
  * Mobile Tab Bar
  *============================================================================*/
 
+/* Tab bar — in normal flow, hidden on wide screens */
 .mobile-tab-bar {
-  display: none;
+  display: flex;
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border-top: 1px solid var(--border);
+}
+
+.tab-button {
+  flex: 1;
+  min-height: 52px;
+  background: none;
+  border: none;
+  border-top: 2px solid transparent;
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--transition-fast);
+}
+
+.tab-button.active {
+  color: var(--accent);
+  border-top-color: var(--accent);
+}
+
+/* Hide tab bar and mobile-connect-strip on wide screens */
+@media (min-width: 1025px) {
+  .mobile-tab-bar { display: none; }
+  .mobile-connect-strip { display: none; }
+}
+
+/* Narrow screens: single panel with tab navigation */
+@media (max-width: 1024px) {
+  .app-container {
+    height: 100dvh;
+    min-height: 0;
+  }
+
+  /* Tab bar is before main-content in DOM (so flex allocates its space)
+     but order pushes it visually to the bottom */
+  .mobile-tab-bar { order: 99; }
+  .site-footer { order: 98; }
+
+  .main-content,
+  .main-content.with-sidebar {
+    min-height: 0;
+    overflow: auto;
+  }
+
+  /* Hide inactive panels */
+  .panel.mobile-hidden { display: none; }
+
+  /* Hide URL section from data panel — mobile-connect-strip replaces it */
+  .data-panel .url-section { display: none; }
+}
+
+/* Remote connect strip below header */
+.mobile-connect-strip {
+  padding: 0.5rem 1rem;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.mobile-connect-strip .connect-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.mobile-connect-strip input[type="text"] {
+  flex: 1;
+  min-width: 0;
+  padding: 0.375rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-editor);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+}
+
+.mobile-connect-strip input[type="text"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.mobile-connect-strip .connect-btn {
+  padding: 0.375rem 0.75rem;
+  font-size: 0.75rem;
+}
+
+.mobile-connect-strip .connect-error {
+  margin-top: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  color: var(--error);
+  border-radius: var(--radius-sm);
+  background: rgba(220, 53, 69, 0.08);
 }
 
 @media (max-width: 768px) {
-  /* Tab bar */
-  .mobile-tab-bar {
-    display: flex;
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--bg-card);
-    border-top: 1px solid var(--border);
-    z-index: 100;
-  }
-
-  .tab-button {
-    flex: 1;
-    min-height: 52px;
-    background: none;
-    border: none;
-    border-top: 2px solid transparent;
-    color: var(--text-muted);
-    font-family: var(--font-sans);
+  /* Compact mode toggle on mobile */
+  .mode-toggle button {
+    padding: 0.375rem 0.75rem;
     font-size: 0.8125rem;
-    font-weight: 500;
-    cursor: pointer;
-    transition: color var(--transition-fast);
   }
 
-  .tab-button.active {
-    color: var(--accent);
-    border-top-color: var(--accent);
-  }
-
-  /* Hide mode toggle on mobile */
-  .mode-toggle { display: none; }
-
-  /* Space for fixed tab bar */
-  .app-container { padding-bottom: 56px; }
-
-  /* Header compact */
+  /* Header compact — hide title text, keep logo */
   .site-header { padding: 0.75rem 1rem; }
   .site-header h1 { font-size: 1.125rem; }
-
-  /* Hide inactive panels */
-  .panel.mobile-hidden { display: none; }
-
-  /* Hide inactive panels */
-  .panel.mobile-hidden { display: none; }
+  .site-header h1 .title-text { display: none; }
 
   /* Tighter panel padding (exclude pattern-results which uses gap-as-border) */
   .panel:not(.pattern-results-panel) { padding: 0.75rem; }
@@ -1165,5 +1227,11 @@ body {
 @media (max-width: 600px) {
   .site-header h1 { font-size: 1rem; }
   .execute-btn { min-height: 44px; }
+
+  /* Even more compact toggle for small screens */
+  .mode-toggle button {
+    padding: 0.3rem 0.5rem;
+    font-size: 0.75rem;
+  }
 }
 

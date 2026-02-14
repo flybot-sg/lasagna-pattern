@@ -55,7 +55,7 @@
     [:header.site-header
      [:h1
       [:img.site-logo {:src "/favicon.svg" :alt "Lasagna Pattern" :width 28 :height 28}]
-      "Lasagna Pattern Playground"]
+      [:span.title-text "Lasagna Pattern Playground"]]
      [:div.header-right
       [:div.mode-toggle
        [:button {:class (when (= mode :sandbox) "active")
@@ -75,21 +75,25 @@
           [:span.show-dark (sun-icon)]])]]))
 
 ;;-----------------------------------------------------------------------------
-;; Mobile Tab Bar
+;; Mobile Connect Strip (remote mode, <=1024px)
 ;;-----------------------------------------------------------------------------
 
-(defalias mobile-tab-bar
-  [{::keys [active-tab dispatch!]}]
-  [:nav.mobile-tab-bar
-   (for [tab [:pattern :data :examples]]
-     [:button.tab-button
-      {:replicant/key tab
-       :class (when (= tab active-tab) "active")
-       :on {:click #(dispatch! {:db (fn [db] (db/set-active-tab db tab))})}}
-      (case tab
-        :pattern  "Pattern"
-        :data     "Data"
-        :examples "Examples")])])
+(defalias mobile-connect-strip
+  [{::keys [server-url schema-loading? schema-error dispatch!]}]
+  [:div.mobile-connect-strip
+   [:div.connect-row
+    [:input {:type "text"
+             :value server-url
+             :placeholder "https://www.flybot.sg/api"
+             :on {:input #(dispatch! {:db (fn [db] (assoc db :server-url (.. % -target -value)))})}}]
+    [:button.connect-btn
+     {:disabled schema-loading?
+      :on {:click #(dispatch! {:db   (fn [db] (assoc db :schema-error nil :data nil :schema nil
+                                                     :result nil :error nil :schema-loading? true))
+                               :pull :init})}}
+     (if schema-loading? "Connecting..." "Connect")]]
+   (when schema-error
+     [:div.connect-error schema-error])])
 
 ;;-----------------------------------------------------------------------------
 ;; Data Panel
@@ -268,10 +272,24 @@
 ;;=============================================================================
 
 (defn app-view [{::keys [db dispatch!]}]
-  (let [{:keys [mode selected-example active-tab version]} db]
+  (let [{:keys [mode server-url schema-loading? schema-error selected-example active-tab version]} db]
     [:div.app-container
      [::site-header {::db db ::dispatch! dispatch!}]
-     [::mobile-tab-bar {::active-tab active-tab ::dispatch! dispatch!}]
+     (when (= mode :remote)
+       [::mobile-connect-strip {::server-url server-url
+                                ::schema-loading? schema-loading?
+                                ::schema-error schema-error
+                                ::dispatch! dispatch!}])
+     [:nav.mobile-tab-bar
+      (for [tab [:pattern :data :examples]]
+        [:button.tab-button
+         {:replicant/key tab
+          :class (when (= tab active-tab) "active")
+          :on {:click #(dispatch! {:db (fn [db] (db/set-active-tab db tab))})}}
+         (case tab
+           :pattern  "Pattern"
+           :data     "Data"
+           :examples "Examples")])]
      [:div.main-content.with-sidebar
       [::data-panel {::db db ::dispatch! dispatch!}]
       [::pattern-results-panel {::db db ::dispatch! dispatch!}]
