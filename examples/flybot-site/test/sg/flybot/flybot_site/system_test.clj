@@ -188,8 +188,8 @@
       (let [{:keys [status body]} (api-request
                                    {:member {:posts/history {{:post/id post-id} '?versions}}})]
         (is (= 200 status))
-        (is (>= (count (get body 'versions)) 3)
-            "History contains multiple versions")))))
+        (is (= (count (get body 'versions)) 2)
+            "History shows previous versions, not current")))))
 
 (deftest collection-based-api-test
   (testing "Guest has :guest with :posts (read-only), other roles empty"

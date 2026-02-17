@@ -52,7 +52,7 @@
 ;;=============================================================================
 
 (defn- next-id [conn]
-  (inc (or (d/q '[:find (max ?id) . :where [_ :post/id ?id]] @conn) 0)))
+  (inc (or (d/q '[:find (max ?id) . :where [_ :post/id ?id]] (d/history @conn)) 0)))
 
 (defn- now [] (java.util.Date.))
 
@@ -171,29 +171,30 @@
 (defn post-history
   "Get all historical versions of a post by ID.
    Returns list of {:version/tx, :version/timestamp, :post/*} maps sorted newest first.
-   Takes a db value (not conn) to ensure consistent view."
+   Takes a db value (not conn) to ensure consistent view.
+   Scopes to the current entity to exclude history from deleted posts
+   that previously held the same :post/id."
   [db post-id]
   (mu/log ::post-history-start :post-id post-id)
-  (let [history-db (d/history db)
-        ;; Find all transactions that touched this post's content or title
-        txs (d/q '[:find ?tx ?inst
-                   :in $ ?id
-                   :where
-                   [?e :post/id ?id]
-                   (or [?e :post/content _ ?tx true]
-                       [?e :post/title _ ?tx true])
-                   [?tx :db/txInstant ?inst]]
-                 history-db post-id)]
-    (mu/log ::post-history-found :post-id post-id :tx-count (count txs))
-    (->> txs
-         (sort-by second)
-         reverse
-         (map (fn [[tx inst]]
-                (let [db-at (d/as-of db tx)
-                      post (normalize-post (find-by-at db-at {:post/id post-id}))]
-                  (assoc post
-                         :version/tx tx
-                         :version/timestamp inst)))))))
+  (when-let [current-eid (d/q '[:find ?e . :in $ ?id :where [?e :post/id ?id]] db post-id)]
+    (let [history-db (d/history db)
+          ;; Find all transactions that touched this entity's content or title
+          txs (d/q '[:find ?tx ?inst
+                     :in $ ?eid
+                     :where
+                     (or [?eid :post/content _ ?tx true]
+                         [?eid :post/title _ ?tx true])
+                     [?tx :db/txInstant ?inst]]
+                   history-db current-eid)]
+      (mu/log ::post-history-found :post-id post-id :tx-count (count txs))
+      (let [sorted (->> txs (sort-by second) reverse)]
+        (->> (rest sorted) ;; drop current version — history is previous versions only
+             (map (fn [[tx inst]]
+                    (let [db-at (d/as-of db tx)
+                          post (normalize-post (find-by-at db-at {:post/id post-id}))]
+                      (assoc post
+                             :version/tx tx
+                             :version/timestamp inst)))))))))
 
 ^:rct/test
 (comment
@@ -203,10 +204,26 @@
   (db/create-user! conn #:user{:id "u1" :email "a@b.com" :name "Alice" :picture ""})
   (def p (db/posts conn))
   (coll/mutate! p nil {:post/title "V1" :post/content "first" :post/author "u1"})
-  (coll/mutate! p {:post/id 1} {:post/title "V2" :post/content "second"})
 
-  (count (post-history @conn 1)) ;=> 2
+  ;; Unedited post has no history
+  (count (post-history @conn 1)) ;=> 0
+
+  ;; After one edit, history has 1 entry (the previous version)
+  (coll/mutate! p {:post/id 1} {:post/title "V2" :post/content "second"})
+  (count (post-history @conn 1)) ;=> 1
+  (:post/title (first (post-history @conn 1))) ;=> "V1"
   (:user/name (:post/author (first (post-history @conn 1)))) ;=> "Alice"
+
+  ;; Deleted post's ID is never reused
+  (coll/mutate! p {:post/id 1} nil)
+  (:post/id (coll/mutate! p nil {:post/title "New" :post/content "x" :post/author "u1"}))
+  ;=> 2
+
+  ;; New post has no history (never edited)
+  (count (post-history @conn 2)) ;=> 0
+
+  ;; Deleted post returns nil history
+  (post-history @conn 1) ;=> nil
 
   (db/release-conn! conn))
 

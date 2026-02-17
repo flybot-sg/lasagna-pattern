@@ -653,7 +653,7 @@
            (fn [idx version]
              [:tr {:replicant/key (:version/tx version)
                    :on {:click (fn [_] (dispatch! {:db #(db/view-version % version) :history :push}))}}
-              [:td (if (zero? idx) "Current" (str "v" (- (count history) idx)))]
+              [:td (str "v" (- (count history) idx))]
               [:td (format-date (:version/timestamp version))]
               [:td (:post/title version)]
               [:td.preview (content-preview (:post/content version) 50)]])
@@ -661,8 +661,6 @@
 
 (defalias post-history-detail-view [{::keys [db dispatch!]}]
   (let [version (:history-version db)
-        is-current? (= (:version/tx version)
-                       (:version/tx (first (:history db))))
         can-edit? (db/can-edit? db)]
     [:div.post-history-detail
      [:a.back-link {:href "#"
@@ -671,13 +669,13 @@
                                   (dispatch! {:db #(db/set-view % :history) :history :push}))}}
       "\u2190 Back to history"]
      [:h1 (:post/title version) " "
-      [:span.version-label (if is-current? "(Current)" (str "(from " (format-date (:version/timestamp version)) ")"))]]
+      [:span.version-label (str "(from " (format-date (:version/timestamp version)) ")")]]
      [:div.post-meta "By " (author-link (:post/author version) dispatch!) " \u2022 " (format-date (:version/timestamp version))]
      [:div.post-tags-row
       (tag-list (:post/tags version))
       (page-badges (:post/pages version) dispatch!)]
      [:div.post-body.history-content (render-markdown (:post/content version))]
-     (when (and can-edit? (not is-current?))
+     (when can-edit?
        [:div.button-group {:style {:margin-top "2rem"}}
         [:button {:on {:click (fn [_] (dispatch! {:db #(db/edit-from-full-post % version) :history :push}))}} "Edit This Version"]
         [:button {:on {:click #(dispatch! {:confirm {:message "Restore this version? Current content will be overwritten."
