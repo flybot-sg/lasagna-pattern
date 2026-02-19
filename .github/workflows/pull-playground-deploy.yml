@@ -52,21 +52,8 @@ jobs:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Stamp version into index.html
-        working-directory: examples/pull-playground
-        run: |
-          VERSION=$(clojure -e '(:version (read-string (slurp "resources/version.edn")))' | tr -d '"')
-          sed -i "s/{{version}}/$VERSION/" resources/public/index.html
-
-      - name: Build SPA
-        working-directory: examples/pull-playground
-        run: |
-          npm install
-          clojure -M:cljs -m shadow.cljs.devtools.cli release app
-
-      - name: Deploy to S3
-        run: |
-          aws s3 sync examples/pull-playground/resources/public s3://$S3_BUCKET --delete
+      - name: Build and deploy to S3
+        run: bb deploy examples/pull-playground
 
       - name: Invalidate CloudFront cache
         run: |
