@@ -2,11 +2,11 @@
 
 ![CI](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/ci.yml/badge.svg)
 ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)
-![Status: Alpha](https://img.shields.io/badge/status-alpha-orange.svg)
+[![lasagna-pattern](https://img.shields.io/clojars/v/sg.flybot/lasagna-pattern.svg)](https://clojars.org/sg.flybot/lasagna-pattern)
+[![lasagna-collection](https://img.shields.io/clojars/v/sg.flybot/lasagna-collection.svg)](https://clojars.org/sg.flybot/lasagna-collection)
+[![lasagna-remote](https://img.shields.io/clojars/v/sg.flybot/lasagna-remote.svg)](https://clojars.org/sg.flybot/lasagna-remote)
 
 A monorepo for pull-based pattern matching and data transformation in Clojure/ClojureScript.
-
-*Alpha — APIs are evolving. Not yet published to Clojars.*
 
 *Why "lasagna"? Three layers that stack: **pattern** matches your data, **collection** stores it, **remote** sends it over the wire. Use one, two, or all three.*
 
@@ -27,27 +27,31 @@ Switch to **Remote mode** to pull live data from [flybot.sg](https://www.flybot.
 
 ## Installation
 
-Add as a git dependency in `deps.edn`, using `:deps/root` to select the component you need:
+Each component is published independently to Clojars:
 
 ```clojure
-;; deps.edn
+;; deps.edn — pick the layer you need
+{:deps
+ {sg.flybot/lasagna-pattern    {:mvn/version "0.1.0"}   ;; pattern only
+  sg.flybot/lasagna-collection {:mvn/version "0.1.0"}   ;; + CRUD collections
+  sg.flybot/lasagna-remote     {:mvn/version "0.1.0"}}} ;; + HTTP transport
+```
+
+| Artifact | What you get |
+|----------|--------------|
+| [`sg.flybot/lasagna-pattern`](https://clojars.org/sg.flybot/lasagna-pattern) | Core pattern DSL — matching and transforming data |
+| [`sg.flybot/lasagna-collection`](https://clojars.org/sg.flybot/lasagna-collection) | CRUD abstraction with DataSource protocol |
+| [`sg.flybot/lasagna-remote`](https://clojars.org/sg.flybot/lasagna-remote) | HTTP transport — includes pattern + collection |
+
+Or use as a git dependency with `:deps/root` to select a component:
+
+```clojure
 {:deps
  {io.github.flybot-sg/lasagna-pattern
   {:git/url "https://github.com/flybot-sg/lasagna-pattern.git"
-   :git/sha "..."       ; pin to a specific commit
-   :deps/root "pattern"  ; or "collection", "remote"
-   }}}
+   :git/sha "..."
+   :deps/root "pattern"}}};; :deps/root "collection" or "remote"
 ```
-
-Each component can be added independently:
-
-| Component | `:deps/root` | What you get |
-|-----------|-------------|--------------|
-| [pattern](./pattern) | `"pattern"` | Core pattern DSL — matching and transforming data |
-| [collection](./collection) | `"collection"` | CRUD abstraction — includes `pattern` |
-| [remote](./remote) | `"remote"` | HTTP transport — includes `pattern` + `collection` |
-
-Clojars publication is planned — each component will get its own artifact.
 
 ## Architecture
 

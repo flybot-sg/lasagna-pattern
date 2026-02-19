@@ -1,0 +1,60 @@
+name: Deploy to Clojars
+
+on:
+  push:
+    tags:
+      - 'pattern-v*'
+      - 'collection-v*'
+      - 'remote-v*'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Setup Clojure
+        uses: DeLaGuardo/setup-clojure@13.5
+        with:
+          cli: latest
+          bb: latest
+
+      - name: Cache deps
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/deps.edn') }}
+
+      - name: Resolve component from tag
+        id: resolve
+        run: |
+          COMPONENT="${GITHUB_REF_NAME%-v*}"
+          echo "component=$COMPONENT" >> "$GITHUB_OUTPUT"
+
+      - name: Install local dependencies (remote only)
+        if: steps.resolve.outputs.component == 'remote'
+        run: |
+          bb install pattern
+          bb install collection
+
+      - name: Deploy to Clojars
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
+        run: bb deploy ${{ steps.resolve.outputs.component }}
+
+      - name: Summary
+        run: |
+          echo "### Clojars Deploy Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Tag:** ${{ github.ref_name }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Component:** ${{ steps.resolve.outputs.component }}" >> $GITHUB_STEP_SUMMARY

@@ -127,13 +127,31 @@
              (println (str "Component " component " has no 'server' task")))
            (println "Usage: bb server <component>"))}
 
+  jar
+  {:doc "Build JAR: bb jar <component>"
+   :depends [-comp-task?]
+   :task (if-let [component (first *command-line-args*)]
+           (if (-comp-task? component "jar")
+             (shell {:dir component} "bb" "jar")
+             (clojure {:dir component} "-T:build jar"))
+           (println "Usage: bb jar <component>"))}
+
+  install
+  {:doc "Install to local Maven: bb install <component>"
+   :depends [-comp-task?]
+   :task (if-let [component (first *command-line-args*)]
+           (if (-comp-task? component "install")
+             (shell {:dir component} "bb" "install")
+             (clojure {:dir component} "-T:build install"))
+           (println "Usage: bb install <component>"))}
+
   deploy
   {:doc "Deploy component: bb deploy <component>"
    :depends [-comp-task? -load-env]
    :task (if-let [component (first *command-line-args*)]
            (if (-comp-task? component "deploy")
              (shell {:dir component :env (-load-env component)} "bb" "deploy")
-             (println (str "Component " component " has no 'deploy' task")))
+             (clojure {:dir component} "-T:build deploy"))
            (println "Usage: bb deploy <component>"))}
 
   tag
