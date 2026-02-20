@@ -1,4 +1,4 @@
-(ns sg.flybot.pullable.remote.http
+(ns ^:no-doc sg.flybot.pullable.remote.http
   "HTTP transport implementation for pull protocol.
 
    Internal namespace - use sg.flybot.pullable.remote for public API."
