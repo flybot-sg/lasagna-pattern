@@ -29,7 +29,7 @@
   (or (some #(% schema) (reverse @schema-rules))
       {:type :any}))
 
-(defn infer-schema-type
+(defn ^:no-doc infer-schema-type
   "Infer the type keyword from a schema value."
   [schema]
   (:type (get-schema-info schema)))
@@ -47,7 +47,7 @@
   [k]
   (not (keyword? k)))
 
-(defn validate-pattern-schema!
+(defn ^:no-doc validate-pattern-schema!
   "Validate pattern against schema. Throws on violation.
    core-pattern? checks if x is a (? :type ...) pattern."
   [ptn schema core-pattern?]
@@ -96,7 +96,7 @@
 ;; Schema Filtering
 ;;=============================================================================
 
-(defn filter-by-schema
+(defn ^:no-doc filter-by-schema
   "Filter value to only include keys defined in schema."
   [value schema]
   (let [{:keys [valid-keys type child-schema]} (get-schema-info schema)]
@@ -113,7 +113,7 @@
 
       :else value)))
 
-(defn wrap-with-schema-filter
+(defn ^:no-doc wrap-with-schema-filter
   "Wrap matcher to filter :val by schema. failure? checks for MatchFailure."
   [matcher schema failure?]
   (fn [mr]
@@ -124,7 +124,7 @@
 ;; Built-in Schema Rules
 ;;=============================================================================
 
-(defn infer-value-type
+(defn ^:no-doc infer-value-type
   "Infer schema type from a runtime value."
   [v]
   (cond (map? v) :map, (sequential? v) :seq, (string? v) :string

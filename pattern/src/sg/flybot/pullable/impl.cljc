@@ -1,4 +1,4 @@
-(ns sg.flybot.pullable.impl
+(ns ^:no-doc sg.flybot.pullable.impl
   "Core pattern matching engine.
 
    This namespace provides the pattern matching implementation:
