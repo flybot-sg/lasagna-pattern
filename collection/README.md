@@ -19,10 +19,10 @@ Different data stores (databases, APIs, in-memory maps) have different interface
 
 ```clojure
 ;; deps.edn
-{:deps {sg.flybot/lasagna-collection {:mvn/version "0.1.0"}}}
+{:deps {sg.flybot/lasagna-collection {:mvn/version "0.1.1"}}}
 
 ;; Leiningen
-[sg.flybot/lasagna-collection "0.1.0"]
+[sg.flybot/lasagna-collection "0.1.1"]
 ```
 
 ## Usage

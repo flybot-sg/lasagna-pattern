@@ -1,4 +1,4 @@
-(ns sg.flybot.pullable.sample
+(ns ^:no-doc sg.flybot.pullable.sample
   "Sample data generation from Malli schemas."
   (:require [malli.core :as m]
             [malli.util :as mu]
