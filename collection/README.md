@@ -1,5 +1,9 @@
 # collection
 
+[![lasagna-collection](https://img.shields.io/clojars/v/sg.flybot/lasagna-collection.svg)](https://clojars.org/sg.flybot/lasagna-collection) ![CI](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/ci.yml/badge.svg) ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)
+
+Part of the [Lasagna Pattern](https://github.com/flybot-sg/lasagna-pattern) toolbox.
+
 CRUD collection abstraction with DataSource protocol for lazy data access.
 
 ## Rationale
@@ -14,18 +18,12 @@ Different data stores (databases, APIs, in-memory maps) have different interface
 ## Installation
 
 ```clojure
-;; deps.edn — git dependency
-{:deps
- {io.github.flybot-sg/lasagna-pattern
-  {:git/url "https://github.com/flybot-sg/lasagna-pattern.git"
-   :git/sha "..."
-   :deps/root "collection"}}}
+;; deps.edn
+{:deps {sg.flybot/lasagna-collection {:mvn/version "0.1.0"}}}
 
-;; or local (monorepo development)
-{:deps {local/collection {:local/root "../collection"}}}
+;; Leiningen
+[sg.flybot/lasagna-collection "0.1.0"]
 ```
-
-Clojars publication is planned — `collection` will get its own artifact.
 
 ## Usage
 

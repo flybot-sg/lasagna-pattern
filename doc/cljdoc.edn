@@ -1,0 +1,4 @@
+{:cljdoc.doc/tree [["Readme" {:file "README.md"}]
+                   ["Pattern" {:file "pattern/README.md"}]
+                   ["Collection" {:file "collection/README.md"}]
+                   ["Remote" {:file "remote/README.md"}]]}

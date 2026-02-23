@@ -1,5 +1,9 @@
 # pattern
 
+[![lasagna-pattern](https://img.shields.io/clojars/v/sg.flybot/lasagna-pattern.svg)](https://clojars.org/sg.flybot/lasagna-pattern) ![CI](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/ci.yml/badge.svg) ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)
+
+Part of the [Lasagna Pattern](https://github.com/flybot-sg/lasagna-pattern) toolbox.
+
 Core pattern DSL for declarative matching and transformation of Clojure data structures. Pure data matching — no I/O, no storage, no HTTP.
 
 ## Rationale
@@ -16,18 +20,12 @@ Extracting data from nested structures typically requires manual traversal code 
 ## Installation
 
 ```clojure
-;; deps.edn — git dependency
-{:deps
- {io.github.flybot-sg/lasagna-pattern
-  {:git/url "https://github.com/flybot-sg/lasagna-pattern.git"
-   :git/sha "..."
-   :deps/root "pattern"}}}
+;; deps.edn
+{:deps {sg.flybot/lasagna-pattern {:mvn/version "0.1.2"}}}
 
-;; or local (monorepo development)
-{:deps {local/pattern {:local/root "../pattern"}}}
+;; Leiningen
+[sg.flybot/lasagna-pattern "0.1.2"]
 ```
-
-Clojars publication is planned — `pattern` will get its own artifact.
 
 Only hard dependency is `org.clojure/clojure`. Optional deps: `org.babashka/sci` (sandboxed eval, required for CLJS), `metosin/malli` (schema validation).
 

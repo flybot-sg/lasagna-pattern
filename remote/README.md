@@ -1,5 +1,9 @@
 # remote
 
+[![lasagna-remote](https://img.shields.io/clojars/v/sg.flybot/lasagna-remote.svg)](https://clojars.org/sg.flybot/lasagna-remote) ![CI](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/ci.yml/badge.svg) ![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)
+
+Part of the [Lasagna Pattern](https://github.com/flybot-sg/lasagna-pattern) toolbox.
+
 Remote protocol for pattern-based APIs (GraphQL-like) over HTTP.
 
 ## Rationale
@@ -14,18 +18,12 @@ Building APIs typically requires defining schemas, writing resolvers, and mainta
 ## Installation
 
 ```clojure
-;; deps.edn — git dependency
-{:deps
- {io.github.flybot-sg/lasagna-pattern
-  {:git/url "https://github.com/flybot-sg/lasagna-pattern.git"
-   :git/sha "..."
-   :deps/root "remote"}}}
+;; deps.edn
+{:deps {sg.flybot/lasagna-remote {:mvn/version "0.1.0"}}}
 
-;; or local (monorepo development)
-{:deps {local/remote {:local/root "../remote"}}}
+;; Leiningen
+[sg.flybot/lasagna-remote "0.1.0"]
 ```
-
-Clojars publication is planned — `remote` will get its own artifact.
 
 ## Usage
 
