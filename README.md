@@ -1,10 +1,13 @@
 # <img src="examples/pull-playground/resources/public/favicon.svg" width="32" height="32" alt="Lasagna Pattern logo" style="vertical-align: middle;"> Lasagna Pattern
 
-![CI](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/ci.yml/badge.svg)
-![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)
 [![lasagna-pattern](https://img.shields.io/clojars/v/sg.flybot/lasagna-pattern.svg)](https://clojars.org/sg.flybot/lasagna-pattern)
 [![lasagna-collection](https://img.shields.io/clojars/v/sg.flybot/lasagna-collection.svg)](https://clojars.org/sg.flybot/lasagna-collection)
 [![lasagna-remote](https://img.shields.io/clojars/v/sg.flybot/lasagna-remote.svg)](https://clojars.org/sg.flybot/lasagna-remote)
+
+![CI](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/ci.yml/badge.svg)
+![Pull Playground](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/pull-playground-deploy.yml/badge.svg)
+![Flybot Site](https://github.com/flybot-sg/lasagna-pattern/actions/workflows/flybot-site-deploy.yml/badge.svg)
+![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)
 
 A monorepo for pull-based pattern matching and data transformation in Clojure/ClojureScript.
 

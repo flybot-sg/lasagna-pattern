@@ -1,4 +1,4 @@
-(ns sg.flybot.pullable.malli
+(ns ^:no-doc sg.flybot.pullable.malli
   "Optional Malli schema integration. Require this namespace to enable.
 
    CLJ: Malli detected at runtime - works if malli is on classpath.
