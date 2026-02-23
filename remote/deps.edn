@@ -1,7 +1,7 @@
 {:paths ["src"]
  :deps {org.clojure/clojure {:mvn/version "1.12.4"}
-        sg.flybot/lasagna-pattern {:mvn/version "0.1.0"}
-        sg.flybot/lasagna-collection {:mvn/version "0.1.0"}
+        sg.flybot/lasagna-pattern {:mvn/version "0.1.2"}
+        sg.flybot/lasagna-collection {:mvn/version "0.1.1"}
         com.cognitect/transit-clj {:mvn/version "1.1.347"}
         ring/ring-core {:mvn/version "1.15.3"}}
  :aliases
