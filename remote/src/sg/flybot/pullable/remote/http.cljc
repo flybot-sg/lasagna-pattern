@@ -309,7 +309,27 @@
   ;=> nil
 
   ;; parse-mutation: role-based nested read with variables
-  (parse-mutation '{:admin {:posts {{:id 1} {:title ?t}}}}))
+  (parse-mutation '{:admin {:posts {{:id 1} {:title ?t}}}})
+  ;=> nil
+
+  ;; parse-mutation: deeply nested CREATE
+  (parse-mutation '{:a {:member {:posts {nil {:title "New"}}}}})
+  ;=> {:path [:a :member :posts], :query nil, :value {:title "New"}}
+
+  ;; parse-mutation: deeply nested UPDATE
+  (parse-mutation '{:a {:member {:posts {{:id 1} {:title "X"}}}}})
+  ;=> {:path [:a :member :posts], :query {:id 1}, :value {:title "X"}}
+
+  ;; parse-mutation: deeply nested DELETE
+  (parse-mutation '{:a {:member {:posts {{:id 1} nil}}}})
+  ;=> {:path [:a :member :posts], :query {:id 1}, :value nil}
+
+  ;; parse-mutation: deeply nested read returns nil
+  (parse-mutation '{:a {:member {:posts ?all}}})
+  ;=> nil
+
+  ;; parse-mutation: deep config (not mutation) returns nil
+  (parse-mutation '{:a {:b {:c {:debug true}}}}))
   ;=> nil)
 
 ;;=============================================================================
@@ -404,41 +424,32 @@
 (defn parse-mutation
   "Detect if pattern is a mutation. Returns {:path :query :value} or nil.
 
-   Flat mutation patterns:
-   - {:posts {nil data}}         -> CREATE (path=[:posts])
-   - {:posts {{:id 3} data}}     -> UPDATE (path=[:posts])
-   - {:posts {{:id 3} nil}}      -> DELETE (path=[:posts])
+   Recursively walks single-key keyword maps until it finds a mutation leaf:
+   - {nil data}         -> CREATE
+   - {{:id 3} data}     -> UPDATE
+   - {{:id 3} nil}      -> DELETE
 
-   Nested mutation patterns (role-based):
-   - {:role/member {:posts {nil data}}}     -> CREATE (path=[:role/member :posts])
-   - {:role/admin {:posts {{:id 1} data}}}  -> UPDATE (path=[:role/admin :posts])
+   Supports arbitrary nesting depth:
+   - {:posts {nil data}}                          -> path [:posts]
+   - {:role/member {:posts {nil data}}}           -> path [:role/member :posts]
+   - {:a {:role/member {:posts {nil data}}}}      -> path [:a :role/member :posts]
 
    Read patterns return nil (value is or contains ?-prefixed symbols)."
   [pattern]
   (when (and (map? pattern) (= 1 (count pattern)))
-    (let [[k1 v1] (first pattern)]
-      (when (keyword? k1)
-        (cond
-          ;; Nested: {:role/member {:posts {query value}}}
-          (and (map? v1)
-               (= 1 (count v1))
-               (keyword? (ffirst v1))
-               (map? (val (first v1)))
-               (= 1 (count (val (first v1)))))
-          (let [[k2 v2] (first v1)
-                [query value] (first v2)]
+    (let [[k v] (first pattern)]
+      (when (keyword? k)
+        (if (and (map? v) (= 1 (count v))
+                 (let [inner-k (ffirst v)]
+                   (or (nil? inner-k) (map? inner-k))))
+          ;; Terminal: {query value} — the mutation leaf
+          (let [[query value] (first v)]
             (when (and (not (contains-variables? value))
                        (or (nil? query) (map? query)))
-              {:path [k1 k2] :query query :value value}))
-
-          ;; Flat: {:posts {query value}}
-          (and (map? v1) (= 1 (count v1)))
-          (let [[query value] (first v1)]
-            (when (and (not (contains-variables? value))
-                       (or (nil? query) (map? query)))
-              {:path [k1] :query query :value value}))
-
-          :else nil)))))
+              {:path [k] :query query :value value}))
+          ;; Recursive: {:nested-key deeper-pattern}
+          (when-let [inner (parse-mutation v)]
+            (update inner :path #(into [k] %))))))))
 
 (defn- keyword->symbol
   "Convert keyword to symbol, preserving namespace."
