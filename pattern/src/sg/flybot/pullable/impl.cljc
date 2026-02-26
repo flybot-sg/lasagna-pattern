@@ -1794,22 +1794,15 @@
                                (rewrite-pattern rules)  ; custom rules first
                                (rewrite-pattern default-rewrite-rules))  ; then defaults
                      :else (rewrite-pattern ptn default-rewrite-rules))]
-     ;; Validate against schema before compilation (if provided)
-     ;; On schema violation, return a matcher that always produces MatchFailure
-     ;; so callers get a :schema failure instead of an exception.
-     (if-let [schema-error (when schema
-                             (try
-                               (validate-pattern-schema! rewritten schema)
-                               nil
-                               (catch #?(:clj Exception :cljs js/Error) e
-                                 (fail (ex-message e) :schema nil))))]
-       (constantly schema-error)
-       ;; Compile with custom resolver/evaluator if provided
+     (try
+       (when schema
+         (validate-pattern-schema! rewritten schema))
        (binding [*resolve-sym* (or resolve *resolve-sym*)
                  *eval-form* (or eval-fn *eval-form*)]
          (cond-> (core->matcher rewritten)
-           ;; Filter output to schema's valid-keys for record schemas
-           schema (wrap-with-schema-filter schema)))))))
+           schema (wrap-with-schema-filter schema)))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (constantly (fail (ex-message e) :schema nil)))))))
 
 ;;-----------------------------------------------------------------------------
 ;; Rule: Pattern → Template Transformation
