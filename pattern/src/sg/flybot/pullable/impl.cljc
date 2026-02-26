@@ -1020,7 +1020,7 @@
              (mzcollect (constantly true) 'items 2)]
             nil)
   (vars-> [sym items]
-    ;; Validate structure: even count, matchers at odd indices
+          ;; Validate structure: even count, matchers at odd indices
           (when-not (and (even? (count items))
                          (every? matcher-type (take-nth 2 (rest items))))
             (throw (ex-info (str "Invalid :case arguments. Expected: "
@@ -1065,7 +1065,7 @@
                        (if-not (string? v)
                          (fail (str "expected string for regex match, got " (type v)) :regex v)
                          (if-let [result (re-matches pattern v)]
-                     ;; re-matches returns: string (no groups), or vector [full-match & groups]
+                           ;; re-matches returns: string (no groups), or vector [full-match & groups]
                            (assoc mr :val (if (string? result) [result] result))
                            (fail (str "regex " pattern " did not match: " (pr-str v)) :regex v))))))))
 
@@ -1204,11 +1204,11 @@
        (let [fst (first x)]
          (or ;; Original form: (?x :opt ...)
           (variable? fst)
-             ;; After matching-var-rewrite: ((? :var ...) :opt ...)
+          ;; After matching-var-rewrite: ((? :var ...) :opt ...)
           (and (seq? fst) (= '? (first fst)) (= :var (second fst)))
-             ;; Rewritten wildcard: ((? :any) :skip ...)
+          ;; Rewritten wildcard: ((? :any) :skip ...)
           (= fst '(? :any))
-             ;; Rewritten quantified var: ((? :repeat ...) :take ...)
+          ;; Rewritten quantified var: ((? :repeat ...) :take ...)
           (and (seq? fst) (= '? (first fst)) (= :repeat (second fst)))))))
 
 (defn list-rewrite
@@ -1795,14 +1795,21 @@
                                (rewrite-pattern default-rewrite-rules))  ; then defaults
                      :else (rewrite-pattern ptn default-rewrite-rules))]
      ;; Validate against schema before compilation (if provided)
-     (when schema
-       (validate-pattern-schema! rewritten schema))
-     ;; Compile with custom resolver/evaluator if provided
-     (binding [*resolve-sym* (or resolve *resolve-sym*)
-               *eval-form* (or eval-fn *eval-form*)]
-       (cond-> (core->matcher rewritten)
-         ;; Filter output to schema's valid-keys for record schemas
-         schema (wrap-with-schema-filter schema))))))
+     ;; On schema violation, return a matcher that always produces MatchFailure
+     ;; so callers get a :schema failure instead of an exception.
+     (if-let [schema-error (when schema
+                             (try
+                               (validate-pattern-schema! rewritten schema)
+                               nil
+                               (catch #?(:clj Exception :cljs js/Error) e
+                                 (fail (ex-message e) :schema nil))))]
+       (constantly schema-error)
+       ;; Compile with custom resolver/evaluator if provided
+       (binding [*resolve-sym* (or resolve *resolve-sym*)
+                 *eval-form* (or eval-fn *eval-form*)]
+         (cond-> (core->matcher rewritten)
+           ;; Filter output to schema's valid-keys for record schemas
+           schema (wrap-with-schema-filter schema)))))))
 
 ;;-----------------------------------------------------------------------------
 ;; Rule: Pattern → Template Transformation
@@ -2111,26 +2118,23 @@
   (compile-pattern '{:name (?n :default "anon")} {:schema {:name :string}}) ;=>> fn?
   (compile-pattern '{:age (?a :when pos?)} {:schema {:age :number}}) ;=>> fn?
 
-  ;; Invalid: key not in schema throws even with :default
-  (try
-    (compile-pattern '{:debug (?d :default false)} {:schema {:version :string}})
-    (catch clojure.lang.ExceptionInfo e
-      (:key (ex-data e))))
-  ;=> :debug
+  ;; Invalid: key not in schema returns matcher that always fails
+  (let [m (compile-pattern '{:debug (?d :default false)} {:schema {:version :string}})]
+    m ;=>> fn?
+    (m (vmr {})) ;=>> failure?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
-  ;; Invalid: seq pattern on :map schema - throws
-  (try
-    (compile-pattern '[?x] {:schema :map})
-    (catch clojure.lang.ExceptionInfo e
-      (:pattern-type (ex-data e))))
-  ;=> :seq
+  ;; Invalid: seq pattern on :map schema returns failing matcher
+  (let [m (compile-pattern '[?x] {:schema :map})]
+    m ;=>> fn?
+    (m (vmr {})) ;=>> failure?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
-  ;; Invalid: map pattern on :seq schema - throws
-  (try
-    (compile-pattern '{:a ?x} {:schema :seq})
-    (catch clojure.lang.ExceptionInfo e
-      (:pattern-type (ex-data e))))
-  ;=> :map
+  ;; Invalid: map pattern on :seq schema returns failing matcher
+  (let [m (compile-pattern '{:a ?x} {:schema :seq})]
+    m ;=>> fn?
+    (m (vmr {})) ;=>> failure?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;; Nested schema: map with field types
   (compile-pattern '{:items [?x ?y]} {:schema {:items [:any]}}) ;=>> fn?
@@ -2139,19 +2143,17 @@
   (compile-pattern '{:name ?n :tags [?first ?rest*]}
                    {:schema {:name :string :tags [:string]}}) ;=>> fn?
 
-  ;; Invalid nested: map pattern where seq expected
-  (try
-    (compile-pattern '{:items {:x ?x}} {:schema {:items [:any]}})
-    (catch clojure.lang.ExceptionInfo e
-      (:schema-type (ex-data e))))
-  ;=> :seq
+  ;; Invalid nested: map pattern where seq expected returns failing matcher
+  (let [m (compile-pattern '{:items {:x ?x}} {:schema {:items [:any]}})]
+    m ;=>> fn?
+    (m (vmr {})) ;=>> failure?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
-  ;; Invalid nested: seq pattern where map expected
-  (try
-    (compile-pattern '{:user [?a ?b]} {:schema {:user {:name :string}}})
-    (catch clojure.lang.ExceptionInfo e
-      (:schema-type (ex-data e))))
-  ;=> :map
+  ;; Invalid nested: seq pattern where map expected returns failing matcher
+  (let [m (compile-pattern '{:user [?a ?b]} {:schema {:user {:name :string}}})]
+    m ;=>> fn?
+    (m (vmr {})) ;=>> failure?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;; Schema without option still compiles normally
   ((compile-pattern '{:a ?x}) (vmr {:a 42})) ;=>> {:vars {'x 42}}
@@ -2213,12 +2215,10 @@
   ((compile-pattern '{:point [?x ?y]} {:schema {:point [:tuple :number :number]}})
    (vmr {:point [10 20]})) ;=>> {:vars {'x 10 'y 20}}
 
-  ;; Invalid: map pattern where tuple expects :number
-  (try
-    (compile-pattern '[{:a ?a} ?y] {:schema [:tuple :number :string]})
-    (catch clojure.lang.ExceptionInfo e
-      (:schema-type (ex-data e))))
-  ;=> :number
+  ;; Invalid: map pattern where tuple expects :number returns failing matcher
+  (let [m (compile-pattern '[{:a ?a} ?y] {:schema [:tuple :number :string]})]
+    m ;=>> fn?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;;-------------------------------------------------------------------
   ;; Literal schema: [:= value]
@@ -2238,12 +2238,10 @@
   ;; Valid: var pattern for literal keyword
   (compile-pattern '{:status ?s} {:schema {:status [:= :active]}}) ;=>> fn?
 
-  ;; Invalid: map pattern where literal keyword expected
-  (try
-    (compile-pattern '{:status {:x ?x}} {:schema {:status [:= :active]}})
-    (catch clojure.lang.ExceptionInfo e
-      (:schema-type (ex-data e))))
-  ;=> :keyword
+  ;; Invalid: map pattern where literal keyword expected returns failing matcher
+  (let [m (compile-pattern '{:status {:x ?x}} {:schema {:status [:= :active]}})]
+    m ;=>> fn?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;; Mixed: types and literals together
   ((compile-pattern '{:name ?n :status ?s}
@@ -2260,12 +2258,10 @@
   ((compile-pattern '{:x ?x :y ?y} {:schema [:map-of :keyword :number]})
    (vmr {:x 10 :y 20})) ;=>> {:vars {'x 10 'y 20}}
 
-  ;; Invalid: nested map where number expected
-  (try
-    (compile-pattern '{:x {:a ?a}} {:schema [:map-of :keyword :number]})
-    (catch clojure.lang.ExceptionInfo e
-      (:schema-type (ex-data e))))
-  ;=> :number
+  ;; Invalid: nested map where number expected returns failing matcher
+  (let [m (compile-pattern '{:x {:a ?a}} {:schema [:map-of :keyword :number]})]
+    m ;=>> fn?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;; Nested dictionary in record
   (compile-pattern '{:data {:a ?a}} {:schema {:data [:map-of :keyword :any]}}) ;=>> fn?
@@ -2289,12 +2285,10 @@
   ((compile-pattern '{:status ?s} {:schema {:status #{:active :inactive}}})
    (vmr {:status :active})) ;=>> {:vars {'s :active}}
 
-  ;; Invalid: map pattern for keyword enum
-  (try
-    (compile-pattern '{:status {:x ?x}} {:schema {:status #{:active :inactive}}})
-    (catch clojure.lang.ExceptionInfo e
-      (:schema-type (ex-data e))))
-  ;=> :keyword
+  ;; Invalid: map pattern for keyword enum returns failing matcher
+  (let [m (compile-pattern '{:status {:x ?x}} {:schema {:status #{:active :inactive}}})]
+    m ;=>> fn?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;;-------------------------------------------------------------------
   ;; Union schema: [:or schema1 schema2 ...]
@@ -2326,12 +2320,10 @@
   (compile-pattern '{:name ?n :nick ?nick}
                    {:schema {:name :string :nick [:optional :string]}}) ;=>> fn?
 
-  ;; Invalid: map pattern for optional string
-  (try
-    (compile-pattern '{:nick {:x ?x}} {:schema {:nick [:optional :string]}})
-    (catch clojure.lang.ExceptionInfo e
-      (:schema-type (ex-data e))))
-  ;=> :string
+  ;; Invalid: map pattern for optional string returns failing matcher
+  (let [m (compile-pattern '{:nick {:x ?x}} {:schema {:nick [:optional :string]}})]
+    m ;=>> fn?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;;-------------------------------------------------------------------
   ;; Indexed lookup: map keys that are not keywords
@@ -2364,14 +2356,11 @@
   (require '[malli.core :as m])
   (require '[sg.flybot.pullable.malli])
 
-  ;; Without :ilookup - indexed lookup pattern on seq schema fails
-  (try
-    (compile-pattern '{:users {{:id 1} ?u}}
-                     {:schema (m/schema [:map [:users [:vector [:map [:id :int] [:name :string]]]]])})
-    :should-have-thrown
-    (catch clojure.lang.ExceptionInfo e
-      (:pattern-type (ex-data e))))
-  ;=> :map
+  ;; Without :ilookup - indexed lookup pattern on seq schema returns failing matcher
+  (let [m (compile-pattern '{:users {{:id 1} ?u}}
+                           {:schema (m/schema [:map [:users [:vector [:map [:id :int] [:name :string]]]]])})]
+    m ;=>> fn?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;; With :ilookup true - indexed lookup pattern compiles
   (compile-pattern '{:users {{:id 1} ?u}}
@@ -2379,15 +2368,12 @@
                                                      [:map [:id :int] [:name :string]]]]])})
   ;=>> fn?
 
-  ;; Invalid field in indexed lookup value pattern - reports offending key
-  (try
-    (compile-pattern '{:users {{:id 1} {:invalid ?x}}}
-                     {:schema (m/schema [:map [:users [:vector {:ilookup true}
-                                                       [:map [:id :int] [:name :string]]]]])})
-    :should-have-thrown
-    (catch clojure.lang.ExceptionInfo e
-      (:key (ex-data e))))
-  ;=> :invalid
+  ;; Invalid field in indexed lookup value pattern returns failing matcher
+  (let [m (compile-pattern '{:users {{:id 1} {:invalid ?x}}}
+                           {:schema (m/schema [:map [:users [:vector {:ilookup true}
+                                                             [:map [:id :int] [:name :string]]]]])})]
+    m ;=>> fn?
+    (:matcher-type (m (vmr {})))) ;=> :schema
 
   ;; Valid field in indexed lookup value pattern
   (compile-pattern '{:users {{:id 1} {:name ?n}}}

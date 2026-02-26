@@ -288,10 +288,9 @@
           (.delete temp-file))))))
 
 (deftest error-handling-test
-  (testing "Invalid pattern returns error gracefully"
+  (testing "Invalid pattern returns schema-violation 403"
     (let [{:keys [status]} (api-request '{:invalid-key ?x})]
-      ;; Should not crash the server
-      (is (number? status)))))
+      (is (= 403 status)))))
 
 ;;=============================================================================
 ;; REPL helpers
