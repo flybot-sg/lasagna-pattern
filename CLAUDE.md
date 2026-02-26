@@ -33,8 +33,7 @@ All builds run from root via Babashka:
 bb list              # List all components
 bb test              # Test all components
 bb test pattern      # Test specific component
-bb dev pattern       # Start dev REPL for component
-bb nrepl pattern     # Start nREPL for component
+bb dev pattern       # Start nREPL for component
 bb clean             # Clean all
 bb clean pattern     # Clean specific component
 ```
