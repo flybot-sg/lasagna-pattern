@@ -1801,7 +1801,7 @@
                  *eval-form* (or eval-fn *eval-form*)]
          (cond-> (core->matcher rewritten)
            schema (wrap-with-schema-filter schema)))
-       (catch #?(:clj Exception :cljs js/Error) e
+       (catch #?(:clj clojure.lang.ExceptionInfo :cljs ExceptionInfo) e
          (constantly (fail (ex-message e) :schema nil)))))))
 
 ;;-----------------------------------------------------------------------------
