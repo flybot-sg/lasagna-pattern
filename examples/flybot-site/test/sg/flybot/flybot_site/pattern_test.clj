@@ -150,19 +150,19 @@
 ;;=============================================================================
 
 (deftest schema-violation-test
-  (testing "Map pattern for primitive field throws at compile time"
-    (is (thrown-with-msg?
-         Exception
-         #"Schema violation.*map.*number"
-         (eval '(sg.flybot.pullable/match-fn {:post/id {:nested ?x}} ?x
-                                             {:schema sg.flybot.flybot-site.server.system.api/post-schema})))))
+  (testing "Map pattern for primitive field returns MatchFailure"
+    (let [f (eval '(sg.flybot.pullable/match-fn {:post/id {:nested ?x}} ?x
+                                                {:schema sg.flybot.flybot-site.server.system.api/post-schema}))
+          result (f {})]
+      (is (p/failure? result))
+      (is (= :schema (:matcher-type result)))))
 
-  (testing "Seq pattern for map field throws at compile time"
-    (is (thrown-with-msg?
-         Exception
-         #"Schema violation.*seq.*map"
-         (eval '(sg.flybot.pullable/match-fn [{:post/title ?t}] ?t
-                                             {:schema sg.flybot.flybot-site.server.system.api/post-schema}))))))
+  (testing "Seq pattern for map field returns MatchFailure"
+    (let [f (eval '(sg.flybot.pullable/match-fn [{:post/title ?t}] ?t
+                                                {:schema sg.flybot.flybot-site.server.system.api/post-schema}))
+          result (f {})]
+      (is (p/failure? result))
+      (is (= :schema (:matcher-type result))))))
 
 ;;=============================================================================
 ;; RCT Integration
