@@ -458,6 +458,66 @@
     (symbol (namespace k) (name k))
     (symbol (name k))))
 
+(defn- make-detect-fn
+  "Build detect function from :detect config.
+   Keyword → (fn [v] (get v kw)), function → used directly, nil → nil."
+  [detect]
+  (when detect
+    (if (keyword? detect) #(get % detect) detect)))
+
+(defn- walk-nullify-errors
+  "Walk a map recursively, replacing detected error values with nil.
+   Only descends into standard maps (map?), never into ILookup implementations
+   (collections, lookups) to avoid triggering lazy side effects."
+  [m path detect-fn]
+  (reduce-kv
+   (fn [[m' errors] k v]
+     (if (map? v)
+       (if-let [err (detect-fn v)]
+         [(assoc m' k nil) (assoc errors (conj path k) err)]
+         (let [[v' sub-errors] (walk-nullify-errors v (conj path k) detect-fn)]
+           [(assoc m' k v') (merge errors sub-errors)]))
+       [m' errors]))
+   [m {}]
+   m))
+
+(defn- nullify-errors
+  "Replace detected error values with nil in the data map, recursively.
+   Returns [cleaned-data {path error-info}].
+   detect-fn: (fn [v] -> error-map | nil), built by make-detect-fn."
+  [data detect-fn]
+  (if-not detect-fn
+    [data nil]
+    (walk-nullify-errors data [] detect-fn)))
+
+(defn- enrich-failure
+  "If failure path matches an error-map entry, replace generic :code/:reason
+   with the application error's :type/:message."
+  [error-response error-map]
+  (if-not (seq error-map)
+    error-response
+    (let [{:keys [path] :as err} (get-in error-response [:errors 0])
+          matched (some (fn [[err-path err-val]]
+                          (when (= err-path (vec (take (count err-path) path)))
+                            err-val))
+                        error-map)]
+      (if matched
+        {:errors [(cond-> {:code   (or (:type matched) (:code err))
+                           :reason (or (:message matched) (:reason err))}
+                    (seq path) (assoc :path path))]}
+        error-response))))
+
+(defn- detect-path-error
+  "Walk path checking for errors at each step via detect-fn.
+   Returns [value nil] on success, [nil err-map] with :path on error."
+  [data path detect-fn]
+  (loop [m data, [k & ks] path, traversed []]
+    (if-not k
+      [m nil]
+      (if-let [err (when detect-fn (detect-fn m))]
+        [nil (assoc err :path traversed)]
+        (recur (get m k) ks (conj traversed k))))))
+
 (defn- execute-mutation
   "Execute a mutation against the API collection.
    Path can be flat [:posts] or nested [:member :posts].
@@ -467,18 +527,20 @@
   [api-fn ring-request {:keys [path query value]}]
   (try
     (let [{:keys [data errors]} (api-fn ring-request)
-          {:keys [detect]} errors
-          detect-fn (when detect
-                      (if (keyword? detect) #(get % detect) detect))
-          coll (get-in data path)
-          result-key (last path)]
-      (if (and coll (satisfies? coll/Mutable coll))
-        (let [result (coll/mutate! coll query value)]
-          (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
-            (failure (error type (or message (name type)) (vec path)))
-            (success {result-key result} {(keyword->symbol result-key) result})))
-        (failure (error :invalid-collection
-                        (str "Collection " (pr-str path) " not found or unavailable")))))
+          detect-fn (make-detect-fn (:detect errors))
+          [coll path-err] (detect-path-error data path detect-fn)
+          result-key (last path)
+          res (if path-err
+                (let [{:keys [type message path]} path-err]
+                  (failure (error type (or message (name type)) path)))
+                (if (and coll (satisfies? coll/Mutable coll))
+                  (let [result (coll/mutate! coll query value)]
+                    (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
+                      (failure (error type (or message (name type)) (vec path)))
+                      (success {result-key result} {(keyword->symbol result-key) result})))
+                  (failure (error :invalid-collection
+                                  (str "Collection " (pr-str path) " not found or unavailable")))))]
+      (vary-meta res assoc ::error-codes (:codes errors)))
     (catch #?(:clj Exception :cljs js/Error) e
       (failure (error :execution-error
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
@@ -502,17 +564,22 @@
            ctx (or (:context opts) {})]
        (if-let [mutation (parse-mutation resolved)]
          (execute-mutation api-fn ctx mutation)
-         (let [{:keys [data schema]} (api-fn ctx)
+         (let [{:keys [data schema errors]} (api-fn ctx)
+               detect-fn (make-detect-fn (:detect errors))
+               [clean-data error-map] (nullify-errors data detect-fn)
                compiled (pattern/compile-pattern
                          resolved
                          (cond-> (select-keys opts [:resolve :eval-fn])
                            (not (:resolve opts)) (assoc :resolve safe-resolve)
                            (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
                            schema (assoc :schema schema)))
-               result (compiled (pattern/vmr data))]
-           (if (pattern/failure? result)
-             (failure (match-failure->error result))
-             (success (:val result) (:vars result))))))
+               result (compiled (pattern/vmr clean-data))]
+           (-> (if (pattern/failure? result)
+                 (enrich-failure
+                  (failure (match-failure->error result))
+                  error-map)
+                 (success (:val result) (:vars result)))
+               (vary-meta assoc ::error-codes (:codes errors))))))
      (catch #?(:clj Exception :cljs js/Error) e
        (failure (error :execution-error
                        #?(:clj (.getMessage e) :cljs (.-message e))))))))
@@ -529,8 +596,6 @@
                     :transit-json)
         res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
         body (read-body (:body ring-request))
-        ;; Get error codes from api-fn (call it to get :errors config)
-        error-codes (get-in (api-fn ring-request) [:errors :codes])
         response (cond
                    (nil? body)
                    (failure (error :invalid-request "Request body required"))
@@ -545,6 +610,7 @@
                        (failure (error :decode-error
                                        (str "Failed to decode: "
                                             #?(:clj (.getMessage e) :cljs (.-message e))))))))
+        error-codes (::error-codes (meta response))
         {:keys [body content-type]} (encode-response response res-fmt)]
     (ring-response (response->http-status response error-codes) body content-type)))
 
@@ -636,33 +702,157 @@
   (response->http-status {:errors [{:code :unknown}]} nil) ;=> 400
 
   ;; --- execute ---
+  ;;
+  ;; Single api-fn exercises: reads, mutations, error detection, schema.
+  ;; - :public  → read-only collection
+  ;; - :guarded → wrap-mutable with ownership check (update returns :error)
+  ;; - :private → role-gated error branch (like with-role returning {:error ...})
+  ;; - :restricted → has schema (only :name key declared)
 
   (require '[sg.flybot.pullable.collection :as coll])
 
   (def test-api-fn
     (let [src (coll/atom-source {:initial [{:id 1 :name "Alice"} {:id 2 :name "Bob"}]})
-          items (coll/collection src)]
-      (fn [_ctx] {:data {:users items}})))
+          items (coll/collection src)
+          guarded (coll/wrap-mutable items
+                                     (fn [coll query value]
+                                       (if (some? query)
+                                         {:error {:type :forbidden :message "Not yours"}}
+                                         (coll/mutate! coll query value))))]
+      (fn [_ctx]
+        {:data   {:public     {:items (coll/read-only items)}
+                  :guarded    {:items guarded}
+                  :private    {:error {:type :forbidden :message "Not authorized"}}
+                  :restricted {:name "Alice" :secret "s3cret"}}
+         :schema {:public :any :guarded :any :private :any
+                  :restricted {:name :string}}
+         :errors {:detect :error
+                  :codes  {:forbidden 403}}})))
 
-  (execute test-api-fn '{:users ?all})
+  ;; --- reads ---
+
+  (execute test-api-fn '{:public {:items ?all}})
   ;=>> {'all vector?}
 
-  (get (execute test-api-fn '{:users {{:id 1} ?u}}) 'u)
+  (get (execute test-api-fn '{:public {:items {{:id 1} ?u}}}) 'u)
   ;=>> {:id 1 :name "Alice"}
 
-  (get (execute test-api-fn '{:users {nil {:id 99 :name "Carol"}}}) 'users)
-  ;=>> {:id 3 :name "Carol"}
-
-  (execute test-api-fn '{:users {{:id 2} nil}})
-  ;=>> {'users true}
-
-  (:errors (execute test-api-fn '{:users (?x :when string?)}))
+  (:errors (execute test-api-fn '{:public {:items (?x :when string?)}}))
   ;=>> [{:code :match-failure}]
 
+  (get (execute test-api-fn '{:public {:items {{:id $uid} ?u}}} {:params {:uid 1}}) 'u)
+  ;=>> {:id 1 :name "Alice"}
+
+  ;; --- read: schema violation ---
+
+  (:errors (execute test-api-fn '{:restricted {:secret ?s}}))
+  ;=>> [{:code :schema-violation}]
+
+  ;; declared key works
+  (execute test-api-fn '{:restricted {:name ?n}})
+  ;=>> {'n "Alice"}
+
+  ;; --- read: error detection ---
+
+  ;; single error path → :forbidden
+  (:errors (execute test-api-fn '{:private {:items ?all}}))
+  ;=>> [{:code :forbidden :reason "Not authorized" :path [:private]}]
+
+  ;; partial success: error branch skipped, good branch succeeds
+  (execute test-api-fn '{:public {:items ?all} :private {:items ?secret}})
+  ;=>> {'all vector?}
+
+  ;; --- read: nested error detection ---
+
+  (def test-nested-error-api-fn
+    (fn [_ctx]
+      {:data   {:section {:ok {:name "Alice"}
+                          :denied {:error {:type :forbidden :message "Access denied"}}}}
+       :errors {:detect :error
+                :codes  {:forbidden 403}}}))
+
+  ;; nested error path → :forbidden with nested path
+  (:errors (execute test-nested-error-api-fn '{:section {:denied {:name ?n}}}))
+  ;=>> [{:code :forbidden :reason "Access denied" :path [:section :denied]}]
+
+  ;; sibling of nested error → succeeds
+  (execute test-nested-error-api-fn '{:section {:ok {:name ?n}}})
+  ;=>> {'n "Alice"}
+
+  ;; mixed: ok succeeds, denied skipped → partial success
+  (execute test-nested-error-api-fn '{:section {:ok {:name ?n} :denied {:name ?d}}})
+  ;=>> {'n "Alice"}
+
+  ;; --- read: custom detect-fn ---
+
+  (def test-custom-detect-api-fn
+    (fn [_ctx]
+      {:data   {:resource {:status :denied :reason "Access denied"}}
+       :errors {:detect (fn [v] (when (and (map? v) (= :denied (:status v)))
+                                  {:type :forbidden :message (:reason v)}))
+                :codes  {:forbidden 403}}}))
+
+  (:errors (execute test-custom-detect-api-fn '{:resource {:name ?n}}))
+  ;=>> [{:code :forbidden :reason "Access denied" :path [:resource]}]
+
+  ;; --- read: without :errors config, error maps pass through as regular data ---
+
+  (def test-no-detect-api-fn
+    (fn [_ctx] {:data {:broken {:error {:type :forbidden}}}}))
+
+  (execute test-no-detect-api-fn '{:broken ?x})
+  ;=>> {'x {:error {:type :forbidden}}}
+
+  ;; without :errors config, pattern failure returns generic :match-failure
+  (def test-no-detect-fail-api-fn
+    (fn [_ctx] {:data {:broken nil}}))
+
+  (:errors (execute test-no-detect-fail-api-fn '{:broken {:deep ?v}}))
+  ;=>> [{:code :match-failure}]
+
+  ;; --- mutations ---
+
+  ;; create succeeds through guarded collection
+  (get (execute test-api-fn '{:guarded {:items {nil {:name "Carol"}}}}) 'items)
+  ;=>> {:id 3 :name "Carol"}
+
+  ;; update on guarded → :forbidden (ownership violation detected by :detect)
+  (:errors (execute test-api-fn '{:guarded {:items {{:id 1} {:name "Bob"}}}}))
+  ;=>> [{:code :forbidden :reason "Not yours" :path [:guarded :items]}]
+
+  ;; mutation to missing collection → :invalid-collection
   (:errors (execute test-api-fn '{:missing {nil {:id 1}}}))
   ;=>> [{:code :invalid-collection}]
 
-  (get (execute test-api-fn '{:users {{:id $uid} ?u}} {:params {:uid 1}}) 'u)
-  ;=>> {:id 1 :name "Alice"}
+  ;; mutation through error map (role-gated) → :forbidden (detected before collection)
+  (:errors (execute test-api-fn '{:private {:items {nil {:name "X"}}}}))
+  ;=>> [{:code :forbidden :reason "Not authorized" :path [:private]}]
+
+  ;; --- exceptions ---
+
+  ;; mutate! throws → :execution-error
+  (def test-throwing-api-fn
+    (let [throwing-coll (reify
+                          clojure.lang.ILookup
+                          (valAt [_ _] nil)
+                          (valAt [_ _ nf] nf)
+                          coll/Mutable
+                          (mutate! [_ _ _]
+                            (throw (ex-info "DB connection lost" {}))))]
+      (fn [_ctx] {:data {:items throwing-coll}})))
+
+  (:errors (execute test-throwing-api-fn '{:items {nil {:name "X"}}}))
+  ;=>> [{:code :execution-error :reason "DB connection lost"}]
+
+  ;; api-fn throws on read → :execution-error
+  (def test-crashing-api-fn
+    (fn [_ctx] (throw (ex-info "Service unavailable" {}))))
+
+  (:errors (execute test-crashing-api-fn '{:x ?x}))
+  ;=>> [{:code :execution-error :reason "Service unavailable"}]
+
+  ;; api-fn throws on mutation → :execution-error
+  (:errors (execute test-crashing-api-fn '{:x {nil {:a 1}}}))
+  ;=>> [{:code :execution-error :reason "Service unavailable"}]
   )
 
