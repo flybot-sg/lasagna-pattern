@@ -91,6 +91,12 @@ The `:errors` config tells the handler how to detect and translate these:
          :invalid   422}}
 ```
 
+**Mutations** are all-or-nothing — a detected error fails the entire mutation. Errors along the path (e.g., a role gate) are detected before attempting the mutation.
+
+**Reads** support partial success — when some branches succeed and others contain detected errors, the response includes both the successful bindings and an `:errors` array for the failed paths. If all paths fail, the response is a full error.
+
+Partial success applies to **reads only**. Mutations remain all-or-nothing.
+
 Example from flybot-site:
 
 ```clojure
@@ -125,6 +131,10 @@ Example from flybot-site:
 
 ;; Error
 {:errors [{:code :forbidden :reason "You don't own this post"}]}
+
+;; Partial success (reads only): bindings + errors for failed paths
+{'all [{:id 1 :title "Hello"}]
+ :errors [{:code :forbidden :reason "Not authorized" :path [:private]}]}
 ```
 
 ## Pattern Syntax

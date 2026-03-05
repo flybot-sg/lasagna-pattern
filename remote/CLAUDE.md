@@ -52,11 +52,13 @@ Ring Handler (make-handler / wrap-api)
     ├── parse-mutation(pattern) → mutation | nil
     │         │                        │
     │    MUTATION PATH            READ PATH
-    │    Walk path to find       Compile pattern via
-    │      the collection          pattern/match-fn
-    │    mutate!(coll, q, v)     Match against collections
-    │    detect errors             (ILookup + Seqable)
-    │    Return full entity      Return variable bindings
+    │    detect-path-error       Detect errors in data
+    │      (errors along path)     (walk-nullify-errors)
+    │    Walk path to find       Trim pattern at error paths
+    │      the collection        Compile trimmed pattern
+    │    mutate!(coll, q, v)     Match against clean data
+    │    detect errors           Classify: partial success
+    │    Return full entity        or full failure
     │         │                        │
     │         └────────┬───────────────┘
     │                  ▼
@@ -141,12 +143,20 @@ Collections return errors as data (not exceptions):
 {:error {:type :forbidden :message "You don't own this post"}}
 
 ;; Error config in api-fn:
-{:detect :error                ; how to find the error in mutation results
+{:detect :error                ; keyword or fn to detect errors in data
  :codes  {:forbidden 403       ; error type → HTTP status
           :not-found 404}}
 ```
 
-Remote checks the mutation result with `:detect`, maps `:type` to HTTP status via `:codes`.
+**Mutations** are all-or-nothing: Remote checks the mutation result with `:detect`, maps `:type` to HTTP status via `:codes`. Path-level errors (e.g., role gate returning `{:error ...}` along the path) are detected before attempting the mutation.
+
+**Reads** support partial success: Before pattern matching, `execute-read` walks the data tree looking for error values (via `:detect`). Detected errors are nullified, the pattern is trimmed to remove error paths, and matching proceeds on clean data. If some branches succeed and others fail:
+- Successful bindings are returned normally
+- Detected errors are attached as `::detected-errors` metadata and included in the wire response as `:errors`
+
+If all pattern paths are error paths, the read fails with the full error list.
+
+**Partial success applies to reads only.** Mutations remain all-or-nothing.
 
 ## Security
 

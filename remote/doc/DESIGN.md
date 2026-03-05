@@ -118,6 +118,15 @@ Failure:
            :code :schema-violation}]}
 ```
 
+Partial success (reads only):
+```clojure
+;; When some branches succeed and others contain detected errors
+{'all [{...} {...}]
+ :errors [{:code :forbidden :reason "Not authorized" :path [:private]}]}
+```
+
+Partial success applies to **reads only**. Mutations remain all-or-nothing — a detected error fails the entire mutation.
+
 ## HTTP Endpoints
 
 | Endpoint | Method | Description |
@@ -158,19 +167,26 @@ The schema returned is the **actual schema** that will be enforced when processi
                     └─────────────┬─────────────┘
                                   │
                     ┌─────────────▼─────────────┐
-                    │ compile-pattern(pattern,   │
+                    │ Detect errors in data      │
+                    │ (walk + nullify via :detect)│
+                    │ Trim pattern at error paths│
+                    └─────────────┬─────────────┘
+                                  │
+                    ┌─────────────▼─────────────┐
+                    │ compile-pattern(trimmed,   │
                     │   {:schema (meta lazy-map)})│
                     └─────────────┬─────────────┘
                                   │
                     ┌─────────────▼─────────────┐
-                    │ match pattern against      │
-                    │ lazy-map → triggers only   │
-                    │ needed computations        │
+                    │ match against clean data   │
+                    │ → triggers only needed     │
+                    │   computations             │
                     └─────────────┬─────────────┘
                                   │
                     ┌─────────────▼─────────────┐
-                    │ {:data ... :vars ...}      │
-                    │ or {:errors [...]}         │
+                    │ Classify result:           │
+                    │ success / partial success  │
+                    │ (reads only) / failure     │
                     └───────────────────────────┘
 ```
 
@@ -311,7 +327,9 @@ Pattern                      Backend ILookup              Execution
 
 ## Open Questions
 
-1. **Partial success semantics**: When pattern partially matches (some fields succeed, some fail due to schema), should we return partial data with errors, or fail the entire request?
+1. ~~**Partial success semantics**: When pattern partially matches (some fields succeed, some fail due to schema), should we return partial data with errors, or fail the entire request?~~
+
+   **Resolved.** Reads return partial data with detected errors attached. Successful bindings are returned normally; failed paths appear in `:errors`. Partial success applies to **reads only** — mutations remain all-or-nothing.
 
 2. **Streaming responses**: For large lazy sequences, should we support streaming/pagination at protocol level, or leave it to schema design (e.g., `:limit`, `:offset` as pattern inputs)?
 
