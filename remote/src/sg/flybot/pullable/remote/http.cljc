@@ -602,8 +602,8 @@
           [coll path-err] (detect-path-error data path detect-fn)
           result-key (last path)
           res (if path-err
-                (let [{:keys [type message path]} path-err]
-                  (failure (error type (or message (name type)) path)))
+                (let [{:keys [type message]} path-err]
+                  (failure (error type (or message (name type)) (:path path-err))))
                 (if (and coll (satisfies? coll/Mutable coll))
                   (let [result (coll/mutate! coll query value)]
                     (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
