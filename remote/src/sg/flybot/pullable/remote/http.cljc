@@ -490,6 +490,61 @@
     [data nil]
     (walk-nullify-errors data [] detect-fn)))
 
+(defn- trim-pattern
+  "Remove pattern keys where data has nil values at known error paths.
+   Walks pattern and data in parallel, only descending into standard maps.
+   Returns trimmed pattern, or nil if all keys were removed."
+  ([pattern data error-paths]
+   (trim-pattern pattern data error-paths []))
+  ([pattern data error-paths current-path]
+   (when (map? pattern)
+     (let [trimmed (reduce-kv
+                    (fn [acc k v]
+                      (let [child-path (conj current-path k)
+                            data-v (when (map? data) (get data k))]
+                        (if (and (nil? data-v) (contains? error-paths child-path))
+                          acc
+                          (if (and (map? v) (map? data-v))
+                            (let [v' (trim-pattern v data-v error-paths child-path)]
+                              (if (seq v') (assoc acc k v') acc))
+                            (assoc acc k v)))))
+                    {}
+                    pattern)]
+       (when (seq trimmed) trimmed)))))
+
+^:rct/test
+(comment
+  ;; trim-pattern: removes keys at known error paths
+  (trim-pattern '{:a {:x ?x} :b {:y ?y}}
+                {:a {:x 1} :b nil}
+                #{[:b]})
+  ;=> '{:a {:x ?x}}
+
+  ;; trim-pattern: nested error removal
+  (trim-pattern '{:section {:ok {:name ?n} :denied {:name ?d}}}
+                {:section {:ok {:name "Alice"} :denied nil}}
+                #{[:section :denied]})
+  ;=> '{:section {:ok {:name ?n}}}
+
+  ;; trim-pattern: all keys error -> nil
+  (trim-pattern '{:a {:x ?x} :b {:y ?y}}
+                {:a nil :b nil}
+                #{[:a] [:b]})
+  ;=> nil
+
+  ;; trim-pattern: no error paths -> pattern unchanged
+  (trim-pattern '{:a ?x :b ?y}
+                {:a 1 :b 2}
+                #{})
+  ;=> '{:a ?x :b ?y}
+
+  ;; trim-pattern: sub-pattern entirely empty after trimming -> parent removed
+  (trim-pattern '{:section {:denied {:name ?d}}}
+                {:section {:denied nil}}
+                #{[:section :denied]})
+  ;=> nil
+  )
+
 (defn- pattern-contains-path?
   "True when the pattern structure references the given key path.
    Walks the pattern map one level per path segment."
@@ -498,6 +553,13 @@
        (contains? pattern k)
        (or (nil? ks)
            (pattern-contains-path? (get pattern k) ks))))
+
+(defn- path-prefix?
+  "True if `prefix` is a prefix of `path`."
+  [prefix path]
+  (and (seq prefix) (seq path)
+       (<= (count prefix) (count path))
+       (= prefix (subvec (vec path) 0 (count prefix)))))
 
 (defn- error-map->errors
   "Convert error-map from nullify-errors into response error maps."
@@ -508,6 +570,13 @@
                      :reason (or (:message err) "Unknown error")}
               (seq path) (assoc :path path)))
           error-map)))
+
+(defn- relevant-errors
+  "Filter error-map to errors whose paths are referenced by the pattern."
+  [error-map pattern]
+  (some->> (error-map->errors error-map)
+           (filterv #(pattern-contains-path? pattern (:path %)))
+           seq vec))
 
 (defn- detect-path-error
   "Walk path checking for errors at each step via detect-fn.
@@ -547,6 +616,42 @@
       (failure (error :execution-error
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
 
+(defn- classify-result
+  "Classify a match result into a success or failure response.
+   On success with detected errors, attaches them as ::detected-errors metadata.
+   On failure, checks if the failure path is covered by a detected error."
+  [result detected]
+  (if (pattern/failure? result)
+    (let [pattern-err (match-failure->error result)
+          covered?    (some #(path-prefix? (:path %) (:path pattern-err)) detected)]
+      (failure (if covered? detected (conj (or detected []) pattern-err))))
+    (cond-> (success (:val result) (:vars result))
+      detected (vary-meta assoc ::detected-errors detected))))
+
+(defn- execute-read
+  "Execute a read pattern against api-fn data.
+   Detects errors, trims pattern, compiles, matches, and classifies the result."
+  [api-fn ctx pattern opts]
+  (let [{:keys [data schema errors]} (api-fn ctx)
+        detect-fn   (make-detect-fn (:detect errors))
+        [clean-data error-map] (nullify-errors data detect-fn)
+        error-paths (when (seq error-map) (set (keys error-map)))
+        trimmed     (if error-paths
+                      (trim-pattern pattern clean-data error-paths)
+                      pattern)
+        detected    (relevant-errors error-map pattern)]
+    (-> (if-not trimmed
+          (failure detected)
+          (let [compiled (pattern/compile-pattern
+                          trimmed
+                          (cond-> (select-keys opts [:resolve :eval-fn])
+                            (not (:resolve opts)) (assoc :resolve safe-resolve)
+                            (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
+                            schema (assoc :schema schema)))
+                result   (compiled (pattern/vmr clean-data))]
+            (classify-result result detected)))
+        (vary-meta assoc ::error-codes (:codes errors)))))
+
 (defn execute
   "Execute a pull pattern against an api-fn. Returns vars map or {:errors [...]}.
    On partial success, detected errors are attached as ::detected-errors metadata.
@@ -563,35 +668,11 @@
   ([api-fn pattern opts]
    (try
      (let [resolved (resolve-params pattern (:params opts))
-           _ (validate-pattern-depth! resolved)
-           ctx (or (:context opts) {})]
+           _        (validate-pattern-depth! resolved)
+           ctx      (or (:context opts) {})]
        (if-let [mutation (parse-mutation resolved)]
          (execute-mutation api-fn ctx mutation)
-         (let [{:keys [data schema errors]} (api-fn ctx)
-               detect-fn (make-detect-fn (:detect errors))
-               [clean-data error-map] (nullify-errors data detect-fn)
-               compiled (pattern/compile-pattern
-                         resolved
-                         (cond-> (select-keys opts [:resolve :eval-fn])
-                           (not (:resolve opts)) (assoc :resolve safe-resolve)
-                           (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
-                           schema (assoc :schema schema)))
-               result (compiled (pattern/vmr clean-data))
-               detected (some->> (error-map->errors error-map)
-                                 (filterv #(pattern-contains-path?
-                                            resolved (:path %)))
-                                 seq vec)]
-           (-> (if (pattern/failure? result)
-                 (let [pattern-err (match-failure->error result)
-                       covered? (some (fn [{:keys [path]}]
-                                        (and (seq path) (:path pattern-err)
-                                             (= path (vec (take (count path)
-                                                                (:path pattern-err))))))
-                                      detected)]
-                   (failure (if covered? detected (conj (or detected []) pattern-err))))
-                 (cond-> (success (:val result) (:vars result))
-                   detected (vary-meta assoc ::detected-errors detected)))
-               (vary-meta assoc ::error-codes (:codes errors))))))
+         (execute-read api-fn ctx resolved opts)))
      (catch #?(:clj Exception :cljs js/Error) e
        (failure (error :execution-error
                        #?(:clj (.getMessage e) :cljs (.-message e))))))))
@@ -885,5 +966,16 @@
   ;; api-fn throws on mutation → :execution-error
   (:errors (execute test-crashing-api-fn '{:x {nil {:a 1}}}))
   ;=>> [{:code :execution-error :reason "Service unavailable"}]
+
+  ;; collection throws on read → :execution-error (exception propagates)
+  (def throwing-read-coll
+    (reify
+      clojure.lang.ILookup
+      (valAt [_ _] (throw (ex-info "DB connection lost" {})))
+      (valAt [_ _ _] (throw (ex-info "DB connection lost" {})))))
+
+  (:errors (execute (fn [_ctx] {:data {:broken {:items throwing-read-coll}}})
+                    '{:broken {:items {{:id 1} ?x}}}))
+  ;=>> [{:code :execution-error :reason "DB connection lost"}]
   )
 

@@ -330,9 +330,7 @@
   "A matcher that matches on `matcher-map`, a map of keys to matchers.
    Supports maps and ILookup implementations (for lazy data sources).
    For maps: preserves unmatched keys in :val (passthrough semantics).
-   For ILookup: returns only matched keys (can't enumerate all keys).
-   Child matcher failures are non-fatal — the failed branch is skipped and
-   matching continues. Fails only when ALL branches fail (partial success)."
+   For ILookup: returns only matched keys (can't enumerate all keys)."
   [matcher-map]
   (matcher :map
            (fn [mr]
@@ -341,45 +339,27 @@
                (if-not #?(:clj  (instance? clojure.lang.ILookup m)
                           :cljs (satisfies? ILookup m))
                  (fail (str "expected map, got " (type m)) :map m)
-                 (let [[result failures]
-                       (reduce
-                        (fn [[mr' failures] [k mch]]
-                          (let [v (get m k)
-                                child-result (mch (vmr v))]
-                            (if (failure? child-result)
-                              ;; Skip failed branch, record failure
-                              [(if is-map? (update mr' :val dissoc k) mr')
-                               (conj failures (nest-failure child-result k))]
-                              (let [merged (-> mr'
-                                               (update :val assoc k (:val child-result))
-                                               (merge-vars child-result))]
-                                (if (failure? merged)
-                                  ;; Unification conflict — hard fail (correctness constraint)
-                                  (reduced [(nest-failure merged k) failures])
-                                  [merged failures])))))
-                        ;; For maps: preserve unmatched keys (passthrough)
-                        ;; For ILookup: start with empty map (can't enumerate)
-                        [(if is-map? mr (assoc mr :val {})) []]
-                        matcher-map)]
-                   (if (failure? result)
-                     result
-                     (if (and (seq failures)
-                              (= (count failures) (count matcher-map)))
-                       ;; ALL branches failed → return deepest failure
-                       (reduce deeper-failure failures)
-                       ;; Some succeeded → partial success
-                       result))))))))
+                 (reduce
+                  (fn [mr' [k mch]]
+                    (let [result (mch (vmr (get m k)))]
+                      (if (failure? result)
+                        (reduced (nest-failure result k))
+                        (-> mr'
+                            (update :val assoc k (:val result))
+                            (merge-vars result)))))
+                  ;; For maps: preserve unmatched keys (passthrough)
+                  ;; For ILookup: start with empty map (can't enumerate)
+                  (if is-map? mr (assoc mr :val {}))
+                  matcher-map))))))
 
 ^:rct/test
 (comment
   ;; mmap succeeds when all key matchers succeed, collects vars
   (def mm (mmap {:a (mvar 'a (mval 4)) :b (mpred even?)}))
   (mm (vmr {:a 4 :b 0})) ;=>> {:val {:a 4 :b 0} :vars {'a 4}}
-  ;; partial success — failed branch skipped, successful branch kept
+  ;; mmap fails when any key matcher fails
   (mm (vmr {:a 4 :b 3})) ;=>>
-  (fn [r] (and (not (failure? r))
-               (= {'a 4} (:vars r))
-               (not (contains? (:val r) :b))))
+  failure?
 
   ;; mmap works with ILookup implementations (not just maps)
   ;; This is essential for lazy data sources
@@ -396,47 +376,7 @@
       (valAt [_ k] (get {{:id 1} {:name "Alice"}} k))
       (valAt [_ k nf] (get {{:id 1} {:name "Alice"}} k nf))))
   ((mmap {{:id 1} (mvar 'result wildcard)}) (vmr idx-lookup)) ;=>>
-  {:val {{:id 1} {:name "Alice"}} :vars {'result {:name "Alice"}}}
-
-  ;; ILookup partial success: failed branch absent, good branch returned
-  (def ilookup-partial
-    (reify clojure.lang.ILookup
-      (valAt [_ k] (get {:a 1 :b nil} k))
-      (valAt [_ k nf] (get {:a 1 :b nil} k nf))))
-  (let [r ((mmap {:a (mvar 'a wildcard) :b (mmap {:inner (mvar 'bi wildcard)})}) (vmr ilookup-partial))]
-    [(not (failure? r))
-     (= {:a 1} (:val r))
-     (= {'a 1} (:vars r))]) ;=>>
-  [true true true]
-
-  ;; partial success: failed branch skipped, good branch succeeds
-  (def mm-partial (mmap {:a (mmap {:x (mvar 'a wildcard)}) :b (mvar 'b wildcard)}))
-  ;; both good → both bound
-  (mm-partial (vmr {:a {:x 1} :b 2})) ;=>> {:vars {'a 1 'b 2}}
-  ;; :a fails (nil not ILookup), :b succeeds → partial success
-  (mm-partial (vmr {:a nil :b 2})) ;=>>
-  (fn [r] (and (not (failure? r))
-               (= {'b 2} (:vars r))
-               (not (contains? (:val r) :a))))
-  ;; all branches fail → hard failure
-  (def mm-all-fail (mmap {:a (mmap {:x (mvar 'a wildcard)}) :b (mmap {:y (mvar 'b wildcard)})}))
-  (mm-all-fail (vmr {:a nil :b nil})) ;=>> failure?
-
-  ;; single branch all-fail
-  ((mmap {:a (mmap {:x (mvar 'x wildcard)})}) (vmr {:a nil})) ;=>> failure?
-
-  ;; map passthrough: failed branch key removed, non-pattern keys preserved
-  (let [mm (mmap {:x (mvar 'x wildcard) :y (mmap {:inner (mvar 'yi wildcard)})})
-        r (mm (vmr {:x 1 :y nil :z 3}))]
-    [(= 1 (get (:val r) :x))
-     (= 3 (get (:val r) :z))
-     (not (contains? (:val r) :y))
-     (= {'x 1} (:vars r))]) ;=>>
-  [true true true true]
-
-  ;; wildcard on error maps: binds the map as regular data (no special detection)
-  ((mmap {:a (mvar 'a wildcard)}) (vmr {:a {:error {:type :forbidden}}})) ;=>>
-  {:val {:a {:error {:type :forbidden}}} :vars {'a {:error {:type :forbidden}}}})
+  {:val {{:id 1} {:name "Alice"}} :vars {'result {:name "Alice"}}})
 
 ;;## Sequence matchers
 ;;
@@ -2046,23 +1986,6 @@
   ((compile-pattern '{:a ?x :b ?x}) (vmr {:a 1 :b 2})) ;=>>
   failure?
 
-  ;;-------------------------------------------------------------------
-  ;; compile-pattern: partial success (mmap skips failed branches)
-  ;;-------------------------------------------------------------------
-  ;; single branch all-fail
-  ((compile-pattern '{:member {:posts ?all}}) (vmr {:member nil})) ;=>>
-  failure?
-  ;; partial success: nil branch skipped, good branch returns data
-  (let [m (compile-pattern '{:guest {:posts ?posts} :member {:me ?user}})]
-    (m (vmr {:guest {:posts [1 2 3]}
-             :member nil}))) ;=>>
-  (fn [r] (and (not (failure? r))
-               (= [1 2 3] (get (:vars r) 'posts))
-               (nil? (get (:vars r) 'user))))
-  ;; all branches nil → hard failure
-  ((compile-pattern '{:admin {:users ?u} :owner {:config ?c}})
-   (vmr {:admin nil :owner nil})) ;=>>
-  failure?
   ;; error maps pass through as regular data (wildcard binds them)
   ((compile-pattern '{:a ?x}) (vmr {:a {:error {:type :forbidden}}})) ;=>>
   {:val {:a {:error {:type :forbidden}}} :vars {'x {:error {:type :forbidden}}}}
