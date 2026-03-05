@@ -66,12 +66,26 @@
              "accept" "application/transit+json"}
    :body (http/encode {:pattern pattern} :transit-json)})
 
+(defn decode-body [resp]
+  (http/decode (:body resp) :transit-json))
+
 ;;--- routing ---
 
 (deftest successful-pull-test
-  (testing "POST /api with valid pattern returns 200"
-    (let [resp (test-handler (pull-request '{:public {:items ?all}}))]
-      (is (= 200 (:status resp))))))
+  (testing "Single read returns 200 with vars"
+    (let [resp (test-handler (pull-request '{:public {:items ?all}}))
+          body (decode-body resp)]
+      (is (= 200 (:status resp)))
+      (is (vector? (get body 'all)) "Items bound to ?all")
+      (is (nil? (:errors body)) "No errors on full success")))
+
+  (testing "Multiple read paths return 200 with all vars"
+    (let [resp (test-handler (pull-request '{:public {:items ?all} :restricted {:name ?n}}))
+          body (decode-body resp)]
+      (is (= 200 (:status resp)))
+      (is (vector? (get body 'all)) "Items bound to ?all")
+      (is (= "Alice" (get body 'n)) "Name bound to ?n")
+      (is (nil? (:errors body)) "No errors on full success"))))
 
 (deftest schema-introspection-test
   (testing "GET /api/_schema returns 200"
@@ -110,24 +124,34 @@
 ;;--- read errors ---
 
 (deftest read-error-single-path-403-test
-  (testing "Single error path returns HTTP 403"
-    (let [resp (test-handler (pull-request '{:private {:items ?all}}))]
-      (is (= 403 (:status resp))))))
+  (testing "Single error path returns HTTP 403 with error detail"
+    (let [resp (test-handler (pull-request '{:private {:items ?all}}))
+          body (decode-body resp)]
+      (is (= 403 (:status resp)))
+      (is (= :forbidden (get-in body [:errors 0 :code])))
+      (is (= [:private] (get-in body [:errors 0 :path]))))))
 
 (deftest read-error-partial-success-200-test
-  (testing "Multi-path with one error returns HTTP 200 (partial success)"
-    (let [resp (test-handler (pull-request '{:public {:items ?all} :private {:items ?s}}))]
-      (is (= 200 (:status resp))))))
+  (testing "Multi-path with one error returns HTTP 200 with vars and errors"
+    (let [resp (test-handler (pull-request '{:public {:items ?all} :private {:items ?s}}))
+          body (decode-body resp)]
+      (is (= 200 (:status resp)))
+      (is (vector? (get body 'all)) "Successful branch returns vars")
+      (is (= :forbidden (get-in body [:errors 0 :code])) "Error branch reported")
+      (is (= [:private] (get-in body [:errors 0 :path]))))))
 
 (deftest read-error-all-paths-error-403-test
-  (testing "All paths with error returns HTTP 403"
+  (testing "All paths with error returns HTTP 403 with all errors"
     (let [all-error-api (fn [_req]
                           {:data   {:a {:error {:type :forbidden :message "No"}}
                                     :b {:error {:type :forbidden :message "No"}}}
                            :errors {:detect :error :codes {:forbidden 403}}})
           handler (http/make-handler all-error-api)
-          resp (handler (pull-request '{:a {:x ?x} :b {:y ?y}}))]
-      (is (= 403 (:status resp))))))
+          resp (handler (pull-request '{:a {:x ?x} :b {:y ?y}}))
+          body (decode-body resp)]
+      (is (= 403 (:status resp)))
+      (is (= 2 (count (:errors body))) "Both error paths reported")
+      (is (= #{[:a] [:b]} (set (map :path (:errors body))))))))
 
 (deftest read-nested-error-403-test
   (testing "Nested error detected recursively returns 403"
@@ -140,14 +164,18 @@
       (is (= 403 (:status resp))))))
 
 (deftest read-nested-error-partial-success-200-test
-  (testing "Sibling of nested error returns 200 (partial success)"
+  (testing "Sibling of nested error returns 200 with vars and errors"
     (let [api (fn [_req]
                 {:data   {:section {:ok {:name "Alice"}
                                     :denied {:error {:type :forbidden :message "No"}}}}
                  :errors {:detect :error :codes {:forbidden 403}}})
           handler (http/make-handler api)
-          resp (handler (pull-request '{:section {:ok {:name ?n}}}))]
-      (is (= 200 (:status resp))))))
+          resp (handler (pull-request '{:section {:ok {:name ?n} :denied {:name ?d}}}))
+          body (decode-body resp)]
+      (is (= 200 (:status resp)))
+      (is (= "Alice" (get body 'n)) "Successful branch returns vars")
+      (is (= :forbidden (get-in body [:errors 0 :code])) "Error branch reported")
+      (is (= [:section :denied] (get-in body [:errors 0 :path]))))))
 
 (deftest read-schema-violation-403-test
   (testing "Accessing undeclared schema key returns 403"
@@ -164,14 +192,18 @@
 ;;--- mutation errors ---
 
 (deftest mutation-success-200-test
-  (testing "Successful mutation returns 200"
-    (let [resp (test-handler (pull-request '{:guarded {:items {nil {:name "Carol"}}}}))]
-      (is (= 200 (:status resp))))))
+  (testing "Successful mutation returns 200 with created entity"
+    (let [resp (test-handler (pull-request '{:guarded {:items {nil {:name "Carol"}}}}))
+          body (decode-body resp)]
+      (is (= 200 (:status resp)))
+      (is (= "Carol" (:name (get body 'items))) "Created entity returned"))))
 
 (deftest mutation-error-detected-403-test
   (testing "Mutation error from wrap-mutable detected via :detect returns 403"
-    (let [resp (test-handler (pull-request '{:guarded {:items {{:id 1} {:name "Bob"}}}}))]
-      (is (= 403 (:status resp))))))
+    (let [resp (test-handler (pull-request '{:guarded {:items {{:id 1} {:name "Bob"}}}}))
+          body (decode-body resp)]
+      (is (= 403 (:status resp)))
+      (is (= :forbidden (get-in body [:errors 0 :code]))))))
 
 (deftest mutation-role-gated-forbidden-test
   (testing "Mutation through role-gated error map returns 403 (forbidden detected before collection)"

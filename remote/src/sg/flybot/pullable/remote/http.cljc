@@ -490,22 +490,24 @@
     [data nil]
     (walk-nullify-errors data [] detect-fn)))
 
-(defn- enrich-failure
-  "If failure path matches an error-map entry, replace generic :code/:reason
-   with the application error's :type/:message."
-  [error-response error-map]
-  (if-not (seq error-map)
-    error-response
-    (let [{:keys [path] :as err} (get-in error-response [:errors 0])
-          matched (some (fn [[err-path err-val]]
-                          (when (= err-path (vec (take (count err-path) path)))
-                            err-val))
-                        error-map)]
-      (if matched
-        {:errors [(cond-> {:code   (or (:type matched) (:code err))
-                           :reason (or (:message matched) (:reason err))}
-                    (seq path) (assoc :path path))]}
-        error-response))))
+(defn- pattern-contains-path?
+  "True when the pattern structure references the given key path.
+   Walks the pattern map one level per path segment."
+  [pattern [k & ks]]
+  (and (map? pattern)
+       (contains? pattern k)
+       (or (nil? ks)
+           (pattern-contains-path? (get pattern k) ks))))
+
+(defn- error-map->errors
+  "Convert error-map from nullify-errors into response error maps."
+  [error-map]
+  (when (seq error-map)
+    (mapv (fn [[path err]]
+            (cond-> {:code   (or (:type err) :unknown)
+                     :reason (or (:message err) "Unknown error")}
+              (seq path) (assoc :path path)))
+          error-map)))
 
 (defn- detect-path-error
   "Walk path checking for errors at each step via detect-fn.
@@ -547,6 +549,7 @@
 
 (defn execute
   "Execute a pull pattern against an api-fn. Returns vars map or {:errors [...]}.
+   On partial success, detected errors are attached as ::detected-errors metadata.
 
    Used by both the Ring handler and direct callers (e.g., browser sandbox).
 
@@ -573,12 +576,21 @@
                            (not (:resolve opts)) (assoc :resolve safe-resolve)
                            (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
                            schema (assoc :schema schema)))
-               result (compiled (pattern/vmr clean-data))]
+               result (compiled (pattern/vmr clean-data))
+               detected (some->> (error-map->errors error-map)
+                                 (filterv #(pattern-contains-path?
+                                            resolved (:path %)))
+                                 seq vec)]
            (-> (if (pattern/failure? result)
-                 (enrich-failure
-                  (failure (match-failure->error result))
-                  error-map)
-                 (success (:val result) (:vars result)))
+                 (let [pattern-err (match-failure->error result)
+                       covered? (some (fn [{:keys [path]}]
+                                        (and (seq path) (:path pattern-err)
+                                             (= path (vec (take (count path)
+                                                                (:path pattern-err))))))
+                                      detected)]
+                   (failure (if covered? detected (conj (or detected []) pattern-err))))
+                 (cond-> (success (:val result) (:vars result))
+                   detected (vary-meta assoc ::detected-errors detected)))
                (vary-meta assoc ::error-codes (:codes errors))))))
      (catch #?(:clj Exception :cljs js/Error) e
        (failure (error :execution-error
@@ -611,7 +623,10 @@
                                        (str "Failed to decode: "
                                             #?(:clj (.getMessage e) :cljs (.-message e))))))))
         error-codes (::error-codes (meta response))
-        {:keys [body content-type]} (encode-response response res-fmt)]
+        detected-errors (::detected-errors (meta response))
+        wire-response (cond-> response
+                        (seq detected-errors) (assoc :errors detected-errors))
+        {:keys [body content-type]} (encode-response wire-response res-fmt)]
     (ring-response (response->http-status response error-codes) body content-type)))
 
 (defn- handle-schema [api-fn ring-request]
@@ -758,9 +773,23 @@
   (:errors (execute test-api-fn '{:private {:items ?all}}))
   ;=>> [{:code :forbidden :reason "Not authorized" :path [:private]}]
 
-  ;; partial success: error branch skipped, good branch succeeds
-  (execute test-api-fn '{:public {:items ?all} :private {:items ?secret}})
-  ;=>> {'all vector?}
+  ;; partial success: good branch succeeds, error branch in metadata
+  (let [r (execute test-api-fn '{:public {:items ?all} :private {:items ?secret}})]
+    [(get r 'all) (::detected-errors (meta r))])
+  ;=>> [vector? [{:code :forbidden :reason "Not authorized" :path [:private]}]]
+
+  ;; all error paths → all errors in response
+  (def test-multi-error-api-fn
+    (fn [_ctx]
+      {:data   {:a {:error {:type :forbidden :message "Role :a required"}}
+                :b {:error {:type :forbidden :message "Role :b required"}}}
+       :errors {:detect :error :codes {:forbidden 403}}}))
+
+  (let [errs (:errors (execute test-multi-error-api-fn '{:a {:x ?x} :b {:y ?y}}))]
+    [(count errs)
+     (set (map :code errs))
+     (set (map :path errs))])
+  ;=>> [2 #{:forbidden} #{[:a] [:b]}]
 
   ;; --- read: nested error detection ---
 
@@ -775,13 +804,15 @@
   (:errors (execute test-nested-error-api-fn '{:section {:denied {:name ?n}}}))
   ;=>> [{:code :forbidden :reason "Access denied" :path [:section :denied]}]
 
-  ;; sibling of nested error → succeeds
-  (execute test-nested-error-api-fn '{:section {:ok {:name ?n}}})
-  ;=>> {'n "Alice"}
+  ;; sibling of nested error → succeeds, no leaked errors
+  (let [r (execute test-nested-error-api-fn '{:section {:ok {:name ?n}}})]
+    [(get r 'n) (::detected-errors (meta r))])
+  ;=>> ["Alice" nil]
 
-  ;; mixed: ok succeeds, denied skipped → partial success
-  (execute test-nested-error-api-fn '{:section {:ok {:name ?n} :denied {:name ?d}}})
-  ;=>> {'n "Alice"}
+  ;; mixed: ok succeeds, denied error in metadata → partial success
+  (let [r (execute test-nested-error-api-fn '{:section {:ok {:name ?n} :denied {:name ?d}}})]
+    [(get r 'n) (::detected-errors (meta r))])
+  ;=>> ["Alice" [{:code :forbidden :reason "Access denied" :path [:section :denied]}]]
 
   ;; --- read: custom detect-fn ---
 
