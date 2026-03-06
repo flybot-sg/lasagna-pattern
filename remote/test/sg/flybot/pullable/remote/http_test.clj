@@ -239,3 +239,42 @@
           handler (http/make-handler api)
           resp (handler (pull-request '{:x {nil {:a 1}}}))]
       (is (= 500 (:status resp))))))
+
+;;--- ILookup error detection ---
+
+(deftest read-ilookup-error-partial-success-test
+  (testing "Error inside ILookup detected, sibling succeeds → 200 partial"
+    (let [api (fn [_req]
+                {:data   {:ok  (coll/lookup {:name (delay "Alice")})
+                          :err (coll/lookup {:name (delay {:error {:type    :forbidden
+                                                                   :message "No access"}})})}
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request '{:ok {:name ?n} :err {:name ?e}}))
+          body (decode-body resp)]
+      (is (= 200 (:status resp)))
+      (is (= "Alice" (get body 'n)))
+      (is (= :forbidden (get-in body [:errors 0 :code])))
+      (is (= [:err :name] (get-in body [:errors 0 :path]))))))
+
+(deftest read-ilookup-all-error-test
+  (testing "All ILookup paths error → 403"
+    (let [api (fn [_req]
+                {:data   (coll/lookup
+                          {:a (delay {:error {:type :forbidden :message "No"}})
+                           :b (delay {:error {:type :forbidden :message "No"}})})
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request '{:a ?x :b ?y}))]
+      (is (= 403 (:status resp))))))
+
+(deftest read-ilookup-intermediate-error-test
+  (testing "Error at intermediate ILookup node → 403"
+    (let [api (fn [_req]
+                {:data   {:role (coll/lookup
+                                 {:resource {:error {:type    :forbidden
+                                                     :message "No access"}}})}
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request '{:role {:resource {:name ?n}}}))]
+      (is (= 403 (:status resp))))))

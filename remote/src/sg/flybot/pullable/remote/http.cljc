@@ -484,63 +484,105 @@
 (defn- nullify-errors
   "Replace detected error values with nil in the data map, recursively.
    Returns [cleaned-data {path error-info}].
+   Only walks standard maps — ILookup errors are handled by detect-read-errors.
    detect-fn: (fn [v] -> error-map | nil), built by make-detect-fn."
   [data detect-fn]
-  (if-not detect-fn
+  (if (or (not detect-fn) (not (map? data)))
     [data nil]
     (walk-nullify-errors data [] detect-fn)))
 
+(defn- path-prefix?
+  "True if `prefix` is a prefix of `path`."
+  [prefix path]
+  (and (seq prefix) (seq path)
+       (<= (count prefix) (count path))
+       (= prefix (subvec (vec path) 0 (count prefix)))))
+
+(defn- extract-var-paths
+  "Extract paths from pattern root to variable-containing leaves.
+   Returns a seq of keyword vectors, e.g. [[:a :b] [:a :c] [:d]]."
+  ([pattern] (extract-var-paths pattern []))
+  ([pattern prefix]
+   (when (map? pattern)
+     (mapcat (fn [[k v]]
+               (let [path (conj prefix k)]
+                 (if (map? v)
+                   (extract-var-paths v path)
+                   (when (contains-variables? v) [path]))))
+             pattern))))
+
 (defn- trim-pattern
-  "Remove pattern keys where data has nil values at known error paths.
-   Walks pattern and data in parallel, only descending into standard maps.
+  "Remove pattern keys at paths where errors were detected.
+   Descends into sub-patterns when the current path is a prefix of any error path.
    Returns trimmed pattern, or nil if all keys were removed."
-  ([pattern data error-paths]
-   (trim-pattern pattern data error-paths []))
-  ([pattern data error-paths current-path]
+  ([pattern error-paths]
+   (trim-pattern pattern error-paths []))
+  ([pattern error-paths current-path]
    (when (map? pattern)
      (let [trimmed (reduce-kv
                     (fn [acc k v]
-                      (let [child-path (conj current-path k)
-                            data-v (when (map? data) (get data k))]
-                        (if (and (nil? data-v) (contains? error-paths child-path))
+                      (let [child-path (conj current-path k)]
+                        (cond
+                          (contains? error-paths child-path)
                           acc
-                          (if (and (map? v) (map? data-v))
-                            (let [v' (trim-pattern v data-v error-paths child-path)]
-                              (if (seq v') (assoc acc k v') acc))
-                            (assoc acc k v)))))
+                          (and (map? v)
+                               (some #(path-prefix? child-path %) error-paths))
+                          (let [v' (trim-pattern v error-paths child-path)]
+                            (if (seq v') (assoc acc k v') acc))
+                          :else
+                          (assoc acc k v))))
                     {}
                     pattern)]
        (when (seq trimmed) trimmed)))))
 
 ^:rct/test
 (comment
+  ;; extract-var-paths — flat pattern
+  (set (extract-var-paths '{:a ?x :b ?y}))
+  ;=> #{[:a] [:b]}
+
+  ;; extract-var-paths — nested pattern
+  (extract-var-paths '{:a {:b ?x}})
+  ;=> [[:a :b]]
+
+  ;; extract-var-paths — mixed depths
+  (set (extract-var-paths '{:a {:b ?x :c ?y} :d ?z}))
+  ;=> #{[:a :b] [:a :c] [:d]}
+
+  ;; extract-var-paths — extended variable form
+  (extract-var-paths '{:a (?x :when string?)})
+  ;=> [[:a]]
+
+  ;; extract-var-paths — literal values ignored
+  (extract-var-paths '{:a "literal" :b ?x})
+  ;=> [[:b]]
+
+  ;; extract-var-paths — nil pattern
+  (extract-var-paths nil)
+  ;=> nil
+
   ;; trim-pattern: removes keys at known error paths
   (trim-pattern '{:a {:x ?x} :b {:y ?y}}
-                {:a {:x 1} :b nil}
                 #{[:b]})
   ;=> '{:a {:x ?x}}
 
   ;; trim-pattern: nested error removal
   (trim-pattern '{:section {:ok {:name ?n} :denied {:name ?d}}}
-                {:section {:ok {:name "Alice"} :denied nil}}
                 #{[:section :denied]})
   ;=> '{:section {:ok {:name ?n}}}
 
   ;; trim-pattern: all keys error -> nil
   (trim-pattern '{:a {:x ?x} :b {:y ?y}}
-                {:a nil :b nil}
                 #{[:a] [:b]})
   ;=> nil
 
   ;; trim-pattern: no error paths -> pattern unchanged
   (trim-pattern '{:a ?x :b ?y}
-                {:a 1 :b 2}
                 #{})
   ;=> '{:a ?x :b ?y}
 
   ;; trim-pattern: sub-pattern entirely empty after trimming -> parent removed
   (trim-pattern '{:section {:denied {:name ?d}}}
-                {:section {:denied nil}}
                 #{[:section :denied]})
   ;=> nil
   )
@@ -553,13 +595,6 @@
        (contains? pattern k)
        (or (nil? ks)
            (pattern-contains-path? (get pattern k) ks))))
-
-(defn- path-prefix?
-  "True if `prefix` is a prefix of `path`."
-  [prefix path]
-  (and (seq prefix) (seq path)
-       (<= (count prefix) (count path))
-       (= prefix (subvec (vec path) 0 (count prefix)))))
 
 (defn- error-map->errors
   "Convert error-map from nullify-errors into response error maps."
@@ -588,6 +623,27 @@
       (if-let [err (when detect-fn (detect-fn m))]
         [nil (assoc err :path traversed)]
         (recur (get m k) ks (conj traversed k))))))
+
+(defn- detect-read-errors
+  "Detect errors along var paths, including through ILookup.
+   Checks both intermediate nodes (via detect-path-error) and leaf values.
+   Returns {path error-data} map, or nil if no errors."
+  [data var-paths detect-fn]
+  (when detect-fn
+    (let [errors (reduce
+                  (fn [acc path]
+                    (let [[val err] (detect-path-error data path detect-fn)]
+                      (if err
+                        (let [ep (:path err)]
+                          (cond-> acc
+                            (not (contains? acc ep)) (assoc ep (dissoc err :path))))
+                        (if-let [leaf-err (detect-fn val)]
+                          (cond-> acc
+                            (not (contains? acc path)) (assoc path leaf-err))
+                          acc))))
+                  {}
+                  var-paths)]
+      (when (seq errors) errors))))
 
 (defn- execute-mutation
   "Execute a mutation against the API collection.
@@ -630,14 +686,18 @@
 
 (defn- execute-read
   "Execute a read pattern against api-fn data.
-   Detects errors, trims pattern, compiles, matches, and classifies the result."
+   Detects errors in both standard maps (walk-nullify-errors) and ILookup values
+   (detect-read-errors via var paths), trims pattern, compiles, matches, classifies."
   [api-fn ctx pattern opts]
   (let [{:keys [data schema errors]} (api-fn ctx)
         detect-fn   (make-detect-fn (:detect errors))
-        [clean-data error-map] (nullify-errors data detect-fn)
+        [clean-data map-errors] (nullify-errors data detect-fn)
+        var-paths   (extract-var-paths pattern)
+        path-errors (detect-read-errors data var-paths detect-fn)
+        error-map   (merge map-errors path-errors)
         error-paths (when (seq error-map) (set (keys error-map)))
         trimmed     (if error-paths
-                      (trim-pattern pattern clean-data error-paths)
+                      (trim-pattern pattern error-paths)
                       pattern)
         detected    (relevant-errors error-map pattern)]
     (-> (if-not trimmed
