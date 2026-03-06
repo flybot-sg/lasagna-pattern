@@ -589,12 +589,14 @@
 
 (defn- detect-path-error
   "Walk path checking for errors at each step via detect-fn.
+   Only checks standard maps — ILookup implementations are traversed but not checked,
+   since calling detect-fn on custom ILookups could trigger side effects.
    Returns [value nil] on success, [nil err-map] with :path on error."
   [data path detect-fn]
   (loop [m data, [k & ks] path, traversed []]
     (if-not k
       [m nil]
-      (if-let [err (when detect-fn (detect-fn m))]
+      (if-let [err (when (and detect-fn (map? m)) (detect-fn m))]
         [nil (assoc err :path traversed)]
         (recur (get m k) ks (conj traversed k))))))
 
@@ -611,7 +613,7 @@
                         (let [ep (:path err)]
                           (cond-> acc
                             (not (contains? acc ep)) (assoc ep (dissoc err :path))))
-                        (if-let [leaf-err (detect-fn val)]
+                        (if-let [leaf-err (when (map? val) (detect-fn val))]
                           (cond-> acc
                             (not (contains? acc path)) (assoc path leaf-err))
                           acc))))
