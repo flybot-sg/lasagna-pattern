@@ -465,32 +465,6 @@
   (when detect
     (if (keyword? detect) #(get % detect) detect)))
 
-(defn- walk-nullify-errors
-  "Walk a map recursively, replacing detected error values with nil.
-   Only descends into standard maps (map?), never into ILookup implementations
-   (collections, lookups) to avoid triggering lazy side effects."
-  [m path detect-fn]
-  (reduce-kv
-   (fn [[m' errors] k v]
-     (if (map? v)
-       (if-let [err (detect-fn v)]
-         [(assoc m' k nil) (assoc errors (conj path k) err)]
-         (let [[v' sub-errors] (walk-nullify-errors v (conj path k) detect-fn)]
-           [(assoc m' k v') (merge errors sub-errors)]))
-       [m' errors]))
-   [m {}]
-   m))
-
-(defn- nullify-errors
-  "Replace detected error values with nil in the data map, recursively.
-   Returns [cleaned-data {path error-info}].
-   Only walks standard maps — ILookup errors are handled by detect-read-errors.
-   detect-fn: (fn [v] -> error-map | nil), built by make-detect-fn."
-  [data detect-fn]
-  (if (or (not detect-fn) (not (map? data)))
-    [data nil]
-    (walk-nullify-errors data [] detect-fn)))
-
 (defn- path-prefix?
   "True if `prefix` is a prefix of `path`."
   [prefix path]
@@ -597,7 +571,7 @@
            (pattern-contains-path? (get pattern k) ks))))
 
 (defn- error-map->errors
-  "Convert error-map from nullify-errors into response error maps."
+  "Convert error-map {path error-data} into response error vectors."
   [error-map]
   (when (seq error-map)
     (mapv (fn [[path err]]
@@ -686,15 +660,13 @@
 
 (defn- execute-read
   "Execute a read pattern against api-fn data.
-   Detects errors in both standard maps (walk-nullify-errors) and ILookup values
-   (detect-read-errors via var paths), trims pattern, compiles, matches, classifies."
+   Detects errors along var paths (via detect-path-error, works through ILookup),
+   trims pattern at error paths, compiles, matches, and classifies the result."
   [api-fn ctx pattern opts]
   (let [{:keys [data schema errors]} (api-fn ctx)
         detect-fn   (make-detect-fn (:detect errors))
-        [clean-data map-errors] (nullify-errors data detect-fn)
         var-paths   (extract-var-paths pattern)
-        path-errors (detect-read-errors data var-paths detect-fn)
-        error-map   (merge map-errors path-errors)
+        error-map   (detect-read-errors data var-paths detect-fn)
         error-paths (when (seq error-map) (set (keys error-map)))
         trimmed     (if error-paths
                       (trim-pattern pattern error-paths)
@@ -708,7 +680,7 @@
                             (not (:resolve opts)) (assoc :resolve safe-resolve)
                             (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
                             schema (assoc :schema schema)))
-                result   (compiled (pattern/vmr clean-data))]
+                result   (compiled (pattern/vmr data))]
             (classify-result result detected)))
         (vary-meta assoc ::error-codes (:codes errors)))))
 
