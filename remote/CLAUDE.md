@@ -52,11 +52,11 @@ Ring Handler (make-handler / wrap-api)
     ├── parse-mutation(pattern) → mutation | nil
     │         │                        │
     │    MUTATION PATH            READ PATH
-    │    detect-path-error       Detect errors in data
-    │      (errors along path)     (walk-nullify-errors)
+    │    detect-path-error       detect-read-errors
+    │      (errors along path)     (walk var paths w/ :detect)
     │    Walk path to find       Trim pattern at error paths
     │      the collection        Compile trimmed pattern
-    │    mutate!(coll, q, v)     Match against clean data
+    │    mutate!(coll, q, v)     Match against original data
     │    detect errors           Classify: partial success
     │    Return full entity        or full failure
     │         │                        │
@@ -150,7 +150,7 @@ Collections return errors as data (not exceptions):
 
 **Mutations** are all-or-nothing: Remote checks the mutation result with `:detect`, maps `:type` to HTTP status via `:codes`. Path-level errors (e.g., role gate returning `{:error ...}` along the path) are detected before attempting the mutation.
 
-**Reads** support partial success: Before pattern matching, `execute-read` walks the data tree looking for error values (via `:detect`). Detected errors are nullified, the pattern is trimmed to remove error paths, and matching proceeds on clean data. If some branches succeed and others fail:
+**Reads** support partial success: Before pattern matching, `execute-read` extracts var paths from the pattern and walks each path through the data (including through ILookup) checking for errors via `:detect`. The pattern is trimmed to remove error paths, and matching proceeds on the original data. If some branches succeed and others fail:
 - Successful bindings are returned normally
 - Detected errors are attached as `::detected-errors` metadata and included in the wire response as `:errors`
 

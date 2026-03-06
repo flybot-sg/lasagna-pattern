@@ -1,6 +1,6 @@
 # Remote Pull Protocol Specification
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft for Review
 **Authors:** Pullable Contributors
 
@@ -562,12 +562,13 @@ Clients that don't need documentation can ignore the properties maps - the struc
 ┌──────────────────────────┐    ┌─────────────────────────────┐
 │   Execute Mutation       │    │   Execute Read              │
 │   1. detect-path-error   │    │   1. api-fn(req) → data     │
-│      (errors along path) │    │   2. Detect & nullify errors│
-│   2. mutate!(coll, q, v) │    │      (walk data w/ :detect) │
-│   3. detect error result │    │   3. Trim pattern at errors │
-│   All-or-nothing.        │    │   4. compile(trimmed,       │
-└──────────────┬───────────┘    │        {:schema, :resolve}) │
-               │                │   5. match(clean data)      │
+│      (errors along path) │    │   2. detect-read-errors     │
+│   2. mutate!(coll, q, v) │    │      (walk var paths w/     │
+│   3. detect error result │    │       :detect, incl ILookup)│
+│   All-or-nothing.        │    │   3. Trim pattern at errors │
+└──────────────┬───────────┘    │   4. compile(trimmed,       │
+               │                │        {:schema, :resolve}) │
+               │                │   5. match(original data)   │
                │                │   6. Classify: partial      │
                │                │      success or failure     │
                │                └──────────────┬──────────────┘

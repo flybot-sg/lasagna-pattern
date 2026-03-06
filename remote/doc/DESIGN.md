@@ -167,8 +167,8 @@ The schema returned is the **actual schema** that will be enforced when processi
                     └─────────────┬─────────────┘
                                   │
                     ┌─────────────▼─────────────┐
-                    │ Detect errors in data      │
-                    │ (walk + nullify via :detect)│
+                    │ detect-read-errors         │
+                    │ (walk var paths w/ :detect) │
                     │ Trim pattern at error paths│
                     └─────────────┬─────────────┘
                                   │
@@ -178,7 +178,7 @@ The schema returned is the **actual schema** that will be enforced when processi
                     └─────────────┬─────────────┘
                                   │
                     ┌─────────────▼─────────────┐
-                    │ match against clean data   │
+                    │ match against original data│
                     │ → triggers only needed     │
                     │   computations             │
                     └─────────────┬─────────────┘

@@ -158,7 +158,7 @@ bb dev examples/flybot-site  # Start nREPL
 ```
 
 **Key patterns demonstrated:**
-- Role-as-top-level authorization (nil if session lacks role)
+- Role-as-top-level authorization (error map if session lacks role)
 - ILookup-based collections for lazy data access
 - Ownership enforcement via `coll/wrap-mutable`
 - Non-enumerable resources via `coll/lookup` with delay-based laziness
