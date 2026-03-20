@@ -461,7 +461,11 @@
 (defn- make-detect-fn
   "Build detect function from :detect config.
    Keyword → (fn [v] (get v kw)), function → wrapped with error context, nil → nil.
-   User-provided functions are wrapped so exceptions surface with a descriptive message."
+   User-provided functions are wrapped so exceptions surface with a descriptive message.
+
+   Contract: detect-fn must return nil (no error) or a map with :type and
+   optional :message. Non-map truthy returns (e.g. strings, keywords) will
+   cause downstream errors in path-walking and error classification."
   [detect]
   (when detect
     (if (keyword? detect)
@@ -591,17 +595,10 @@
   (path-prefix? [:a :b] [:a]) ;=> false
   )
 
-(defn- pattern-contains-path?
-  "True when the pattern structure references the given key path.
-   Walks the pattern map one level per path segment."
-  [pattern [k & ks]]
-  (and (map? pattern)
-       (contains? pattern k)
-       (or (nil? ks)
-           (pattern-contains-path? (get pattern k) ks))))
-
 (defn- error-map->errors
-  "Convert error-map {path error-data} into response error vectors."
+  "Convert error-map {path error-data} into wire-format error vectors.
+   Error paths are always pattern-derived (from extract-var-paths), so no
+   filtering is needed — all errors are relevant by construction."
   [error-map]
   (when (seq error-map)
     (mapv (fn [[path err]]
@@ -609,15 +606,6 @@
                      :reason (or (:message err) "Unknown error")}
               (seq path) (assoc :path path)))
           error-map)))
-
-(defn- relevant-errors
-  "Filter error-map to errors whose paths are referenced by the pattern.
-   Root-level errors (path []) are always relevant."
-  [error-map pattern]
-  (some->> (error-map->errors error-map)
-           (filterv (fn [{:keys [path]}]
-                      (or (nil? path) (pattern-contains-path? pattern path))))
-           not-empty))
 
 (defn- detect-path-error
   "Walk path checking for errors at each step via detect-fn.
@@ -706,7 +694,7 @@
         trimmed     (if error-paths
                       (trim-pattern pattern error-paths)
                       pattern)
-        detected    (relevant-errors error-map pattern)]
+        detected    (error-map->errors error-map)]
     (-> (if-not trimmed
           (failure detected)
           (let [compiled (pattern/compile-pattern
