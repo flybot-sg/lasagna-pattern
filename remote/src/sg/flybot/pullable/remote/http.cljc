@@ -460,17 +460,30 @@
 
 (defn- make-detect-fn
   "Build detect function from :detect config.
-   Keyword → (fn [v] (get v kw)), function → used directly, nil → nil."
+   Keyword → (fn [v] (get v kw)), function → wrapped with error context, nil → nil.
+   Wraps user-provided functions so exceptions surface with a descriptive message."
   [detect]
   (when detect
-    (if (keyword? detect) #(get % detect) detect)))
+    (let [f (if (keyword? detect) #(get % detect) detect)]
+      (fn [v]
+        (try
+          (f v)
+          (catch #?(:clj Exception :cljs js/Error) e
+            (throw (ex-info (str "Error detection function failed: "
+                                 #?(:clj (.getMessage e) :cljs (.-message e)))
+                            {:detect detect}
+                            e))))))))
 
 (defn- path-prefix?
-  "True if `prefix` is a prefix of `path`."
+  "True if `prefix` is a prefix of `path` (inclusive).
+   An empty prefix [] matches any non-empty path.
+   Equal paths match (e.g. [:a] is a prefix of [:a])."
   [prefix path]
-  (and (seq prefix) (seq path)
-       (<= (count prefix) (count path))
-       (= prefix (subvec (vec path) 0 (count prefix)))))
+  (let [pc (count prefix)
+        pathc (count path)]
+    (and (<= pc pathc)
+         (or (zero? pc)
+             (= prefix (subvec (vec path) 0 pc))))))
 
 (defn- extract-var-paths
   "Extract paths from pattern root to variable-containing leaves.
@@ -492,7 +505,8 @@
   ([pattern error-paths]
    (trim-pattern pattern error-paths []))
   ([pattern error-paths current-path]
-   (when (map? pattern)
+   (when (and (map? pattern)
+              (not (contains? error-paths current-path)))
      (let [trimmed (reduce-kv
                     (fn [acc k v]
                       (let [child-path (conj current-path k)]
@@ -559,6 +573,21 @@
   (trim-pattern '{:section {:denied {:name ?d}}}
                 #{[:section :denied]})
   ;=> nil
+
+  ;; trim-pattern: root-level error path [] -> entire pattern trimmed
+  (trim-pattern '{:a ?x :b ?y}
+                #{[]})
+  ;=> nil
+
+  ;; path-prefix?: empty prefix matches any path
+  (path-prefix? [] [:a]) ;=> true
+  (path-prefix? [] [:a :b]) ;=> true
+
+  ;; path-prefix?: equal paths match
+  (path-prefix? [:a] [:a]) ;=> true
+
+  ;; path-prefix?: longer prefix doesn't match shorter path
+  (path-prefix? [:a :b] [:a]) ;=> false
   )
 
 (defn- pattern-contains-path?
@@ -581,16 +610,19 @@
           error-map)))
 
 (defn- relevant-errors
-  "Filter error-map to errors whose paths are referenced by the pattern."
+  "Filter error-map to errors whose paths are referenced by the pattern.
+   Root-level errors (path []) are always relevant."
   [error-map pattern]
   (some->> (error-map->errors error-map)
-           (filterv #(pattern-contains-path? pattern (:path %)))
-           seq vec))
+           (filterv #(let [p (:path %)]
+                       (or (nil? p) (pattern-contains-path? pattern p))))
+           not-empty))
 
 (defn- detect-path-error
   "Walk path checking for errors at each step via detect-fn.
-   Only checks standard maps — ILookup implementations are traversed but not checked,
-   since calling detect-fn on custom ILookups could trigger side effects.
+   Only checks standard maps (via `map?` guard) — pure ILookup implementations
+   pass through unchecked because `map?` returns false for reified ILookup,
+   and calling detect-fn on them could trigger side effects or lazy evaluation.
    Returns [value nil] on success, [nil err-map] with :path on error."
   [data path detect-fn]
   (loop [m data, [k & ks] path, traversed []]
@@ -906,6 +938,21 @@
      (set (map :path errs))])
   ;=>> [2 #{:forbidden} #{[:a] [:b]}]
 
+  ;; --- read: root-level error detection ---
+
+  (def test-root-error-api-fn
+    (fn [_ctx]
+      {:data   {:error {:type :forbidden :message "Not authenticated"}}
+       :errors {:detect :error :codes {:forbidden 403}}}))
+
+  ;; root-level error → all paths fail, no :path in error (root)
+  (:errors (execute test-root-error-api-fn '{:items ?all}))
+  ;=>> [{:code :forbidden :reason "Not authenticated"}]
+
+  ;; root-level error → multi-key pattern still fails entirely
+  (:errors (execute test-root-error-api-fn '{:a ?x :b ?y}))
+  ;=>> [{:code :forbidden :reason "Not authenticated"}]
+
   ;; --- read: nested error detection ---
 
   (def test-nested-error-api-fn
@@ -940,6 +987,17 @@
 
   (:errors (execute test-custom-detect-api-fn '{:resource {:name ?n}}))
   ;=>> [{:code :forbidden :reason "Access denied" :path [:resource]}]
+
+  ;; --- read: throwing detect-fn wraps with descriptive message ---
+
+  (def test-throwing-detect-api-fn
+    (fn [_ctx]
+      {:data   {:items {:name "Alice"}}
+       :errors {:detect (fn [_] (throw (ex-info "kaboom" {})))}}))
+
+  (-> (execute test-throwing-detect-api-fn '{:items {:name ?n}})
+      :errors first :reason)
+  ;=>> #"Error detection function failed: kaboom"
 
   ;; --- read: without :errors config, error maps pass through as regular data ---
 
