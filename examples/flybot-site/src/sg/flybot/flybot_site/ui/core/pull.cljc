@@ -15,7 +15,7 @@
 
 (def ^:private init-spec
   "Fetch posts and current user in a single pull request.
-   Always includes :member — server returns {} for guests (safe nil bindings)."
+   Always includes :member — server skips error branches for guests (partial success)."
   {:pattern '{:guest {:posts ?posts} :member {:me ?user}}
    :then    (fn [r] {:db #(db/init-fetched % r)})})
 

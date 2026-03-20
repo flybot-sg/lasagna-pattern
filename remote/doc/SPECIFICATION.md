@@ -1,6 +1,6 @@
 # Remote Pull Protocol Specification
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft for Review
 **Authors:** Pullable Contributors
 
@@ -99,6 +99,18 @@ Where each `<error>` is:
  :path   [<key>*]         ;; OPTIONAL - Location in pattern
  :value  <any>}           ;; OPTIONAL - Offending value
 ```
+
+#### Partial Success Response (Reads Only)
+
+When some branches of a read pattern succeed and others contain detected errors, the response includes both bindings and errors:
+
+```clojure
+{<symbol> <value>          ;; Successful bindings
+ ...
+ :errors [<error>+]}      ;; Errors for failed paths
+```
+
+Partial success applies to **reads only**. Mutations are all-or-nothing — a detected error fails the entire mutation.
 
 **Standard Error Codes:**
 
@@ -316,6 +328,8 @@ Where:
 - `query = nil` → CREATE
 - `value = nil` → DELETE
 - Both present → UPDATE
+
+Before calling `mutate!`, the server walks the mutation path checking for detected errors at each step (via `:detect`). If an error is found along the path (e.g., a role gate returning `{:error ...}`), the mutation fails immediately without reaching the collection.
 
 ## 6. Security
 
@@ -546,11 +560,17 @@ Clients that don't need documentation can ignore the properties maps - the struc
                │ mutation                      │ nil (read)
                ▼                               ▼
 ┌──────────────────────────┐    ┌─────────────────────────────┐
-│   Execute Mutation       │    │   Execute Pull Pattern      │
-│   mutate!(coll, q, v)    │    │   1. api-fn(req) → data     │
-└──────────────┬───────────┘    │   2. compile(pattern,       │
+│   Execute Mutation       │    │   Execute Read              │
+│   1. detect-path-error   │    │   1. api-fn(req) → data     │
+│      (errors along path) │    │   2. detect-read-errors     │
+│   2. mutate!(coll, q, v) │    │      (walk var paths w/     │
+│   3. detect error result │    │       :detect, incl ILookup)│
+│   All-or-nothing.        │    │   3. Trim pattern at errors │
+└──────────────┬───────────┘    │   4. compile(trimmed,       │
                │                │        {:schema, :resolve}) │
-               │                │   3. match(data) → result   │
+               │                │   5. match(original data)   │
+               │                │   6. Classify: partial      │
+               │                │      success or failure     │
                │                └──────────────┬──────────────┘
                │                               │
                └───────────────┬───────────────┘
@@ -684,6 +704,13 @@ name        = symbol-chars
 ```
 
 ## Appendix B: Changelog
+
+### v0.3 (Draft)
+- Error detection in reads via `:detect` config (previously only mutations)
+- Partial success for reads: successful bindings + `:errors` for failed paths
+- Nested error detection at any depth in data tree
+- Path-level error detection for mutations before attempting `mutate!`
+- Note: partial success applies to reads only; mutations remain all-or-nothing
 
 ### v0.2 (Draft)
 - Added parameter substitution ($params)

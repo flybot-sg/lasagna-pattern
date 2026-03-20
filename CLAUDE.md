@@ -62,7 +62,7 @@ remote     — receives patterns over HTTP, detects mutations vs reads, routes a
 |-----------|-------------|--------|
 | `pattern/` | Core pattern DSL for matching/transforming Clojure data | Active |
 | `collection/` | CRUD collection abstraction — makes patterns bidirectional (read + write + response) | Active |
-| `remote/` | HTTP transport — sends patterns over the wire, returns mutation results | Active |
+| `remote/` | HTTP transport — sends patterns over the wire, detects errors in reads (partial success) and mutations | Active |
 | `examples/flybot-site/` | Flybot.sg site - public blog, employee authoring | Active |
 | `examples/pull-playground/` | Interactive SPA for learning pull patterns (sandbox + remote) | Active |
 
@@ -158,7 +158,7 @@ bb dev examples/flybot-site  # Start nREPL
 ```
 
 **Key patterns demonstrated:**
-- Role-as-top-level authorization (nil if session lacks role)
+- Role-as-top-level authorization (error map if session lacks role)
 - ILookup-based collections for lazy data access
 - Ownership enforcement via `coll/wrap-mutable`
 - Non-enumerable resources via `coll/lookup` with delay-based laziness

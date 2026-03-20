@@ -52,11 +52,13 @@ Ring Handler (make-handler / wrap-api)
     ├── parse-mutation(pattern) → mutation | nil
     │         │                        │
     │    MUTATION PATH            READ PATH
-    │    Walk path to find       Compile pattern via
-    │      the collection          pattern/match-fn
-    │    mutate!(coll, q, v)     Match against collections
-    │    detect errors             (ILookup + Seqable)
-    │    Return full entity      Return variable bindings
+    │    detect-path-error       detect-read-errors
+    │      (errors along path)     (walk var paths w/ :detect)
+    │    Walk path to find       Trim pattern at error paths
+    │      the collection        Compile trimmed pattern
+    │    mutate!(coll, q, v)     Match against original data
+    │    detect errors           Classify: partial success
+    │    Return full entity        or full failure
     │         │                        │
     │         └────────┬───────────────┘
     │                  ▼
@@ -93,7 +95,7 @@ The function passed to `make-handler` receives a Ring request and returns:
 ```clojure
 {:data   {...}     ; Map of collections/lookups (ILookup + Mutable)
  :schema {...}     ; Malli schemas per top-level key (for validation)
- :errors {:detect :error              ; keyword or fn to detect errors
+ :errors {:detect :error              ; keyword or fn → must return nil or {:type _ :message _}
           :codes {:forbidden 403}}    ; error type → HTTP status
  :sample {...}}    ; Sample data for GET /_schema
 ```
@@ -141,12 +143,22 @@ Collections return errors as data (not exceptions):
 {:error {:type :forbidden :message "You don't own this post"}}
 
 ;; Error config in api-fn:
-{:detect :error                ; how to find the error in mutation results
+{:detect :error                ; keyword or fn to detect errors in data
  :codes  {:forbidden 403       ; error type → HTTP status
           :not-found 404}}
 ```
 
-Remote checks the mutation result with `:detect`, maps `:type` to HTTP status via `:codes`.
+**`:detect` contract:** The detect function (or the value at the detect keyword) must return `nil` for no error, or a map with `:type` (keyword) and optional `:message` (string). Non-map truthy returns (e.g., strings, booleans) violate the contract and will cause runtime errors.
+
+**Mutations** are all-or-nothing: Remote checks the mutation result with `:detect`, maps `:type` to HTTP status via `:codes`. Path-level errors (e.g., role gate returning `{:error ...}` along the path) are detected before attempting the mutation.
+
+**Reads** support partial success: Before pattern matching, `execute-read` extracts var paths from the pattern and walks each path through the data (including through ILookup) checking for errors via `:detect`. The pattern is trimmed to remove error paths, and matching proceeds on the original data. If some branches succeed and others fail:
+- Successful bindings are returned normally
+- Detected errors are attached as `::detected-errors` metadata and included in the wire response as `:errors`
+
+If all pattern paths are error paths, the read fails with the full error list.
+
+**Partial success applies to reads only.** Mutations remain all-or-nothing.
 
 ## Security
 

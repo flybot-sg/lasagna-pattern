@@ -1747,7 +1747,6 @@
      :schema  - schema to validate pattern against at compile time
      :resolve - custom symbol resolver (fn [sym] -> var-or-value)
      :eval-fn - custom form evaluator (fn [form] -> value)
-
    The :resolve and :eval-fn options enable:
    - Sandboxed evaluation for security (e.g., using SCI)
    - CLJS compatibility (provide SCI's resolve/eval)
@@ -1986,6 +1985,10 @@
   ;; map unification: same var with different values fails
   ((compile-pattern '{:a ?x :b ?x}) (vmr {:a 1 :b 2})) ;=>>
   failure?
+
+  ;; error maps pass through as regular data (wildcard binds them)
+  ((compile-pattern '{:a ?x}) (vmr {:a {:error {:type :forbidden}}})) ;=>>
+  {:val {:a {:error {:type :forbidden}}} :vars {'x {:error {:type :forbidden}}}}
 
   ;;-------------------------------------------------------------------
   ;; match-fn macro - pattern matching function

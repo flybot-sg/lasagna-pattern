@@ -409,12 +409,13 @@
                 :roles          (delay (db/get-user-roles-detailed conn user-id))}))
 
 (defn- with-role
-  "Return data if session has role, empty map otherwise.
-   Empty map lets pattern matching succeed with nil bindings — no data leaks."
+  "Return data if session has role, error data otherwise.
+   The :error value is detected by remote's :detect config,
+   producing a :forbidden failure with the correct HTTP 403 status."
   [session role data]
   (if (contains? (:roles session) role)
     data
-    {}))
+    {:error {:type :forbidden :message (str "Role " role " required")}}))
 
 (def ^:private error-config
   "Error handling config for remote layer.
@@ -431,7 +432,7 @@
 
    Returns (fn [ring-request] {:data ... :schema ... :errors ... :sample ...})
 
-   Data structure (role as top-level, nil if session lacks role):
+   Data structure (role as top-level, error map if session lacks role):
    - :guest  - always available: {:posts}
    - :member - requires :member: {:posts, :posts/history, :me, :me/profile}
    - :admin  - requires :admin: {:posts}
@@ -501,13 +502,13 @@
     (every? #(nil? (:user/email (:post/author %))) posts))
   ;=> true
 
-  ;; Guest: :guest always present, other roles empty map
+  ;; Guest: :guest always present, other roles return :forbidden error
   (let [{:keys [data]} (api-fn {})]
     [(some? (:guest data))
-     (= {} (:member data))
-     (= {} (:admin data))
-     (= {} (:owner data))])
-  ;=> [true true true true]
+     (get-in data [:member :error :type])
+     (get-in data [:admin :error :type])
+     (get-in data [:owner :error :type])])
+  ;=> [true :forbidden :forbidden :forbidden]
 
   ;; Member: has :member with :posts, :posts/history, :me
   (db/create-user! conn #:user{:id "m1" :email "m@test.com" :name "M" :picture ""})
@@ -518,8 +519,8 @@
      (some? (get-in data [:member :posts]))
      (some? (get-in data [:member :me]))
      (get-in data [:member :me :email])
-     (= {} (:admin data))])
-  ;=> [true true true "m@test.com" true]
+     (get-in data [:admin :error :type])])
+  ;=> [true true true "m@test.com" :forbidden]
 
   ;; Member: author email visible, Google ID still stripped
   (let [session {:user-id "m1" :user-email "m@test.com" :roles #{:member}}

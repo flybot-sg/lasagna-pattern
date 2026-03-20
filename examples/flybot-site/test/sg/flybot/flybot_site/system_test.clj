@@ -197,9 +197,9 @@
           {:keys [data]} (api-fn {})]  ; No session = guest
       (is (some? (:guest data)) "Guest has :guest")
       (is (some? (get-in data [:guest :posts])) "Guest has :guest :posts")
-      (is (= {} (:member data)) "Guest has empty :member")
-      (is (= {} (:admin data)) "Guest has empty :admin")
-      (is (= {} (:owner data)) "Guest has empty :owner")))
+      (is (= :forbidden (get-in data [:member :error :type])) "Guest gets :forbidden for :member")
+      (is (= :forbidden (get-in data [:admin :error :type])) "Guest gets :forbidden for :admin")
+      (is (= :forbidden (get-in data [:owner :error :type])) "Guest gets :forbidden for :owner")))
 
   (testing "Member has :member with :posts and :me"
     (let [api-fn (::system/api-fn *sys*)
