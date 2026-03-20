@@ -68,6 +68,11 @@
          (.then (fn [{:keys [status ok body]}]
                   (if ok
                     (do (log/log-api-response body)
+                        (when-let [errors (:errors body)]
+                          (doseq [{:keys [code reason path]} errors]
+                            (log/warn "Partial success —" code
+                                      (when path (str "at " path ":"))
+                                      reason)))
                         (on-success body))
                     ;; Extract structured error from response
                     (let [error (if-let [err (first (:errors body))]
