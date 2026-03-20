@@ -461,13 +461,14 @@
 (defn- make-detect-fn
   "Build detect function from :detect config.
    Keyword → (fn [v] (get v kw)), function → wrapped with error context, nil → nil.
-   Wraps user-provided functions so exceptions surface with a descriptive message."
+   User-provided functions are wrapped so exceptions surface with a descriptive message."
   [detect]
   (when detect
-    (let [f (if (keyword? detect) #(get % detect) detect)]
+    (if (keyword? detect)
+      #(get % detect)
       (fn [v]
         (try
-          (f v)
+          (detect v)
           (catch #?(:clj Exception :cljs js/Error) e
             (throw (ex-info (str "Error detection function failed: "
                                  #?(:clj (.getMessage e) :cljs (.-message e)))
@@ -476,7 +477,7 @@
 
 (defn- path-prefix?
   "True if `prefix` is a prefix of `path` (inclusive).
-   An empty prefix [] matches any non-empty path.
+   An empty prefix [] matches any path.
    Equal paths match (e.g. [:a] is a prefix of [:a])."
   [prefix path]
   (let [pc (count prefix)
@@ -614,8 +615,8 @@
    Root-level errors (path []) are always relevant."
   [error-map pattern]
   (some->> (error-map->errors error-map)
-           (filterv #(let [p (:path %)]
-                       (or (nil? p) (pattern-contains-path? pattern p))))
+           (filterv (fn [{:keys [path]}]
+                      (or (nil? path) (pattern-contains-path? pattern path))))
            not-empty))
 
 (defn- detect-path-error
