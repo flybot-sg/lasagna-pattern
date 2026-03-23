@@ -1,13 +1,82 @@
 (ns sg.flybot.flybot-site.ui.core.views
   "UI views — defalias components with namespaced props.
 
-   Components receive data via ::keys and dispatch effect maps directly."
+   Components receive data via ::keys and dispatch effect maps directly.
+   Markdown rendered at runtime via marked + highlight.js."
   (:require [clojure.string :as str]
             [sg.flybot.flybot-site.ui.core.db :as db]
             [sg.flybot.flybot-site.ui.core.log :as log]
             [replicant.alias :refer [defalias]]
-            #?(:cljs ["marked" :refer [marked]])
+            #?(:cljs ["marked" :refer [Marked]])
+            #?(:cljs ["highlight.js/lib/core" :as hljs])
+            #?(:cljs ["highlight.js/lib/languages/clojure" :as hljs-clojure])
+            #?(:cljs ["highlight.js/lib/languages/javascript" :as hljs-js])
+            #?(:cljs ["highlight.js/lib/languages/typescript" :as hljs-ts])
+            #?(:cljs ["highlight.js/lib/languages/python" :as hljs-python])
+            #?(:cljs ["highlight.js/lib/languages/java" :as hljs-java])
+            #?(:cljs ["highlight.js/lib/languages/go" :as hljs-go])
+            #?(:cljs ["highlight.js/lib/languages/rust" :as hljs-rust])
+            #?(:cljs ["highlight.js/lib/languages/ruby" :as hljs-ruby])
+            #?(:cljs ["highlight.js/lib/languages/php" :as hljs-php])
+            #?(:cljs ["highlight.js/lib/languages/c" :as hljs-c])
+            #?(:cljs ["highlight.js/lib/languages/cpp" :as hljs-cpp])
+            #?(:cljs ["highlight.js/lib/languages/csharp" :as hljs-csharp])
+            #?(:cljs ["highlight.js/lib/languages/kotlin" :as hljs-kotlin])
+            #?(:cljs ["highlight.js/lib/languages/swift" :as hljs-swift])
+            #?(:cljs ["highlight.js/lib/languages/sql" :as hljs-sql])
+            #?(:cljs ["highlight.js/lib/languages/bash" :as hljs-bash])
+            #?(:cljs ["highlight.js/lib/languages/json" :as hljs-json])
+            #?(:cljs ["highlight.js/lib/languages/xml" :as hljs-xml])
+            #?(:cljs ["highlight.js/lib/languages/yaml" :as hljs-yaml])
+            #?(:cljs ["highlight.js/lib/languages/css" :as hljs-css])
+            #?(:cljs ["highlight.js/lib/languages/markdown" :as hljs-md])
+            #?(:cljs ["highlight.js/lib/languages/dockerfile" :as hljs-docker])
             #?(:cljs ["@toast-ui/editor" :as toastui])))
+
+;;=============================================================================
+;; Markdown rendering (CLJS only)
+;;=============================================================================
+
+#?(:cljs
+   (do
+     (hljs/registerLanguage "clojure" hljs-clojure)
+     (hljs/registerLanguage "javascript" hljs-js)
+     (hljs/registerLanguage "typescript" hljs-ts)
+     (hljs/registerLanguage "python" hljs-python)
+     (hljs/registerLanguage "java" hljs-java)
+     (hljs/registerLanguage "go" hljs-go)
+     (hljs/registerLanguage "rust" hljs-rust)
+     (hljs/registerLanguage "ruby" hljs-ruby)
+     (hljs/registerLanguage "php" hljs-php)
+     (hljs/registerLanguage "c" hljs-c)
+     (hljs/registerLanguage "cpp" hljs-cpp)
+     (hljs/registerLanguage "csharp" hljs-csharp)
+     (hljs/registerLanguage "kotlin" hljs-kotlin)
+     (hljs/registerLanguage "swift" hljs-swift)
+     (hljs/registerLanguage "sql" hljs-sql)
+     (hljs/registerLanguage "bash" hljs-bash)
+     (hljs/registerLanguage "shell" hljs-bash)
+     (hljs/registerLanguage "json" hljs-json)
+     (hljs/registerLanguage "xml" hljs-xml)
+     (hljs/registerLanguage "html" hljs-xml)
+     (hljs/registerLanguage "yaml" hljs-yaml)
+     (hljs/registerLanguage "css" hljs-css)
+     (hljs/registerLanguage "markdown" hljs-md)
+     (hljs/registerLanguage "dockerfile" hljs-docker)))
+
+#?(:cljs
+   (def marked-instance
+     (let [m (Marked.)]
+       (.use m (clj->js
+                {:renderer
+                 {:code (fn [obj]
+                          (let [code (.-text obj)
+                                lang (.-lang obj)
+                                highlighted (if (and lang (hljs/getLanguage lang))
+                                              (.-value (hljs/highlight code #js {:language lang}))
+                                              (.-value (hljs/highlightAuto code)))]
+                            (str "<pre><code class=\"hljs\">" highlighted "</code></pre>")))}}))
+       m)))
 
 ;;=============================================================================
 ;; Helpers
@@ -43,7 +112,7 @@
   (let [body (-> content db/strip-frontmatter unescape-markdown)]
     #?(:clj [:pre body]
        :cljs (when (seq body)
-               [:div {:innerHTML (marked body)}]))))
+               [:div {:innerHTML (.parse marked-instance body)}]))))
 
 (defn- markdown->text
   "Convert markdown to plain text by rendering to HTML then extracting text.
@@ -51,7 +120,7 @@
   [s]
   #?(:clj s
      :cljs (let [div (js/document.createElement "div")]
-             (set! (.-innerHTML div) (marked s))
+             (set! (.-innerHTML div) (.parse marked-instance s))
              (-> (.-textContent div)
                  (str/replace #"\s+" " ")
                  str/trim))))

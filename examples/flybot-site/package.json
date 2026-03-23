@@ -10,7 +10,8 @@
     "shadow-cljs": "^2.28.22"
   },
   "dependencies": {
-    "marked": "^15.0.6",
-    "@toast-ui/editor": "^3.2.2"
+    "@toast-ui/editor": "^3.2.2",
+    "highlight.js": "^11.11.1",
+    "marked": "^15.0.6"
   }
 }
