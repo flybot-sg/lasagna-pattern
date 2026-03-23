@@ -133,6 +133,10 @@
     :description "Member requires login — returns nil for anonymous users"
     :pattern "{:member ?m}"}
 
+   {:name "Partial success"
+    :description "Guest succeeds, member fails — response has both data and :errors"
+    :pattern "{:guest {:posts {{:post/id 15} {:post/title ?t}}} :member {:me ?user}}"}
+
    ;; --- Schema validation ---
    {:name "Schema error"
     :description "Invalid key — server validates patterns against the schema"
