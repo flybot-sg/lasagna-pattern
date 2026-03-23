@@ -35,9 +35,9 @@ Each component is published independently to Clojars:
 ```clojure
 ;; deps.edn — pick the layer you need
 {:deps
- {sg.flybot/lasagna-pattern    {:mvn/version "0.1.0"}   ;; pattern only
-  sg.flybot/lasagna-collection {:mvn/version "0.1.0"}   ;; + CRUD collections
-  sg.flybot/lasagna-remote     {:mvn/version "0.1.0"}}} ;; + HTTP transport
+ {sg.flybot/lasagna-pattern    {:mvn/version "RELEASE"}   ;; pattern only
+  sg.flybot/lasagna-collection {:mvn/version "RELEASE"}   ;; + CRUD collections
+  sg.flybot/lasagna-remote     {:mvn/version "RELEASE"}}} ;; + HTTP transport
 ```
 
 | Artifact | What you get |

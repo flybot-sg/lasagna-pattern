@@ -61,7 +61,7 @@ remote     — receives patterns over HTTP, detects mutations vs reads, routes a
 | Directory | Description | Status |
 |-----------|-------------|--------|
 | `pattern/` | Core pattern DSL for matching/transforming Clojure data | Active |
-| `collection/` | CRUD collection abstraction — makes patterns bidirectional (read + write + response) | Active |
+| `collection/` | CRUD collection abstraction — wraps data sources in ILookup + Seqable + Counted + Mutable + Wireable | Active |
 | `remote/` | HTTP transport — sends patterns over the wire, detects errors in reads (partial success) and mutations | Active |
 | `examples/flybot-site/` | Flybot.sg site - public blog, employee authoring | Active |
 | `examples/pull-playground/` | Interactive SPA for learning pull patterns (sandbox + remote) | Active |

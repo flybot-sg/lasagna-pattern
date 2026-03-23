@@ -21,10 +21,10 @@ Extracting data from nested structures typically requires manual traversal code 
 
 ```clojure
 ;; deps.edn
-{:deps {sg.flybot/lasagna-pattern {:mvn/version "0.1.2"}}}
+{:deps {sg.flybot/lasagna-pattern {:mvn/version "RELEASE"}}}
 
 ;; Leiningen
-[sg.flybot/lasagna-pattern "0.1.2"]
+[sg.flybot/lasagna-pattern "RELEASE"]
 ```
 
 Only hard dependency is `org.clojure/clojure`. Optional deps: `org.babashka/sci` (sandboxed eval, required for CLJS), `metosin/malli` (schema validation).

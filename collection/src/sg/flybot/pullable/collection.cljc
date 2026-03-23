@@ -1,50 +1,44 @@
 (ns sg.flybot.pullable.collection
-  "CRUD collection abstraction with transactional support.
+  "CRUD collection abstraction — wraps any data source in a uniform interface.
 
-   Provides a generic Collection type that wraps a DataSource backend
-   and implements ILookup, Seqable, Counted for pattern-based access.
+   Implement the DataSource protocol for your storage layer (database, API, etc.),
+   then wrap it with `collection` to get ILookup, Seqable, Counted, Mutable, and
+   Wireable. One DataSource, one Collection, then compose behavior with wrappers:
+
+   - `read-only`     — disables mutations, delegates reads
+   - `wrap-mutable`  — custom mutation logic (auth, ownership), delegates reads
+   - `lookup`        — non-enumerable keyword->value ILookup with lazy delay support
 
    ## Basic Usage
 
    ```clojure
-   (def src (atom-source))
-   (def items (collection src))
+   ;; 1. Implement DataSource for your storage
+   (defrecord MySource [conn]
+     DataSource
+     (fetch [_ query] ...)
+     (list-all [_] ...)
+     (create! [_ data] ...)
+     (update! [_ query data] ...)
+     (delete! [_ query] ...))
 
-   (get items {:id 3})           ; fetch by query
-   (seq items)                   ; list all
-   (mutate! items nil data)      ; create
-   (mutate! items {:id 3} data)  ; update
-   (mutate! items {:id 3} nil)   ; delete
+   ;; 2. Wrap in a Collection
+   (def posts (collection (->MySource conn) {:id-key :post/id}))
+
+   ;; 3. Use standard Clojure verbs
+   (get posts {:post/id 3})           ; fetch by query (ILookup)
+   (seq posts)                        ; list all (Seqable)
+   (mutate! posts nil {:title \"New\"}) ; create
+   (mutate! posts {:post/id 3} data)  ; update
+   (mutate! posts {:post/id 3} nil)   ; delete
+
+   ;; 4. Compose wrappers for different access levels
+   (def public     (read-only posts))
+   (def restricted (wrap-mutable posts auth-fn))
    ```
 
-   ## Transactional Mutations
-
-   For queries containing mutations, apply all mutations atomically
-   via `transact!`, then query the new state via `snapshot`:
-
-   ```clojure
-   (def src (atom-source))
-
-   ;; Apply mutations atomically
-   (transact! src
-     [{:op :create :data {:title \"Post 1\"}}
-      {:op :create :data {:title \"Post 2\"}}])
-
-   ;; Query the new state
-   (count (snapshot src))  ;=> 2
-   ```
-
-   For multiple collections, call `transact!` on each, then `snapshot`:
-
-   ```clojure
-   (def sources {:posts (atom-source) :users (atom-source)})
-
-   (transact! (:users sources) [{:op :create :data {:name \"Alice\"}}])
-   (transact! (:posts sources) [{:op :create :data {:title \"Hello\"}}])
-
-   {:users (vals (snapshot (:users sources)))
-    :posts (vals (snapshot (:posts sources)))}
-   ```")
+   For in-memory use, `atom-source` provides a built-in DataSource
+   with auto-incrementing IDs and transactional batch mutations via
+   `transact!` / `snapshot`.")
 
 ;;=============================================================================
 ;; Protocols
