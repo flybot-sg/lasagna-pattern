@@ -37,7 +37,7 @@ posts                                                       ; unrestricted
 
 ## Quick Start
 
-### With atom-source (in-memory, for testing)
+### With atom-source (in-memory)
 
 ```clojure
 (require '[sg.flybot.pullable.collection :as coll])

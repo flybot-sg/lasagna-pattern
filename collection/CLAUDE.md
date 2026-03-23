@@ -82,7 +82,7 @@ Then reads and writes work immediately:
 
 ### Built-in: atom-source
 
-In-memory DataSource for testing / browser-side use. Also implements `TxSource` for atomic batch mutations via `transact!`/`snapshot`.
+In-memory DataSource. Also implements `TxSource` for atomic batch mutations via `transact!`/`snapshot`.
 
 ```clojure
 (def src (coll/atom-source {:initial [{:id 1 :name "Alice"}] :id-key :id}))

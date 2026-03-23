@@ -36,7 +36,7 @@
    (def restricted (wrap-mutable posts auth-fn))
    ```
 
-   For in-memory / testing use, `atom-source` provides a built-in DataSource
+   For in-memory use, `atom-source` provides a built-in DataSource
    with auto-incrementing IDs and transactional batch mutations via
    `transact!` / `snapshot`.")
 
