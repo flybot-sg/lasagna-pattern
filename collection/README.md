@@ -4,39 +4,48 @@
 
 Part of the [Lasagna Pattern](https://github.com/flybot-sg/lasagna-pattern) toolbox.
 
-CRUD collection abstraction with DataSource protocol for lazy data access.
+CRUD collection abstraction that wraps any data source in a uniform `ILookup + Seqable + Mutable` interface.
 
 ## Rationale
 
-Different data stores (databases, APIs, in-memory maps) have different interfaces, making it hard to write reusable data access code. This library provides a **uniform abstraction** for collections:
+Different data stores (databases, APIs, in-memory maps) have different interfaces, making it hard to write reusable data access code. This library provides a **uniform abstraction** so that:
 
-- **ILookup + Seqable** - Read with `get` and `seq`, like Clojure maps
-- **Mutable protocol** - Single `mutate!` for create/update/delete
-- **Composable wrappers** - Add read-only constraints, custom types
-- **Pattern compatible** - Works seamlessly with the pattern DSL's indexed lookup
+- **`get` and `seq` just work** — Your collection implements `ILookup` and `Seqable`, so it behaves like a Clojure map to any consumer
+- **One DataSource, many access levels** — Implement your storage logic once, then compose behavior with wrappers (`read-only`, `wrap-mutable`) instead of duplicating code per role
+- **Pattern compatible** — Works seamlessly with the pattern DSL's indexed lookup and the remote HTTP transport
+
+The key design insight is the **decorator pattern**: instead of writing separate DataSource implementations per access level, you write one and stack thin wrappers on top:
+
+```clojure
+(def posts (coll/collection (->MyDataSource conn) {:id-key :post/id}))
+
+;; Same DataSource, different access levels
+(def public     (coll/read-only posts))                     ; no writes
+(def restricted (coll/wrap-mutable posts ownership-check))  ; custom mutation logic
+posts                                                       ; unrestricted
+```
 
 ## Installation
 
 ```clojure
 ;; deps.edn
-{:deps {sg.flybot/lasagna-collection {:mvn/version "0.1.1"}}}
+{:deps {sg.flybot/lasagna-collection {:mvn/version "RELEASE"}}}
 
 ;; Leiningen
-[sg.flybot/lasagna-collection "0.1.1"]
+[sg.flybot/lasagna-collection "RELEASE"]
 ```
 
-## Usage
+## Quick Start
 
-### Basic (atom-backed storage)
+### With atom-source (in-memory, for testing)
 
 ```clojure
 (require '[sg.flybot.pullable.collection :as coll])
 
-;; Create a collection with atom-backed storage
 (def src (coll/atom-source))
 (def items (coll/collection src))
 
-;; READ via ILookup
+;; Standard Clojure verbs
 (seq items)                    ; list all
 (get items {:id 1})            ; fetch by query
 
@@ -60,20 +69,23 @@ Different data stores (databases, APIs, in-memory maps) have different interface
 
 ### Custom DataSource (e.g., Datahike)
 
+Implement the `DataSource` protocol for your storage layer — that's all it takes:
+
 ```clojure
-;; Implement DataSource protocol for your storage layer
 (defrecord MyDataSource [conn]
   coll/DataSource
-  (fetch [_ query] ...)
-  (list-all [_] ...)
-  (create! [_ data] ...)
-  (update! [_ query data] ...)
-  (delete! [_ query] ...))
+  (fetch [_ query] ...)         ; query is always a map, e.g. {:post/id 3}
+  (list-all [_] ...)            ; return seq of all items
+  (create! [_ data] ...)        ; return the created item (with generated ID)
+  (update! [_ query data] ...)  ; return updated item or nil
+  (delete! [_ query] ...))      ; return true/false
 
-(def posts (coll/collection (->MyDataSource conn)))
+(def posts (coll/collection (->MyDataSource conn)
+                            {:id-key  :post/id
+                             :indexes #{#{:post/id}}}))
 ```
 
-See `examples/flybot-site/src/.../db.clj` for a complete Datahike implementation.
+Then `get`, `seq`, and `mutate!` work immediately. See [examples/flybot-site/.../db/post.cljc](../examples/flybot-site/src/sg/flybot/flybot_site/server/system/db/post.cljc) for a complete Datahike implementation.
 
 ## Protocols
 
@@ -104,24 +116,24 @@ Collection mutation protocol. Implemented by `Collection` type.
 
 ### Wireable
 
-Wire serialization protocol for Transit/EDN encoding.
+Wire serialization protocol for Transit/EDN encoding. Converts custom types to plain Clojure data for HTTP transport.
 
 ```clojure
 (defprotocol Wireable
   (->wire [this] "Convert to serializable Clojure data."))
 ```
 
-Collections serialize to vectors. Implement on custom types:
+Collections serialize to vectors. Custom types implement their own conversion:
 
 ```clojure
-(deftype MyLookup [...]
-  coll/Wireable
-  (->wire [_] nil))  ; lazy lookup, not enumerable
+;; Non-enumerable lookup — can't list all, serialize as nil
+(reify coll/Wireable
+  (->wire [_] nil))
 ```
 
 ### TxSource
 
-Transactional data source protocol for atomic batch mutations.
+Transactional data source protocol for atomic batch mutations (implemented by `atom-source`).
 
 ```clojure
 (defprotocol TxSource
@@ -149,71 +161,68 @@ Example:
 
 ### read-only
 
-Wrap a collection to disable mutations:
+Disables mutations while keeping all read operations:
 
 ```clojure
-(def public-posts (coll/read-only posts))
+(def public (coll/read-only posts))
 
-(seq public-posts)              ; works
-(get public-posts {:id 1})      ; works
-(coll/mutate! public-posts ...) ; throws - Mutable not implemented
+(seq public)                    ; works
+(get public {:post/id 1})       ; works
+(coll/mutate! public ...)       ; throws — Mutable not implemented
 ```
 
 ### wrap-mutable
 
-Wrap a collection with custom mutation logic (e.g., authorization),
-while delegating reads (ILookup, Seqable, Counted, Wireable) to the inner collection:
+Custom mutation logic (e.g., authorization, field injection) while delegating reads to the inner collection:
 
 ```clojure
-(def member-posts
+(def restricted
   (coll/wrap-mutable posts
-    (fn [posts query value]
+    (fn [inner query value]
       (cond
         ;; CREATE: inject author
         (and (nil? query) (some? value))
-        (coll/mutate! posts nil (assoc value :author user-id))
+        (coll/mutate! inner nil (assoc value :author current-user))
 
         ;; UPDATE/DELETE: check ownership
         (some? query)
-        (if (owns? user-id query)
-          (coll/mutate! posts query value)
+        (if (owns? current-user query)
+          (coll/mutate! inner query value)
           {:error {:type :forbidden}})))))
 
-(seq member-posts)                           ; delegates to posts
-(get member-posts {:id 1})                   ; delegates to posts
-(coll/mutate! member-posts nil {:title "X"}) ; runs custom fn
+(seq restricted)                                ; delegates to posts
+(get restricted {:post/id 1})                   ; delegates to posts
+(coll/mutate! restricted nil {:title "New"})    ; runs custom fn
 ```
 
 ### lookup
 
-Create an ILookup + Wireable from a keyword→value map.
-Use for non-enumerable resources (user info, profiles, computed data)
-where some fields are cheap and others require expensive DB queries:
+Non-enumerable keyword-keyed resources where some fields are cheap and others require expensive computation:
 
 ```clojure
-(def me (coll/lookup {:id      user-id
-                      :email   (:email session)
-                      :slug    (delay (db-lookup conn user-id))  ; lazy
-                      :roles   #{:member}}))
+(def info (coll/lookup {:id     42
+                        :name   "Alice"
+                        :stats  (delay (expensive-db-query conn 42))}))  ; lazy
 
-(:id me)       ;=> user-id (cheap, no delay)
-(:slug me)     ;=> calls db-lookup once (delay), caches result
-(coll/->wire me)  ;=> {:id "..." :email "..." :slug "..." :roles #{:member}}
+(:id info)          ;=> 42 (cheap, no delay)
+(:stats info)       ;=> runs expensive-db-query once (delay), caches result
+(coll/->wire info)  ;=> {:id 42 :name "Alice" :stats {...}}
 ```
 
-Delay values are dereferenced transparently on access.
-Shared between ILookup and `->wire` — a DB query runs at most once.
+Delay values are dereferenced transparently on access. Shared between `ILookup` and `->wire` — a DB query runs at most once.
+
+**Note:** `lookup` only supports keyword keys. For map-keyed queries (e.g., `{:post/id 3}`), use `reify` with `ILookup` + `Wireable` directly.
 
 ## Collection Options
 
 ```clojure
 (coll/collection data-source
-  {:id-key  :post/id              ; primary key field (default :id)
-   :indexes #{#{:post/id}         ; indexed field sets for queries
-              #{:post/author}}})  ; allows (get coll {:post/author "alice"})
+  {:id-key  :post/id                ; primary key field (default :id)
+   :indexes #{#{:post/id}           ; indexed field sets for queries
+              #{:post/author}}})    ; allows (get coll {:post/author "alice"})
 ```
 
-Queries must match an index or include the id-key, otherwise throws.
+Queries must match a declared index or include the `id-key`, otherwise throws `"No index for query"`.
 
 ## Public API
 

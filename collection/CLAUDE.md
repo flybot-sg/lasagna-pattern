@@ -1,167 +1,158 @@
 # Collection
 
-The component that makes patterns bidirectional — enabling read AND write through the same pull syntax.
+Makes patterns bidirectional: read AND write through the same pull syntax.
 
-## Why This Component Exists
+## Role in the Toolbox
 
-Without `collection`, patterns are read-only (SELECT). `collection` introduces the `Mutable` protocol, which elevates patterns to full read-write round-trips: a mutation pattern like `{:posts {nil data}}` creates an entity AND returns it in the response.
+Without `collection`, patterns are read-only. `collection` adds `Mutable`, enabling full round-trip CRUD. Every interaction (read or write) returns data. Discarding mutation responses and re-fetching is an anti-pattern.
 
-This is what makes the pull-pattern system fundamentally different from REST or GraphQL: **every interaction is a round-trip that returns data**, whether it's a read or a write.
+- `pattern` consumes `ILookup` for reads (calls `get`)
+- `remote` calls `mutate!` for writes, sends result back to client
+- `collection` wraps any storage in uniform `ILookup + Seqable + Counted + Mutable + Wireable`
 
-`collection` wraps any data source (Datahike, atoms, APIs, files) in a uniform `ILookup + Seqable + Mutable` interface. `pattern` consumes `ILookup` for reads. `remote` calls `mutate!` for writes and sends the result back to the client. The result must be used — discarding mutation responses and re-fetching is an anti-pattern.
-
-### Mutation Return Values
-
-`mutate!` delegates to `DataSource` methods that return meaningful data:
-
-| Operation | DataSource method | Must return |
-|-----------|-------------------|-------------|
-| CREATE (`nil` query, some value) | `create!` | Full created entity (with generated ID, timestamps) |
-| UPDATE (some query, some value) | `update!` | Full updated entity |
-| DELETE (some query, `nil` value) | `delete!` | `true` / `false` |
-
-These return values flow through `remote` back to the client. `DataSource` implementations must return complete entities — not partial data.
-
-## Core Design: Protocol + Wrapper + Composition
+## Core Design
 
 ```
 Your storage (Datahike, atom, API, file...)
     │
     ▼
-DataSource protocol ← you implement this (5 methods)
+DataSource protocol ← implement 5 methods (fetch, list-all, create!, update!, delete!)
     │
     ▼
-Collection type ← uniform ILookup/Seqable/Mutable/Wireable
+Collection deftype ← uniform ILookup/Seqable/Counted/Mutable/Wireable
     │
-    ├──► read-only       (disables Mutable)
+    ├──► read-only       (disables Mutable, delegates reads)
     ├──► wrap-mutable    (custom mutation logic, delegates reads)
-    └──► pattern matching / remote serving (consumes ILookup + Mutable)
+    └──► consumed by pattern (ILookup) and remote (Mutable)
 
 Non-enumerable resources (no DataSource needed):
-    │
-    ▼
-lookup ← ILookup/Wireable from keyword→value map (delays auto-derefed)
+    ├──► lookup          keyword→value ILookup/Wireable (delays auto-derefed)
+    └──► reify ILookup   map-keyed queries (lookup only supports keyword keys)
 ```
 
-## How to Support a New Data Source
+## How It Works: Clojure Interfaces
 
-Implement the `DataSource` protocol — that's all it takes:
+Collection uses `deftype` to implement platform interfaces. Each interface overrides a Clojure verb:
+
+| Interface | Verb it powers | What Collection does |
+|---|---|---|
+| `ILookup` (valAt) | `get` | Validates query against indexes, delegates to `DataSource/fetch` |
+| `Seqable` (seq) | `seq`, `map`, `filter` | Delegates to `DataSource/list-all` |
+| `Counted` (count) | `count` | Delegates to `DataSource/list-all` + count |
+| `Mutable` (mutate!) | `mutate!` (custom) | Routes nil/some query+value to create!/update!/delete! |
+| `Wireable` (->wire) | `->wire` (custom) | Serializes to `(vec (seq coll))` for Transit/EDN |
+
+`Mutable` and `Wireable` are project-defined protocols, not Clojure built-ins.
+
+`Wireable` is analogous to `clojure.core.protocols/Datafiable` (`datafy`): both convert opaque types to plain Clojure data. `->wire` is for HTTP transport specifically.
+
+## Mutation Return Values
+
+| Operation | DataSource method | Must return |
+|---|---|---|
+| CREATE (`nil` query, some value) | `create!` | Full created entity (with generated ID, timestamps) |
+| UPDATE (some query, some value) | `update!` | Full updated entity |
+| DELETE (some query, `nil` value) | `delete!` | `true` / `false` |
+
+`DataSource` implementations must return complete entities, not partial data.
+
+## Implement a New Data Source
 
 ```clojure
 (defrecord MySource [conn]
   coll/DataSource
-  (fetch [_ query] ...)       ;; query is always a map, e.g. {:post/id 3}
-  (list-all [_] ...)          ;; return seq of all items
-  (create! [_ data] ...)      ;; return the created item (with generated ID)
+  (fetch [_ query] ...)         ;; query is always a map, e.g. {:post/id 3}
+  (list-all [_] ...)            ;; return seq of all items
+  (create! [_ data] ...)        ;; return the created item (with generated ID)
   (update! [_ query data] ...)  ;; return updated item or nil
-  (delete! [_ query] ...))    ;; return true/false
+  (delete! [_ query] ...))      ;; return true/false
 
-(def my-coll (coll/collection (->MySource conn)
-                              {:id-key :post/id
-                               :indexes #{#{:post/id}}}))
+(def posts (coll/collection (->MySource conn)
+                            {:id-key :post/id
+                             :indexes #{#{:post/id}}}))
 ```
 
-Then pattern matching works immediately:
+Then reads and writes work immediately:
 
 ```clojure
-(seq my-coll)                    ;; list all
-(get my-coll {:post/id 3})      ;; fetch by indexed query
-(coll/mutate! my-coll nil data) ;; create
+(seq posts)                          ;; list all
+(get posts {:post/id 3})             ;; fetch by indexed query
+(coll/mutate! posts nil {:title "New"}) ;; create
 ```
 
 ### Built-in: atom-source
 
-For in-memory / testing / browser-side use:
+In-memory DataSource for testing / browser-side use. Also implements `TxSource` for atomic batch mutations via `transact!`/`snapshot`.
 
 ```clojure
-(def src (coll/atom-source {:initial [{:id 1 :name "Alice"}]
-                            :id-key :id}))
+(def src (coll/atom-source {:initial [{:id 1 :name "Alice"}] :id-key :id}))
 (def items (coll/collection src))
 ```
 
-`atom-source` also implements `TxSource` for atomic batch mutations via `transact!`/`snapshot`.
+## Interaction with Pattern and Remote
 
-## Critical: How Collection Interacts with Pattern and Remote
+**READ path**: `remote` compiles pattern via `pattern/match-fn`, matches against data. Pattern calls `(get coll {:post/id 3})`. Collection validates index, delegates to `DataSource/fetch`. Pattern never calls `mutate!`.
 
-### READ path: pattern sees ILookup
-
-For reads, `remote` compiles the pattern via `pattern/match-fn` and matches it against the data. When `pattern` encounters a map key like `{:post/id 3}`, it calls `(get coll {:post/id 3})`. Collection validates the query against its indexes, then delegates to `DataSource/fetch`. Pattern never calls `mutate!` — it only reads.
-
-### WRITE path: remote calls mutate! directly
-
-For writes, `pattern` is not involved. `remote/http.cljc` detects the mutation via `parse-mutation` (variables in value = read, literals = write), walks the pattern path to find the collection, then calls `mutate!`:
+**WRITE path**: `remote` detects mutation via `parse-mutation` (variables in value = read, literals = write), walks pattern to find collection, calls `mutate!` directly. `pattern` is not involved.
 
 | Pattern shape | Operation | What remote does |
 |---|---|---|
 | `{:posts '?all}` | Read | Compiles pattern, matches against data |
-| `{:posts {nil {:title "X"}}}` | Create | Calls `(coll/mutate! posts nil {:title "X"})` |
-| `{:posts {{:id 3} {:title "Y"}}}` | Update | Calls `(coll/mutate! posts {:id 3} {:title "Y"})` |
-| `{:posts {{:id 3} nil}}` | Delete | Calls `(coll/mutate! posts {:id 3} nil)` |
+| `{:posts {nil {:title "X"}}}` | Create | `(coll/mutate! posts nil {:title "X"})` |
+| `{:posts {{:post/id 3} {:title "Y"}}}` | Update | `(coll/mutate! posts {:post/id 3} {:title "Y"})` |
+| `{:posts {{:post/id 3} nil}}` | Delete | `(coll/mutate! posts {:post/id 3} nil)` |
 
-Remote checks `(satisfies? coll/Mutable coll)` before mutating. If false (e.g. `read-only` wrapper), it returns an error.
+Remote checks `(satisfies? coll/Mutable coll)` before mutating. If false (`read-only`), returns error.
 
-### Wireable for serialization
+**Serialization**: Remote walks result tree calling `(coll/->wire x)` on any `Wireable`. Collections serialize to vectors. Lookups serialize to maps or nil.
 
-Remote walks the result tree calling `(coll/->wire x)` on any `Wireable`. Collections serialize to vectors. Custom lookups can serialize to nil (lazy, non-enumerable) or to custom maps.
+## Wrappers and When to Use Each
 
-## Proper Usage Patterns
-
-### 1. One DataSource per storage backend, one Collection per access path
+### One DataSource, one Collection, multiple wrappers
 
 ```clojure
-;; CORRECT: single DataSource, multiple Collection wrappers
-(def posts-ds (->PostsDataSource conn))
-(def posts (coll/collection posts-ds {:id-key :post/id}))
-(def public-posts (coll/read-only posts))              ;; guest access
-(def member-posts (coll/wrap-mutable posts mutate-fn)) ;; ownership enforcement
+(def ds    (->MySource conn))
+(def posts (coll/collection ds {:id-key :post/id}))
+(def public     (coll/read-only posts))                ;; no writes
+(def restricted (coll/wrap-mutable posts auth-fn))     ;; custom mutation logic
+;; unrestricted: use posts directly
 ```
 
-### 2. Custom wrappers for authorization logic
+### wrap-mutable for authorization
 
-Don't put authorization in DataSource. Use `wrap-mutable` to add access control
-while delegating reads to the inner collection:
+Keep authorization out of DataSource. Use `wrap-mutable` to intercept mutations:
 
 ```clojure
-;; CORRECT: wrap-mutable adds ownership check, DataSource stays generic
-(defn member-posts [posts user-id]
+(defn restricted-posts [posts current-user]
   (coll/wrap-mutable posts
-    (fn [posts query value]
+    (fn [inner query value]
       (cond
-        ;; CREATE: inject author
         (and (nil? query) (some? value))
-        (coll/mutate! posts nil (assoc value :post/author user-id))
+        (coll/mutate! inner nil (assoc value :author current-user))
 
-        ;; UPDATE/DELETE: check ownership
         (some? query)
-        (if (owns-post? posts user-id query)
-          (coll/mutate! posts query value)
-          {:error {:type :forbidden :message "You don't own this post"}})))))
+        (if (owns? inner current-user query)
+          (coll/mutate! inner query value)
+          {:error {:type :forbidden :message "Not the author"}})))))
 ```
 
-This keeps DataSource reusable across different access contexts.
+### lookup for non-enumerable keyword-keyed resources
 
-### 3. Field lookup for non-enumerable resources
-
-Some resources (profile, user-info) can't be listed — only looked up by keyword.
-Use `coll/lookup` with delays for expensive fields:
+**`coll/lookup` only supports keyword keys.** Use for profile-like resources:
 
 ```clojure
-;; CORRECT: lookup with delay-based laziness
-(defn me-lookup [conn session]
-  (coll/lookup {:id      (:user-id session)           ;; cheap — used as-is
-                :email   (:user-email session)         ;; cheap
-                :slug    (delay (db-lookup conn uid))  ;; expensive — computed once
-                :roles   (or (:roles session) #{})}))  ;; cheap
+(coll/lookup {:id     42
+              :name   "Alice"
+              :stats  (delay (expensive-db-query conn 42))})  ;; computed once
 ```
 
-Delays are shared between ILookup and `->wire` — the DB query runs at most once
-regardless of whether the value is accessed via pattern matching (ILookup) or
-serialization (Wireable).
+Delays shared between ILookup and `->wire` — DB query runs at most once.
 
-For resources keyed by query maps (not keywords), use `reify` with ILookup + Wireable:
+### reify for map-keyed read-only lookups
+
+When query keys are maps (not keywords), `coll/lookup` doesn't work. Use `reify`:
 
 ```clojure
-;; CORRECT: query-keyed lookup (can't use coll/lookup — needs map keys)
 (defn history-lookup [conn]
   (reify
     clojure.lang.ILookup
@@ -171,123 +162,115 @@ For resources keyed by query maps (not keywords), use `reify` with ILookup + Wir
     (valAt [this q nf] (or (.valAt this q) nf))
 
     coll/Wireable
-    (->wire [_] nil)))  ;; can't enumerate all history, serialize as nil
+    (->wire [_] nil)))
 ```
 
-### 4. Index configuration must match your query patterns
+Use when: read-only, non-enumerable, single query shape. The full DataSource/Collection stack would add index validation, Seqable, Mutable — none of which is needed.
 
-```clojure
-;; If pattern will do: (get coll {:post/author "alice"})
-;; Then collection MUST have that index:
-(coll/collection src {:id-key :post/id
-                      :indexes #{#{:post/id} #{:post/author}}})
+### Decision guide: which construct to use
 
-;; Without the index, get throws "No index for query"
-```
+| Need | Tool |
+|---|---|
+| Full CRUD + enumeration + index validation + wrappers | `defrecord` DataSource + `coll/collection` |
+| Read-only, keyword keys, flat values | `coll/lookup` |
+| Read-only, map keys, single query shape | Raw `reify` ILookup + Wireable |
+| Disable mutations on existing collection | `coll/read-only` |
+| Custom mutation logic, delegate reads | `coll/wrap-mutable` |
+| Transform read results (not just restrict writes) | `reify` decorator over `read-only` or collection |
 
 ## Common Mistakes
 
-### Mistake: Recreating collections on every request
+### Recreating collections on every request
 
 ```clojure
-;; WRONG: creates new Collection objects every time the API is called
-(defn api-fn [request]
-  {:data {:posts (coll/collection (->PostsDataSource conn))}})
+;; WRONG
+(defn handler [request]
+  {:data {:posts (coll/collection (->MySource conn))}})
 
-;; Collection + DataSource constructors are cheap, but this prevents
-;; any caching/memoization and confuses the object identity that
-;; wrappers rely on.
-```
-
-```clojure
-;; RIGHT: create collections once, close over them
-(defn make-api [{:keys [conn]}]
-  (let [posts (coll/collection (->PostsDataSource conn) {:id-key :post/id})]
+;; RIGHT: create once, close over
+(defn make-handler [{:keys [conn]}]
+  (let [posts (coll/collection (->MySource conn) {:id-key :post/id})]
     (fn [request]
       {:data {:posts (coll/read-only posts)}})))
 ```
 
-**Exception**: wrappers that depend on per-request context (like `MemberPosts` which needs the user-id from the session) must be created per-request. But the underlying collection/DataSource should be stable.
+Exception: wrappers depending on per-request context (user-id from session) must be created per-request. The underlying collection/DataSource should be stable.
 
-### Mistake: Confusing DataSource and Collection
+### Confusing DataSource and Collection
 
 ```clojure
-;; WRONG: passing atom-source directly where Collection is expected
+;; WRONG
 (def src (coll/atom-source))
-(get src {:id 1})  ;; src is a DataSource, not ILookup!
+(get src {:id 1})  ;; DataSource, not ILookup!
 
-;; RIGHT: wrap in collection first
+;; RIGHT
 (def items (coll/collection src))
 (get items {:id 1})  ;; Collection implements ILookup
 ```
 
-`DataSource` has `fetch/list-all/create!/update!/delete!`.
-`Collection` has `ILookup/Seqable/Counted/Mutable/Wireable`.
-Pattern matching and remote only work with Collection (or any ILookup).
-
-### Mistake: Mutating a read-only collection
+### Mutating a read-only collection
 
 ```clojure
-;; WRONG: trying to mutate through read-only wrapper
-(def public (coll/read-only posts))
-(coll/mutate! public nil {:title "X"})  ;; throws — Mutable not satisfied
+;; WRONG
+(coll/mutate! (coll/read-only posts) nil {:title "X"})  ;; Mutable not satisfied
 
-;; RIGHT: use the mutable collection for writes
+;; RIGHT
 (coll/mutate! posts nil {:title "X"})
 ```
 
-`read-only` deliberately does NOT implement `Mutable`. Remote checks `(satisfies? coll/Mutable coll)` and returns an error if false.
-
-### Mistake: Field filtering in DataSource instead of letting patterns select
+### Field filtering in DataSource
 
 ```clojure
-;; WRONG: list-all curates fields — the DataSource is doing the pattern's job
+;; WRONG: DataSource strips fields — breaks pattern contract
 (list-all [_]
-  (d/q '[:find [(pull ?e [:post/id :post/title {:post/author [:user/name]}]) ...]
-         :where [?e :post/id _]]
-       @conn))
+  (d/q '[:find [(pull ?e [:id :title]) ...] :where [?e :id _]] @conn))
 
-;; RIGHT: list-all returns complete entities, same as fetch
+;; RIGHT: return complete entities, let patterns select shape
 (list-all [_]
-  (d/q '[:find [(pull ?e [* {:post/author [*]}]) ...]
-         :where [?e :post/id _]]
-       @conn))
+  (d/q '[:find [(pull ?e [*]) ...] :where [?e :id _]] @conn))
 ```
 
-`DataSource` returns data. The pattern system selects shape. When `list-all` pre-filters fields (e.g., omitting `:post/content` for "lightweight" lists), it breaks the pull-pattern contract — the client can't request fields the DataSource already stripped. The same pull expression (`[*]` or equivalent) should be used in both `fetch` and `list-all`.
+Format normalization (stripping `:db/id`, converting sets to vectors) is fine. Omitting domain fields is not. Ensure `fetch` and `list-all` return the same shape.
 
-Format normalization (stripping `:db/id`, converting sets to vectors) is fine — that's adapting storage representation to domain representation. But omitting domain fields is not.
-
-Also ensure `fetch` and `list-all` return the **same shape**. If `list-all` includes roles but `fetch` doesn't (or vice versa), consumers get inconsistent data depending on whether they access a single item or list all.
-
-### Mistake: Returning errors as exceptions from DataSource
+### Returning errors as exceptions from wrappers
 
 ```clojure
-;; WRONG in custom wrappers: throwing on business logic errors
-(mutate! [_ query value]
-  (if (owns? query)
-    (coll/mutate! inner query value)
-    (throw (ex-info "Forbidden" {}))))   ;; remote catches this as :execution-error (500)
+;; WRONG: throws — remote catches as :execution-error (500)
+(throw (ex-info "Forbidden" {}))
 
 ;; RIGHT: return error as data — remote's :detect picks it up
-(mutate! [_ query value]
-  (if (owns? query)
-    (coll/mutate! inner query value)
-    {:error {:type :forbidden :message "You don't own this post"}}))
+{:error {:type :forbidden :message "Not the owner"}}
 ```
 
-Remote's error config uses `:detect :error` to check if the mutation result contains an `:error` key, then maps `:type` to HTTP status codes.
+Remote's error config uses `:detect :error` to check mutation results for `:error` key, maps `:type` to HTTP status codes.
 
-## Protocols Reference
+## Indexes
+
+Queries must match a declared index or include the `id-key`:
+
+```clojure
+(coll/collection src {:id-key :post/id
+                      :indexes #{#{:post/id} #{:post/author}}})
+
+(get coll {:post/id 3})            ;; ✓ id-key fast path
+(get coll {:post/author "alice"})  ;; ✓ matches declared index
+(get coll {:post/title "Hello"})   ;; ✗ throws "No index for query"
+```
+
+Compound indexes work: `:indexes #{#{:status :type}}` allows `(get coll {:status :draft :type :blog})`.
+
+## Quick Reference
+
+### Protocols
 
 | Protocol | Methods | Purpose |
 |---|---|---|
 | `DataSource` | `fetch`, `list-all`, `create!`, `update!`, `delete!` | Backend storage adapter |
-| `Mutable` | `mutate!` | Unified CRUD: `(nil, data)` = create, `(query, data)` = update, `(query, nil)` = delete |
-| `Wireable` | `->wire` | Serialize for Transit/EDN (collections -> vectors, lookups -> maps or nil) |
+| `Mutable` | `mutate!` | Unified CRUD: `(nil, data)` → create, `(query, data)` → update, `(query, nil)` → delete |
+| `Wireable` | `->wire` | Serialize for Transit/EDN (collections → vectors, lookups → maps or nil) |
 | `TxSource` | `snapshot`, `transact!` | Atomic batch mutations (atom-source only) |
 
-## Constructors & Wrappers
+### Constructors & Wrappers
 
 | Function | Purpose | Implements |
 |---|---|---|
@@ -303,4 +286,4 @@ Remote's error config uses `:detect :error` to check if the mutation result cont
 bb test collection
 ```
 
-All tests are inline RCT. When adding new DataSource implementations or wrappers, add RCT tests in the same file covering CRUD, edge cases (empty query, missing index), and Wireable output.
+All tests are inline RCT. When adding new DataSource implementations or wrappers, add RCT tests covering CRUD, edge cases (empty query, missing index), and Wireable output.

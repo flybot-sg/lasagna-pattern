@@ -19,10 +19,10 @@ Building APIs typically requires defining schemas, writing resolvers, and mainta
 
 ```clojure
 ;; deps.edn
-{:deps {sg.flybot/lasagna-remote {:mvn/version "0.1.0"}}}
+{:deps {sg.flybot/lasagna-remote {:mvn/version "RELEASE"}}}
 
 ;; Leiningen
-[sg.flybot/lasagna-remote "0.1.0"]
+[sg.flybot/lasagna-remote "RELEASE"]
 ```
 
 ## Usage
@@ -97,7 +97,7 @@ The `:errors` config tells the handler how to detect and translate these:
 
 Partial success applies to **reads only**. Mutations remain all-or-nothing.
 
-Example from flybot-site:
+Example:
 
 ```clojure
 (def error-config
@@ -157,6 +157,8 @@ Same as [pattern](../pattern) DSL, sent over the wire:
 |----------|-----------|-------------|
 | `make-handler` | `[api-fn]` or `[api-fn opts]` | Create Ring handler for pull API |
 | `wrap-api` | `[handler api-fn]` or `[handler api-fn opts]` | Ring middleware that adds pull API |
+| `parse-mutation` | `[pattern]` | Detect mutation in pattern → `{:path :query :value}` or nil |
+| `execute` | `[api-fn pattern]` or `[api-fn pattern opts]` | Execute pattern directly (no HTTP) |
 | `encode` | `[value format]` | Encode to bytes (for custom clients) |
 | `decode` | `[bytes format]` | Decode from bytes (for custom clients) |
 

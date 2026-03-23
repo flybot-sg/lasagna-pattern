@@ -108,6 +108,8 @@ The function passed to `make-handler` receives a Ring request and returns:
 - **Literals** in value position → WRITE
 - **Mixed** (variables + literals) → ERROR (ambiguous)
 
+**Constraints:** One pattern = one operation type. You cannot mix reads and writes in a single pattern, and only one mutation per pattern is supported. Clients needing both a write and a read must send two separate requests.
+
 ```clojure
 ;; Flat patterns
 {:posts '?all}                    ; nil → READ

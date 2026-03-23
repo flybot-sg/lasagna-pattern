@@ -284,7 +284,6 @@ test/sg/flybot/pullable_test.cljc     # Cross-platform clojure.test suite
 test/sg/flybot/integrated_test.clj    # CLJ-only: wraps RCT into deftest for Kaocha
 notebook/tutorial.clj                 # Interactive 17-part tutorial
 notebook/cli_parser.clj               # Real-world CLI argument parser example
-doc/ARCHITECTURE.md                   # Legacy CLAUDE.md (predecessor to this file)
 doc/performance-analysis.md           # Complexity analysis per pattern type
 ```
 
