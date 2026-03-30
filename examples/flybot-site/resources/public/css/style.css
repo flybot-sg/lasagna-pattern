@@ -692,18 +692,21 @@ code, pre, .font-mono {
   font-size: var(--text-sm);
 }
 
-.post-body {
+.post-body,
+.page-content {
   line-height: var(--line-height-relaxed);
 }
 
-.post-body code {
+.post-body code,
+.page-content code {
   background: var(--code-bg);
   padding: 0.2em 0.4em;
   border-radius: var(--radius-sm);
   font-size: 0.9em;
 }
 
-.post-body pre {
+.post-body pre,
+.page-content pre {
   background: var(--code-bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -711,19 +714,22 @@ code, pre, .font-mono {
   overflow-x: auto;
 }
 
-.post-body pre code {
+.post-body pre code,
+.page-content pre code {
   background: none;
   padding: 0;
 }
 
-.post-body blockquote {
+.post-body blockquote,
+.page-content blockquote {
   border-left: 3px solid var(--accent);
   margin: var(--space-4) 0;
   padding-left: var(--space-4);
   color: var(--text-muted);
 }
 
-.post-body img {
+.post-body img,
+.page-content img {
   max-width: 100%;
   border-radius: var(--radius-lg);
 }
@@ -1134,6 +1140,11 @@ button.danger {
   display: flex;
   justify-content: center;
   margin-bottom: var(--space-8);
+  overflow: hidden;
+}
+
+.page-hero > * {
+  min-width: 0;
 }
 
 .page-hero .page-card {
@@ -1151,7 +1162,6 @@ button.danger {
   color: var(--text);
   line-height: var(--line-height-relaxed);
   max-height: none;
-  overflow: visible;
 }
 
 /*==============================================================================
