@@ -1,19 +1,29 @@
 (ns sg.flybot.flybot-site.server.system.auth
-  "Authentication middleware: Google OAuth and role initialization.
+  "Authentication using oie: Google OAuth2, role initialization, session identity.
 
-   Endpoints created:
-   - GET /oauth2/google - Start OAuth flow (handled by ring-oauth2)
-   - GET /oauth2/google/callback - OAuth callback (handled by ring-oauth2)
-   - GET /oauth2/google/success - Profile fetch and redirect (our handler)
-   - GET /logout - Clear session
+   Endpoints created by oie's wrap-oauth2:
+   - GET /oauth2/google - Start OAuth flow (ring-oauth2)
+   - GET /oauth2/google/callback - OAuth callback (ring-oauth2)
+   - GET /oauth2/google/success - oie intercepts, calls fetch-profile-fn + login-fn
 
    Flow:
    1. User clicks login -> /oauth2/google
    2. ring-oauth2 redirects to Google
    3. Google redirects back to /oauth2/google/callback
-   4. ring-oauth2 exchanges code for token, stores in session
+   4. ring-oauth2 exchanges code for tokens (including id_token), stores in session
    5. ring-oauth2 redirects to /oauth2/google/success (landing-uri)
-   6. Our success handler fetches profile, initializes roles, stores user info, redirects to /
+   6. oie intercepts: decode id_token via fetch-profile-fn, validate via login-fn
+   7. login-fn checks email, upserts user, initializes roles, returns identity
+   8. oie stores identity in session under ::oie-session/user, redirects to /
+
+   ## Authentication
+
+   Uses oie/wrap-authenticate with two strategies:
+   - Session strategy: reads identity from session cookie (logged-in users)
+   - Anonymous strategy: fallback that returns {} (guests)
+
+   This means oie/get-identity always returns a value — real identity or {}.
+   with-role naturally rejects guests (no :roles key → has-role? returns false).
 
    ## Role Initialization
 
@@ -22,69 +32,29 @@
    - Otherwise: granted #{:member}
 
    Returning users get their existing roles from the database.
-   Roles are stored in the session cookie (no DB lookup on each request).
-
-   Usage:
-   (-> handler
-       wrap-logout
-       (wrap-oauth-success {:allowed-email-pattern #\".*@mycompany\\\\.com\"
-                            :owner-emails #{\"admin@mycompany.com\"}
-                            :conn conn})
-       (wrap-google-auth {:client-id \"...\"
-                          :client-secret \"...\"
-                          :redirect-uri \"http://localhost:8080/oauth2/google/callback\"})
-       (wrap-session {:store (cookie-store {:key ...})}))
-
-   The :allowed-email-pattern option restricts which Google accounts can log in.
-   Users whose email doesn't match will be logged out and shown an error."
+   Roles are stored in the session cookie (no DB lookup on each request)."
   (:require
-   [ring.middleware.oauth2 :refer [wrap-oauth2]]
-   [clj-http.client :as http]
+   [flybot.oie.core :as oie]
+   [flybot.oie.oauth2 :as oie-oauth2]
+   [flybot.oie.session :as oie-session]
+   [flybot.oie.strategy.session :as oie-session-strategy]
    [sg.flybot.flybot-site.server.system.db :as db]
    [com.brunobonacci.mulog :as mu]))
 
 ;;=============================================================================
-;; Google Profile Fetching
+;; Strategies
 ;;=============================================================================
 
-(defn- fetch-google-profile
-  "Fetch user profile from Google userinfo API using access token.
-   Returns map with :email, :name, :picture or throws on failure."
-  [access-token]
-  (mu/log ::profile-fetch-start)
-  (let [{:keys [status body]} (try
-                                (http/request
-                                 {:content-type :json
-                                  :accept :json
-                                  :url "https://www.googleapis.com/oauth2/v2/userinfo"
-                                  :method :get
-                                  :oauth-token access-token
-                                  :as :json})
-                                (catch Exception e
-                                  (mu/log ::profile-fetch-error :error (ex-message e))
-                                  (throw (ex-info "Could not fetch Google user info"
-                                                  {:type :oauth/fetch-profile-failed
-                                                   :cause (ex-message e)}))))]
-    (if (= status 200)
-      (do
-        (mu/log ::profile-fetch-success :email (:email body))
-        body)
-      (do
-        (mu/log ::profile-fetch-error :status status)
-        (throw (ex-info "Google API returned error"
-                        {:type :oauth/google-api-error
-                         :status status}))))))
+(defn- anonymous-strategy
+  "Fallback strategy that always authenticates as anonymous (empty identity).
+   Placed last in the strategy chain so guests pass through wrap-authenticate
+   instead of getting 401. with-role rejects guests naturally (no :roles key)."
+  []
+  {:authenticate (fn [_] {:authenticated {}})})
 
 ;;=============================================================================
 ;; Helpers
 ;;=============================================================================
-
-(defn- redirect-302
-  "Create a 302 redirect response."
-  [location]
-  {:status 302
-   :headers {"Location" location}
-   :body ""})
 
 (defn- email-allowed?
   "Check if email matches the allowed pattern. Pattern is required."
@@ -128,141 +98,106 @@
           existing-roles))))
 
 ;;=============================================================================
+;; OAuth2 Integration
+;;=============================================================================
+
+(defn make-login-fn
+  "Create the login function for oie's OAuth2 flow.
+
+   Receives decoded JWT profile from Google's id_token (via fetch-profile-fn).
+   Validates email against allowed pattern, upserts user to DB, initializes roles.
+   Returns identity map on success, nil on rejection (oie returns 403).
+
+   The identity map shape:
+   {:user-id     \"google-sub-id\"
+    :user-email  \"user@example.com\"
+    :user-name   \"Display Name\"
+    :user-picture \"https://...\"
+    :roles       #{:member}}"
+  [{:keys [allowed-email-pattern owner-emails conn]}]
+  (fn [{:keys [sub email name picture] :as _jwt-claims}]
+    (if-not (email-allowed? email allowed-email-pattern)
+      (do (mu/log ::login-denied :email email :reason "email not allowed")
+          nil)
+      (do
+        (when conn
+          (db/upsert-user! conn #:user{:id sub
+                                       :email email
+                                       :name name
+                                       :picture (or picture "")}))
+        (let [roles (if conn
+                      (initialize-roles! conn sub email owner-emails)
+                      #{:member})]
+          (mu/log ::user-logged-in :name name :roles roles)
+          {:user-id sub
+           :user-email email
+           :user-name name
+           :user-picture picture
+           :roles roles})))))
+
+(defn make-oauth2-profiles
+  "Build oie-compatible OAuth2 profiles for Google authentication.
+
+   Returns a profiles map for oie-oauth2/wrap-oauth2, or nil if credentials
+   are missing (disables OAuth in dev mode without credentials).
+
+   The profile uses decode-id-token to extract user info from Google's JWT
+   instead of making an HTTP call to the userinfo API. Google's id_token
+   :sub claim is the same value as the userinfo :id field."
+  [{:keys [client-id client-secret base-url client-root-path]
+    :or {client-root-path "/"}}
+   login-fn]
+  (when (and client-id client-secret base-url)
+    (let [redirect-uri (str base-url "/oauth2/google/callback")]
+      (mu/log ::oauth-configured :redirect-uri redirect-uri)
+      {:google
+       {:authorize-uri       "https://accounts.google.com/o/oauth2/v2/auth"
+        :access-token-uri    "https://oauth2.googleapis.com/token"
+        :client-id           client-id
+        :client-secret       client-secret
+        :scopes              ["openid" "email" "profile"]
+        :launch-uri          "/oauth2/google"
+        :redirect-uri        redirect-uri
+        :landing-uri         "/oauth2/google/success"
+        :fetch-profile-fn    (fn [tokens]
+                               (oie-oauth2/decode-id-token (:id-token tokens)))
+        :login-fn            login-fn
+        :success-redirect-uri client-root-path}})))
+
+;;=============================================================================
 ;; Middleware
 ;;=============================================================================
 
-(defn- wrap-oauth-debug
-  "Debug wrapper to log OAuth-related requests and responses."
+(defn wrap-authenticate
+  "Wrap handler with oie authentication (session + anonymous fallback).
+   Always succeeds — guests get {} identity, logged-in users get real identity."
   [handler]
-  (fn [request]
-    (let [uri (:uri request)
-          oauth-path? (and uri (.startsWith uri "/oauth2"))
-          debug-path? (= uri "/debug-session")
-          api-path? (= uri "/api")]
-      (when (or oauth-path? debug-path? api-path?)
-        (mu/log ::oauth-request
-                :uri uri
-                :session-keys (keys (:session request))
-                :user-email (get-in request [:session :user-email])
-                :has-tokens (some? (get-in request [:session :ring.middleware.oauth2/access-tokens]))
-                :cookie (get-in request [:headers "cookie"])))
-      (let [response (handler request)]
-        (when (or oauth-path? debug-path?)
-          (mu/log ::oauth-response
-                  :uri uri
-                  :status (:status response)
-                  :has-session (contains? response :session)
-                  :session-keys (keys (:session response))
-                  :user-email (get-in response [:session :user-email])))
-        response))))
+  (oie/wrap-authenticate handler
+                         [(oie-session-strategy/session-strategy)
+                          (anonymous-strategy)]))
 
-(defn wrap-google-auth
-  "Wrap handler with Google OAuth2 authentication.
-
-   Config:
-   - :client-id - Google OAuth client ID
-   - :client-secret - Google OAuth client secret
-   - :base-url - Base URL for constructing redirect-uri (e.g., \"http://localhost:8080\")
-
-   Creates routes:
-   - /oauth2/google - Initiates OAuth flow
-   - /oauth2/google/callback - Receives Google callback
-   - After callback, redirects to /oauth2/google/success (landing-uri)"
-  [handler {:keys [client-id client-secret base-url]}]
-  (if (and client-id client-secret base-url)
-    (let [redirect-uri (str base-url "/oauth2/google/callback")]
-      (mu/log ::oauth-configured :redirect-uri redirect-uri)
-      (-> handler
-          (wrap-oauth2 {:google
-                        {:authorize-uri "https://accounts.google.com/o/oauth2/v2/auth"
-                         :access-token-uri "https://oauth2.googleapis.com/token"
-                         :client-id client-id
-                         :client-secret client-secret
-                         :scopes ["openid" "email" "profile"]
-                         :launch-uri "/oauth2/google"
-                         :redirect-uri redirect-uri
-                         :landing-uri "/oauth2/google/success"}})
-          wrap-oauth-debug))
+(defn wrap-oauth2
+  "Wrap handler with oie's OAuth2 middleware.
+   No-op if profiles is nil (OAuth disabled)."
+  [handler profiles]
+  (if profiles
+    (oie-oauth2/wrap-oauth2 handler profiles)
     (do
       (mu/log ::oauth-disabled :reason "missing credentials")
       handler)))
 
-(defn wrap-oauth-success
-  "Handle the /oauth2/google/success route after OAuth callback completes.
-
-   This middleware intercepts requests to /oauth2/google/success, fetches
-   the Google profile using the access token from session, and:
-   - If email is allowed: creates/updates user in DB, initializes roles, stores user info in session, redirects to /
-   - If email not allowed: clears session, redirects with error
-
-   Options:
-   - :allowed-email-pattern - Regex pattern for allowed emails.
-   - :owner-emails - Set of owner email addresses (for initial role grants).
-   - :client-root-path - Where to redirect after success (default: \"/\")
-   - :conn - Datahike connection for user persistence"
-  ([handler] (wrap-oauth-success handler {}))
-  ([handler {:keys [allowed-email-pattern owner-emails client-root-path conn]
-             :or {client-root-path "/" owner-emails #{}}}]
-   (fn [request]
-     (if (= "/oauth2/google/success" (:uri request))
-       ;; Handle OAuth success - fetch profile and redirect
-       (let [session-keys (keys (:session request))
-             has-tokens (some? (get-in request [:session :ring.middleware.oauth2/access-tokens]))
-             _ (mu/log ::success-handler-start :session-keys session-keys :has-tokens has-tokens)
-             access-token (get-in request [:session :ring.middleware.oauth2/access-tokens :google :token])]
-         (if access-token
-           (try
-             (let [profile (fetch-google-profile access-token)
-                   email (:email profile)]
-               (if (email-allowed? email allowed-email-pattern)
-                 ;; Email allowed - upsert user to DB, initialize roles, store in session, redirect
-                 (let [user-id (:id profile)
-                       _ (when conn
-                           (db/upsert-user! conn #:user{:id user-id
-                                                        :email email
-                                                        :name (:name profile)
-                                                        :picture (or (:picture profile) "")}))
-                       ;; Initialize roles (grants initial roles on first login)
-                       roles (if conn
-                               (initialize-roles! conn user-id email owner-emails)
-                               #{:member})
-                       session (-> (:session request)
-                                   (assoc :user-id user-id
-                                          :user-email email
-                                          :user-name (:name profile)
-                                          :user-picture (:picture profile)
-                                          :roles roles))]
-                   (mu/log ::user-logged-in :name (:name profile) :roles roles)
-                   (-> (redirect-302 client-root-path)
-                       (assoc :session session)))
-                 ;; Email not allowed - clear session and show error
-                 (do
-                   (mu/log ::login-denied :email email :reason "email not allowed")
-                   (-> (redirect-302 (str client-root-path "?error=unauthorized"))
-                       (assoc :session nil)))))
-             (catch Exception e
-               (mu/log ::success-handler-error :error (ex-message e) :type (type e))
-               (-> (redirect-302 (str client-root-path "?error=oauth-failed"))
-                   (assoc :session nil))))
-           ;; No token in session - something went wrong
-           (do
-             (mu/log ::no-token-in-session :session-keys session-keys)
-             (-> (redirect-302 (str client-root-path "?error=no-token"))
-                 (assoc :session nil)))))
-       ;; Not the success route - pass through
-       (handler request)))))
-
-(defn wrap-logout
-  "Handle /logout by clearing session and redirecting to home."
-  [handler]
-  (fn [request]
-    (if (= "/logout" (:uri request))
-      (do
-        (mu/log ::user-logout :name (get-in request [:session :user-name]))
-        {:status 302
-         :headers {"Location" "/"}
-         :session nil})
-      (handler request))))
+(defn wrap-logout-route
+  "Route /logout to oie's POST-only logout handler.
+   Returns 405 for non-POST requests (CSRF protection)."
+  [handler {:keys [redirect-uri] :or {redirect-uri "/"}}]
+  (let [logout-fn (oie-session/logout-handler {:redirect-uri redirect-uri})]
+    (fn [request]
+      (if (= "/logout" (:uri request))
+        (do (when (= :post (:request-method request))
+              (mu/log ::user-logout
+                      :name (:user-name (get-in request [:session oie-session/session-key]))))
+            (logout-fn request))
+        (handler request)))))
 
 ;;=============================================================================
 ;; Tests
@@ -290,35 +225,67 @@
   (email-allowed? nil nil)
   ;=> false
 
-  ;; wrap-logout redirects on /logout
-  (let [handler (wrap-logout (fn [_] {:status 200}))
-        response (handler {:uri "/logout" :session {:user-email "test@example.com"}})]
+  ;; wrap-authenticate always succeeds (anonymous fallback)
+  (let [handler (wrap-authenticate (fn [req] {:identity (oie/get-identity req)}))
+        resp (handler {:session {}})]
+    (:identity resp))
+  ;=> {}
+
+  ;; wrap-authenticate returns real identity for logged-in user
+  (let [handler (wrap-authenticate (fn [req] {:identity (oie/get-identity req)}))
+        ident {:user-id "u1" :roles #{:member}}
+        resp (handler {:session {::oie-session/user ident}})]
+    (:identity resp))
+  ;=> {:user-id "u1" :roles #{:member}}
+
+  ;; wrap-logout-route returns 405 for GET (CSRF protection)
+  (let [handler (wrap-logout-route (fn [_] {:status 200}) {})
+        response (handler {:uri "/logout" :request-method :get})]
+    [(:status response) (get-in response [:headers "Allow"])])
+  ;=> [405 "POST"]
+
+  ;; wrap-logout-route clears session on POST
+  (let [handler (wrap-logout-route (fn [_] {:status 200}) {})
+        response (handler {:uri "/logout" :request-method :post
+                           :session {::oie-session/user {:user-name "Test"}}})]
     [(:status response) (get-in response [:headers "Location"]) (:session response)])
   ;=> [302 "/" nil]
 
-  ;; wrap-logout passes through other requests
-  (let [handler (wrap-logout (fn [_] {:status 200 :body "ok"}))
-        response (handler {:uri "/api" :session {:user-email "test@example.com"}})]
+  ;; wrap-logout-route with custom redirect-uri
+  (let [handler (wrap-logout-route (fn [_] {:status 200}) {:redirect-uri "/home"})
+        response (handler {:uri "/logout" :request-method :post})]
+    (get-in response [:headers "Location"]))
+  ;=> "/home"
+
+  ;; wrap-logout-route passes through other requests
+  (let [handler (wrap-logout-route (fn [_] {:status 200 :body "ok"}) {})
+        response (handler {:uri "/api" :request-method :get})]
     (:status response))
   ;=> 200
 
-  ;; wrap-google-auth passes through when not configured
-  (let [handler (wrap-google-auth identity {})
+  ;; wrap-oauth2 passes through when profiles is nil
+  (let [handler (wrap-oauth2 identity nil)
         result (handler {:uri "/test"})]
     (:uri result))
   ;=> "/test"
 
-  ;; wrap-oauth-success passes through non-success routes
-  (let [handler (wrap-oauth-success (fn [_] {:status 200 :body "ok"}))
-        response (handler {:uri "/api" :session {}})]
-    (:status response))
-  ;=> 200
+  ;; make-oauth2-profiles returns nil without credentials
+  (make-oauth2-profiles {} (fn [_] nil))
+  ;=> nil
 
-  ;; wrap-oauth-success redirects with error when no token
-  (let [handler (wrap-oauth-success (fn [_] {:status 200}))
-        response (handler {:uri "/oauth2/google/success" :session {}})]
-    [(:status response) (get-in response [:headers "Location"])])
-  ;=> [302 "/?error=no-token"]
+  ;; make-oauth2-profiles builds profile with all required keys
+  (let [profiles (make-oauth2-profiles {:client-id "id"
+                                        :client-secret "secret"
+                                        :base-url "http://localhost:8080"}
+                                       (fn [_] {:user-id "1"}))]
+    [(some? (:google profiles))
+     (:launch-uri (:google profiles))
+     (:redirect-uri (:google profiles))
+     (:landing-uri (:google profiles))
+     (:success-redirect-uri (:google profiles))
+     (fn? (:fetch-profile-fn (:google profiles)))
+     (fn? (:login-fn (:google profiles)))])
+  ;=> [true "/oauth2/google" "http://localhost:8080/oauth2/google/callback" "/oauth2/google/success" "/" true true]
   )
 
 ^:rct/test
@@ -352,4 +319,40 @@
   (#'initialize-roles! conn "owner-1" "owner@example.com" #{"owner@example.com"})
   ;=> #{:member :admin :owner}
 
-  (db/release-conn! conn))
+  (db/release-conn! conn)
+
+  ;; === make-login-fn tests ===
+  (def conn2 (db/create-conn!))
+
+  ;; login-fn rejects disallowed email
+  (let [login (make-login-fn {:allowed-email-pattern #".*@allowed\.com"
+                              :owner-emails #{}
+                              :conn conn2})]
+    (login {:sub "u1" :email "user@rejected.com" :name "User" :picture ""}))
+  ;=> nil
+
+  ;; login-fn accepts allowed email and returns identity
+  (let [login (make-login-fn {:allowed-email-pattern #".*@allowed\.com"
+                              :owner-emails #{}
+                              :conn conn2})
+        ident (login {:sub "u2" :email "user@allowed.com" :name "User" :picture "/pic.png"})]
+    [(:user-id ident) (:user-email ident) (:roles ident)])
+  ;=> ["u2" "user@allowed.com" #{:member}]
+
+  ;; login-fn grants owner roles
+  (let [login (make-login-fn {:allowed-email-pattern #".*@allowed\.com"
+                              :owner-emails #{"boss@allowed.com"}
+                              :conn conn2})
+        ident (login {:sub "u3" :email "boss@allowed.com" :name "Boss" :picture ""})]
+    (:roles ident))
+  ;=> #{:member :admin :owner}
+
+  ;; login-fn works without conn (no DB)
+  (let [login (make-login-fn {:allowed-email-pattern #".*"
+                              :owner-emails #{}
+                              :conn nil})
+        ident (login {:sub "u4" :email "any@any.com" :name "Any" :picture ""})]
+    [(:user-id ident) (:roles ident)])
+  ;=> ["u4" #{:member}]
+
+  (db/release-conn! conn2))

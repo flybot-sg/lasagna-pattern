@@ -32,6 +32,8 @@
    [sg.flybot.flybot-site.server.system.db :as db]
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.pullable.malli]
+   [flybot.oie.authz :as oie-authz]
+   [flybot.oie.core :as oie]
    [malli.core :as m]
    [malli.util :as mu]))
 
@@ -392,14 +394,14 @@
 ;;=============================================================================
 
 (defn- me-lookup
-  "Current user info — session fields + lazy DB lookup for :slug."
-  [conn session]
-  (let [user-id (:user-id session)]
-    (coll/lookup {:email   (:user-email session)
-                  :name    (or (:user-name session) (:user-email session))
-                  :picture (:user-picture session)
+  "Current user info — identity fields + lazy DB lookup for :slug."
+  [conn ident]
+  (let [user-id (:user-id ident)]
+    (coll/lookup {:email   (:user-email ident)
+                  :name    (or (:user-name ident) (:user-email ident))
+                  :picture (:user-picture ident)
                   :slug    (delay (:user/slug (db/get-user conn user-id)))
-                  :roles   (or (:roles session) #{})})))
+                  :roles   (or (:roles ident) #{})})))
 
 (defn- profile-lookup
   "User profile data — all fields are lazy DB queries."
@@ -409,11 +411,11 @@
                 :roles          (delay (db/get-user-roles-detailed conn user-id))}))
 
 (defn- with-role
-  "Return data if session has role, error data otherwise.
+  "Return data if identity has role, error data otherwise.
    The :error value is detected by remote's :detect config,
    producing a :forbidden failure with the correct HTTP 403 status."
-  [session role data]
-  (if (contains? (:roles session) role)
+  [ident role data]
+  (if (oie-authz/has-role? ident role)
     data
     {:error {:type :forbidden :message (str "Role " role " required")}}))
 
@@ -447,26 +449,26 @@
         users       (coll/read-only (db/users conn))
         roles       (roles-lookup conn)]
     (fn [ring-request]
-      (let [session (:session ring-request)
-            user-id (:user-id session)]
+      (let [ident   (oie/get-identity ring-request)
+            user-id (:user-id ident)]
 
         {:data
          {;; Guest: always available (read-only posts only)
           :guest {:posts guest-posts}
 
           ;; Member: ILookups — DB calls only when pattern accesses them
-          :member (with-role session :member
-                    {:posts (member-posts posts user-id (:user-email session))
+          :member (with-role ident :member
+                    {:posts (member-posts posts user-id (:user-email ident))
                      :posts/history history
-                     :me (me-lookup conn session)
+                     :me (me-lookup conn ident)
                      :me/profile (profile-lookup conn user-id)})
 
           ;; Admin: CRUD any post
-          :admin (with-role session :admin
+          :admin (with-role ident :admin
                    {:posts posts})
 
           ;; Owner: user management + role grant/revoke
-          :owner (with-role session :owner
+          :owner (with-role ident :owner
                    {:users users
                     :users/roles roles})}
 
@@ -513,8 +515,8 @@
   ;; Member: has :member with :posts, :posts/history, :me
   (db/create-user! conn #:user{:id "m1" :email "m@test.com" :name "M" :picture ""})
   (db/grant-role! conn "m1" :member)
-  (let [session {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
-        {:keys [data]} (api-fn {:session session})]
+  (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
+        {:keys [data]} (api-fn {::oie/identity ident})]
     [(some? (:member data))
      (some? (get-in data [:member :posts]))
      (some? (get-in data [:member :me]))
@@ -523,24 +525,24 @@
   ;=> [true true true "m@test.com" :forbidden]
 
   ;; Member: author email visible, Google ID still stripped
-  (let [session {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
-        post (get (get-in (api-fn {:session session}) [:data :member :posts]) {:post/id 1})
+  (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
+        post (get (get-in (api-fn {::oie/identity ident}) [:data :member :posts]) {:post/id 1})
         author (:post/author post)]
     [(some? (:user/email author))
      (nil? (:user/id author))])
   ;=> [true true]
 
   ;; Member: can create post via :member :posts
-  (let [session {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
-        {:keys [data]} (api-fn {:session session})
+  (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
+        {:keys [data]} (api-fn {::oie/identity ident})
         result (coll/mutate! (get-in data [:member :posts]) nil
                              {:post/title "My Post" :post/content "x" :post/tags []})]
     (:post/title result))
   ;=> "My Post"
 
   ;; Member: cannot update other's post
-  (let [session {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
-        {:keys [data]} (api-fn {:session session})
+  (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
+        {:keys [data]} (api-fn {::oie/identity ident})
         result (coll/mutate! (get-in data [:member :posts]) {:post/id 1} {:post/title "Hacked"})]
     (:type (:error result)))
   ;=> :forbidden
@@ -548,8 +550,8 @@
   ;; Admin: can update any post via :admin :posts
   (db/create-user! conn #:user{:id "a1" :email "a@test.com" :name "A" :picture ""})
   (db/grant-role! conn "a1" :admin)
-  (let [session {:user-id "a1" :user-email "a@test.com" :roles #{:admin}}
-        {:keys [data]} (api-fn {:session session})
+  (let [ident {:user-id "a1" :user-email "a@test.com" :roles #{:admin}}
+        {:keys [data]} (api-fn {::oie/identity ident})
         result (coll/mutate! (get-in data [:admin :posts]) {:post/id 1} {:post/title "Admin Edit"})]
     (:post/title result))
   ;=> "Admin Edit"
@@ -557,8 +559,8 @@
   ;; Owner: has :owner with :users
   (db/create-user! conn #:user{:id "o1" :email "o@test.com" :name "O" :picture ""})
   (db/grant-role! conn "o1" :owner)
-  (let [session {:user-id "o1" :user-email "o@test.com" :roles #{:owner}}
-        {:keys [data]} (api-fn {:session session})]
+  (let [ident {:user-id "o1" :user-email "o@test.com" :roles #{:owner}}
+        {:keys [data]} (api-fn {::oie/identity ident})]
     (some? (get-in data [:owner :users])))
   ;=> true
 
