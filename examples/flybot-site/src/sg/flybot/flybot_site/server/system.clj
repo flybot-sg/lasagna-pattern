@@ -364,7 +364,13 @@
                  (auth/wrap-oauth2 profiles)
                  (wrap-dev-user dev-user)
                  (wrap-idle-session-timeout {:timeout timeout
-                                             :timeout-handler (oie-session/session-timeout-handler {})})
+                                             :timeout-handler
+                                             (fn [request]
+                                               (if (str/starts-with? (:uri request) "/api")
+                                                 ((oie-session/session-timeout-handler {}) request)
+                                                 {:status 302
+                                                  :headers {"Location" (:uri request)}
+                                                  :body ""}))})
                  (wrap-session session-config)
                  wrap-keyword-params
                  wrap-params
