@@ -46,11 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Prevent post ID reuse and scope history to current entity
 
-### Added
-
-- Tiered author schemas with role-based field visibility
-- AOT compilation for faster container startup
-
 ## [0.2.3] - 2026-02-13
 
 ### Added
@@ -112,34 +107,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Improve post card layout with tags row, featured star, and CSS polish
 
-## [0.1.6] - 2026-02-05
+## [0.1.6] - 2026-02-06
 
 ### Added
 
 - Profile page with lazy ILookup and admin management
-- LOG_PUBLISHER env var for CloudWatch logging
-- UI polish with Inter font, toasts, and dark mode fixes
-- Mobile navigation and UX improvements
-- Structured error handling in frontend
-- Role-based API with namespace refactoring
-- Normalized user-post relationship with author profiles
-- Tag editing UI and featured flag
-- Datahike S3 backend and S3 uploads support
-- Mulog structured logging
-- Malli schema validation for config
-- Configurable Datahike backend (mem/file/s3)
-- Encrypted cookie-store for sessions
 
 ### Fixed
 
 - Cache-control headers
-- OAuth2 success handler and email pattern matching
-- Strip frontmatter from content
-
-### Changed
-
-- Migrate backend logging from Timbre to mulog
-- Use fun-map associative DI pattern for system modes
 
 ## [0.1.5] - 2026-02-05
 
@@ -185,7 +161,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Google OAuth authentication with email pattern restriction
 - Role-based access control (guest, member, admin, owner)
 - Pull-pattern CRUD API with collection-based authorization
-- Replicant SPA frontend with dispatch-of effect pattern
+- Replicant SPA frontend
 - Datahike database with history tracking
 - Post CRUD with ownership enforcement
-- GitHub Actions CI/CD pipeline
+- Structured error handling in frontend
+- Normalized user-post relationship with author profiles
+- Tag editing UI and featured flag
+- Datahike S3 backend and S3 uploads support
+- Mulog structured logging
+- Malli schema validation for config
+- Configurable Datahike backend (mem/file/s3)
+- Encrypted cookie-store for sessions
+
+### Fixed
+
+- OAuth2 success handler and email pattern matching
+- Strip frontmatter from content
+
+### Changed
+
+- Migrate backend logging from Timbre to mulog
+- Use fun-map associative DI pattern for system modes
