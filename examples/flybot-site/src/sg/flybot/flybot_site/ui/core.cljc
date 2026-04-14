@@ -59,27 +59,34 @@
                         :credentials "include"
                         :body (encode {:pattern pattern})})
          (.then (fn [resp]
-                  ;; Always read body - errors have structured data
-                  (-> (.text resp)
-                      (.then (fn [text]
-                               {:status (.-status resp)
-                                :ok (.-ok resp)
-                                :body (when (seq text) (decode text))})))))
-         (.then (fn [{:keys [status ok body]}]
-                  (if ok
-                    (do (log/log-api-response body)
-                        (when-let [errors (:errors body)]
-                          (doseq [{:keys [code reason path]} errors]
-                            (log/warn "Partial success —" code
-                                      (when path (str "at " path ":"))
-                                      reason)))
-                        (on-success body))
-                    ;; Extract structured error from response
-                    (let [error (if-let [err (first (:errors body))]
-                                  (assoc err :status status)
-                                  {:code :unknown :reason (str "HTTP " status) :status status})]
-                      (log/log-api-error error pattern)
-                      (on-error error)))))
+                  ;; 401 = session expired (body is not transit-encoded)
+                  (if (= 401 (.-status resp))
+                    (do (log/warn "Session expired, redirecting to login")
+                        (set! (.-location js/window) "/"))
+                    ;; Normal flow - read body as transit
+                    (-> (.text resp)
+                        (.then (fn [text]
+                                 {:status (.-status resp)
+                                  :ok (.-ok resp)
+                                  :body (when (seq text) (decode text))}))))))
+         (.then (fn [result]
+                  ;; nil when 401 redirected
+                  (when result
+                    (let [{:keys [status ok body]} result]
+                      (if ok
+                        (do (log/log-api-response body)
+                            (when-let [errors (:errors body)]
+                              (doseq [{:keys [code reason path]} errors]
+                                (log/warn "Partial success —" code
+                                          (when path (str "at " path ":"))
+                                          reason)))
+                            (on-success body))
+                        ;; Extract structured error from response
+                        (let [error (if-let [err (first (:errors body))]
+                                      (assoc err :status status)
+                                      {:code :unknown :reason (str "HTTP " status) :status status})]
+                          (log/log-api-error error pattern)
+                          (on-error error)))))))
          (.catch (fn [err]
                    (let [msg (log/error->string err)]
                      (log/log-api-error msg pattern)
@@ -134,8 +141,9 @@
    :pull     — async API call (reads current db snapshot)
    :history  — pushState (reads current db for URL)
    :toast    — add notification (reads toast-counter from db)
+   :logout   — POST /logout then hard redirect (CSRF-safe)
    :navigate — hard redirect (last — browser leaves page)"
-  [:db :confirm :pull :history :toast :navigate])
+  [:db :confirm :pull :history :toast :logout :navigate])
 
 #?(:cljs
    (defn dispatch-of
@@ -165,6 +173,8 @@
                  :toast    (let [id (inc (:toast-counter (get @app-db root-key)))]
                              (@self {:db #(db/add-toast % (:type effect-def) (:title effect-def) (:message effect-def))})
                              (js/setTimeout #(@self {:db (fn [d] (db/remove-toast d id))}) 4000))
+                 :logout   (-> (js/fetch "/logout" #js {:method "POST" :credentials "include"})
+                               (.then (fn [_] (set! (.-location js/window) (or effect-def "/")))))
                  :navigate (set! (.-location js/window) effect-def))))]
        (vreset! self dispatch!)
        dispatch!)))

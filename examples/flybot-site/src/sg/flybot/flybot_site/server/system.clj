@@ -45,6 +45,7 @@
    [datahike-s3.core] ; registers :s3 backend
    [sg.flybot.flybot-site.server.system.auth :as auth]
    [sg.flybot.flybot-site.server.system.s3 :as s3]
+   [flybot.oie.session :as oie-session]
    [sg.flybot.pullable.remote :as remote]
    [com.brunobonacci.mulog :as mu]
    [org.httpkit.server :as http-kit]
@@ -191,21 +192,22 @@
 
 (defn- wrap-dev-user
   "Inject fake session for dev mode.
+   Stores identity under oie's session key so auth/get-identity can find it.
    Includes roles from the dev-user map (defaults to all roles for dev convenience)."
   [handler dev-user]
   (if dev-user
     (fn [request]
-      (let [session (merge (:session request)
-                           {:user-id (:id dev-user)
-                            :user-email (:email dev-user)
-                            :user-name (:name dev-user)
-                            :user-picture (:picture dev-user)
-                            :roles (or (:roles dev-user) #{:member :admin :owner})})]
+      (let [ident {:user-id (:id dev-user)
+                   :user-email (:email dev-user)
+                   :user-name (:name dev-user)
+                   :user-picture (:picture dev-user)
+                   :roles (or (:roles dev-user) #{:member :admin :owner})}
+            session (assoc (:session request) oie-session/session-key ident)]
         (handler (assoc request :session session))))
     handler))
 
-(defn- session-timeout-handler [_]
-  {:status 302 :headers {"Location" "/?error=session-expired"} :body ""})
+;; Session timeout uses oie-session/session-timeout-handler (returns 401).
+;; The SPA handles 401 and redirects client-side.
 
 ;;=============================================================================
 ;; System Definition
@@ -338,7 +340,15 @@
            (let [js-path    (or (read-js-path) "main.js")
                  css-ver    (or (asset-version "public/css/style.css") "0")
                  app-ver    (read-version)
-                 index-html (render-index js-path css-ver app-ver)]
+                 index-html (render-index js-path css-ver app-ver)
+                 ;; Build oie OAuth2 profiles
+                 login-fn   (auth/make-login-fn {:allowed-email-pattern email-pattern
+                                                 :owner-emails owner-emails
+                                                 :conn (:conn db)})
+                 profiles   (auth/make-oauth2-profiles {:client-id google-client-id
+                                                        :client-secret google-client-secret
+                                                        :base-url base-url}
+                                                       login-fn)]
              (mu/log ::assets-resolved :js-path js-path :css-version css-ver :app-version app-ver)
              (-> (fn [_] (-> (resp/response index-html)
                              (resp/content-type "text/html")))
@@ -349,16 +359,12 @@
                  (remote/wrap-api api-fn {:path "/api"})
                  (wrap-upload-route upload-handler)
                  wrap-multipart-params
-                 auth/wrap-logout
-                 (auth/wrap-oauth-success {:allowed-email-pattern email-pattern
-                                           :owner-emails owner-emails
-                                           :conn (:conn db)})
-                 (auth/wrap-google-auth {:client-id google-client-id
-                                         :client-secret google-client-secret
-                                         :base-url base-url})
+                 auth/wrap-authenticate
+                 (auth/wrap-logout-route {})
+                 (auth/wrap-oauth2 profiles)
                  (wrap-dev-user dev-user)
                  (wrap-idle-session-timeout {:timeout timeout
-                                             :timeout-handler session-timeout-handler})
+                                             :timeout-handler (oie-session/session-timeout-handler {})})
                  (wrap-session session-config)
                  wrap-keyword-params
                  wrap-params
