@@ -206,8 +206,8 @@
         (handler (assoc request :session session))))
     handler))
 
-;; Session timeout uses oie-session/session-timeout-handler (returns 401).
-;; The SPA handles 401 and redirects client-side.
+(defn- session-timeout-handler [_]
+  {:status 302 :headers {"Location" "/?error=session-expired"} :body ""})
 
 ;;=============================================================================
 ;; System Definition
@@ -364,13 +364,7 @@
                  (auth/wrap-oauth2 profiles)
                  (wrap-dev-user dev-user)
                  (wrap-idle-session-timeout {:timeout timeout
-                                             :timeout-handler
-                                             (fn [request]
-                                               (if (str/starts-with? (:uri request) "/api")
-                                                 ((oie-session/session-timeout-handler {}) request)
-                                                 {:status 302
-                                                  :headers {"Location" (:uri request)}
-                                                  :body ""}))})
+                                             :timeout-handler session-timeout-handler})
                  (wrap-session session-config)
                  wrap-keyword-params
                  wrap-params
