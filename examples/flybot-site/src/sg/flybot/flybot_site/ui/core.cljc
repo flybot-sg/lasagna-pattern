@@ -174,7 +174,10 @@
                              (@self {:db #(db/add-toast % (:type effect-def) (:title effect-def) (:message effect-def))})
                              (js/setTimeout #(@self {:db (fn [d] (db/remove-toast d id))}) 4000))
                  :logout   (-> (js/fetch "/logout" #js {:method "POST" :credentials "include"})
-                               (.then (fn [_] (set! (.-location js/window) (or effect-def "/")))))
+                               (.then (fn [_] (set! (.-location js/window) (or effect-def "/"))))
+                               (.catch (fn [err]
+                                         (log/error "Logout failed:" (log/error->string err))
+                                         (@self {:toast {:type :error :title "Logout failed" :message "Please try again"}}))))
                  :navigate (set! (.-location js/window) effect-def))))]
        (vreset! self dispatch!)
        dispatch!)))

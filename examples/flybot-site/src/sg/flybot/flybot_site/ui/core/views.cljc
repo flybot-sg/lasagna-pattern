@@ -405,7 +405,7 @@
                (-> name (subs 0 1) .toUpperCase))])]
          [:span.user-name (:name user)]
          [:button.icon-btn {:title "Sign out"
-                            :on {:click (fn [_] (dispatch! {:db #(assoc % :user nil) :logout "/"}))}}
+                            :on {:click (fn [_] (dispatch! {:logout "/"}))}}
           (logout-icon)]]
         [:a.icon-btn {:href "/oauth2/google" :title "Sign in with Google"}
          (login-icon)])

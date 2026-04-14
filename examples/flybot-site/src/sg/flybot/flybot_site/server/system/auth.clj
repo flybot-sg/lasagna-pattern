@@ -42,18 +42,6 @@
    [com.brunobonacci.mulog :as mu]))
 
 ;;=============================================================================
-;; Identity Extraction
-;;=============================================================================
-
-(defn get-identity
-  "Extract authenticated identity from the request.
-   Tries oie/get-identity first (set by wrap-authenticate), then falls
-   back to reading from session directly (for tests that bypass middleware)."
-  [request]
-  (or (oie/get-identity request)
-      (get-in request [:session oie-session/session-key])))
-
-;;=============================================================================
 ;; Strategies
 ;;=============================================================================
 
@@ -236,17 +224,6 @@
   ;; email-allowed? returns false for nil email and nil pattern
   (email-allowed? nil nil)
   ;=> false
-
-  ;; get-identity returns identity from oie session key (test fallback path)
-  (get-identity {:session {::oie-session/user {:user-id "123" :roles #{:member}}}})
-  ;=> {:user-id "123" :roles #{:member}}
-
-  ;; get-identity returns nil for unauthenticated request
-  (get-identity {:session {}})
-  ;=> nil
-
-  (get-identity {})
-  ;=> nil
 
   ;; wrap-authenticate always succeeds (anonymous fallback)
   (let [handler (wrap-authenticate (fn [req] {:identity (oie/get-identity req)}))

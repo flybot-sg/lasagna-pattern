@@ -192,7 +192,7 @@
 
 (defn- wrap-dev-user
   "Inject fake session for dev mode.
-   Stores identity under oie's session key so auth/get-identity can find it.
+   Stores identity under oie's session key so wrap-authenticate can find it.
    Includes roles from the dev-user map (defaults to all roles for dev convenience)."
   [handler dev-user]
   (if dev-user

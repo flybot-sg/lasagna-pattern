@@ -29,12 +29,11 @@
 
    See remote/doc/SPECIFICATION.md for wire protocol."
   (:require
-   [sg.flybot.flybot-site.server.system.auth :as auth]
    [sg.flybot.flybot-site.server.system.db :as db]
    [sg.flybot.pullable.collection :as coll]
    [sg.flybot.pullable.malli]
    [flybot.oie.authz :as oie-authz]
-   [flybot.oie.session :as oie-session]
+   [flybot.oie.core :as oie]
    [malli.core :as m]
    [malli.util :as mu]))
 
@@ -450,7 +449,7 @@
         users       (coll/read-only (db/users conn))
         roles       (roles-lookup conn)]
     (fn [ring-request]
-      (let [ident   (auth/get-identity ring-request)
+      (let [ident   (oie/get-identity ring-request)
             user-id (:user-id ident)]
 
         {:data
@@ -517,7 +516,7 @@
   (db/create-user! conn #:user{:id "m1" :email "m@test.com" :name "M" :picture ""})
   (db/grant-role! conn "m1" :member)
   (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
-        {:keys [data]} (api-fn {:session {::oie-session/user ident}})]
+        {:keys [data]} (api-fn {::oie/identity ident})]
     [(some? (:member data))
      (some? (get-in data [:member :posts]))
      (some? (get-in data [:member :me]))
@@ -527,7 +526,7 @@
 
   ;; Member: author email visible, Google ID still stripped
   (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
-        post (get (get-in (api-fn {:session {::oie-session/user ident}}) [:data :member :posts]) {:post/id 1})
+        post (get (get-in (api-fn {::oie/identity ident}) [:data :member :posts]) {:post/id 1})
         author (:post/author post)]
     [(some? (:user/email author))
      (nil? (:user/id author))])
@@ -535,7 +534,7 @@
 
   ;; Member: can create post via :member :posts
   (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
-        {:keys [data]} (api-fn {:session {::oie-session/user ident}})
+        {:keys [data]} (api-fn {::oie/identity ident})
         result (coll/mutate! (get-in data [:member :posts]) nil
                              {:post/title "My Post" :post/content "x" :post/tags []})]
     (:post/title result))
@@ -543,7 +542,7 @@
 
   ;; Member: cannot update other's post
   (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
-        {:keys [data]} (api-fn {:session {::oie-session/user ident}})
+        {:keys [data]} (api-fn {::oie/identity ident})
         result (coll/mutate! (get-in data [:member :posts]) {:post/id 1} {:post/title "Hacked"})]
     (:type (:error result)))
   ;=> :forbidden
@@ -552,7 +551,7 @@
   (db/create-user! conn #:user{:id "a1" :email "a@test.com" :name "A" :picture ""})
   (db/grant-role! conn "a1" :admin)
   (let [ident {:user-id "a1" :user-email "a@test.com" :roles #{:admin}}
-        {:keys [data]} (api-fn {:session {::oie-session/user ident}})
+        {:keys [data]} (api-fn {::oie/identity ident})
         result (coll/mutate! (get-in data [:admin :posts]) {:post/id 1} {:post/title "Admin Edit"})]
     (:post/title result))
   ;=> "Admin Edit"
@@ -561,7 +560,7 @@
   (db/create-user! conn #:user{:id "o1" :email "o@test.com" :name "O" :picture ""})
   (db/grant-role! conn "o1" :owner)
   (let [ident {:user-id "o1" :user-email "o@test.com" :roles #{:owner}}
-        {:keys [data]} (api-fn {:session {::oie-session/user ident}})]
+        {:keys [data]} (api-fn {::oie/identity ident})]
     (some? (get-in data [:owner :users])))
   ;=> true
 

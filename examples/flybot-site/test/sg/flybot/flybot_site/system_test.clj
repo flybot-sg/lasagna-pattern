@@ -13,7 +13,7 @@
    [clojure.edn :as edn]
    [clojure.string :as str]
    [clj-http.client :as http]
-   [flybot.oie.session :as oie-session]
+   [flybot.oie.core :as oie]
    [sg.flybot.flybot-site.server.system :as system]
    [sg.flybot.flybot-site.server.system.db :as db]
    [sg.flybot.pullable.collection :as coll]
@@ -206,7 +206,7 @@
     (let [api-fn (::system/api-fn *sys*)
           ident {:user-id "tester" :user-email "tester@test.com"
                  :user-name "Test User" :roles #{:member}}
-          {:keys [data]} (api-fn {:session {::oie-session/user ident}})]
+          {:keys [data]} (api-fn {::oie/identity ident})]
       (is (some? (:member data)) "Member has :member")
       (is (some? (get-in data [:member :posts])) "Member has :member :posts")
       (is (some? (get-in data [:member :me])) "Member has :member :me")
@@ -216,7 +216,7 @@
     (let [api-fn (::system/api-fn *sys*)
           ident {:user-id "owner" :user-email "owner@test.com"
                  :roles #{:member :admin}}
-          {:keys [data]} (api-fn {:session {::oie-session/user ident}})]
+          {:keys [data]} (api-fn {::oie/identity ident})]
       (is (some? (:admin data)) "Admin has :admin")
       (is (some? (get-in data [:admin :posts])) "Admin has :admin :posts")))
 
@@ -224,7 +224,7 @@
     (let [api-fn (::system/api-fn *sys*)
           ident {:user-id "owner" :user-email "owner@test.com"
                  :roles #{:member :admin :owner}}
-          {:keys [data]} (api-fn {:session {::oie-session/user ident}})]
+          {:keys [data]} (api-fn {::oie/identity ident})]
       (is (some? (:owner data)) "Owner has :owner")
       (is (some? (get-in data [:owner :users])) "Owner has :owner :users")
       (is (seq (seq (get-in data [:owner :users]))) "Users collection has data")))
@@ -233,7 +233,7 @@
     (let [api-fn (::system/api-fn *sys*)
           ident {:user-id "tester" :user-email "tester@test.com"
                  :roles #{:member}}
-          {:keys [data]} (api-fn {:session {::oie-session/user ident}})
+          {:keys [data]} (api-fn {::oie/identity ident})
           result (coll/mutate! (get-in data [:member :posts]) nil
                                {:post/title "Collection Test"
                                 :post/content "test"
@@ -246,7 +246,7 @@
     (let [api-fn (::system/api-fn *sys*)
           owner-ident {:user-id "owner" :user-email "owner@test.com"
                        :roles #{:member}}
-          {:keys [data]} (api-fn {:session {::oie-session/user owner-ident}})
+          {:keys [data]} (api-fn {::oie/identity owner-ident})
           owner-post (coll/mutate! (get-in data [:member :posts]) nil
                                    {:post/title "Owner's Post"
                                     :post/content "test"
@@ -255,7 +255,7 @@
       ;; Now try to update it as tester (different user) - returns error
       (let [tester-ident {:user-id "tester" :user-email "tester@test.com"
                           :roles #{:member}}
-            {data2 :data} (api-fn {:session {::oie-session/user tester-ident}})
+            {data2 :data} (api-fn {::oie/identity tester-ident})
             result (coll/mutate! (get-in data2 [:member :posts])
                                  {:post/id owner-post-id}
                                  {:post/title "Hacked!"})]
@@ -266,7 +266,7 @@
     (let [api-fn (::system/api-fn *sys*)
           ident {:user-id "tester" :user-email "tester@test.com"
                  :roles #{:member :admin}}
-          {:keys [data]} (api-fn {:session {::oie-session/user ident}})
+          {:keys [data]} (api-fn {::oie/identity ident})
           posts (seq (get-in data [:member :posts]))
           owner-post (first (filter #(= "Owner's Post" (:post/title %)) posts))
           owner-post-id (:post/id owner-post)
