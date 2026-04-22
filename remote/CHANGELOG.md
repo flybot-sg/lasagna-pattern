@@ -9,12 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Replace `(satisfies? coll/Wireable v)` with a faster `instance?` on the protocol's `:on-interface` combined with a `:impls`-map lookup, avoiding the class-ancestor walk that dominates `satisfies?`'s cost (~60× speedup on large responses)
+- Replace `(satisfies? coll/Wireable v)` with a faster `instance?` on the protocol's `:on-interface` combined with a `:impls`-map lookup, avoiding the class-ancestor walk that dominates `satisfies?`'s cost
 - Remove redundant `prepare-for-wire` walk from `encode-response`; Wireable conversion now happens once in `success` via `normalize-value`
 
 ### Removed
 
 - `prepare-for-wire` (private fn) — no remaining callers
+
+## [0.1.2] - 2026-03-20
+
+### Added
+
+- `execute-read` walks var paths through data (including through ILookup) and detects errors via `:detect` config before pattern matching
+- Pattern is trimmed at error paths, compiled against remaining structure, then classified as full success, partial success, or full failure
+- Partial success returns successful bindings alongside an `:errors` array for failed paths (reads only — mutations remain all-or-nothing)
+- `execute-mutation` detects path-level errors (e.g. role gates returning `{:error ...}`) before attempting `mutate!`
+- Helpers: `extract-var-paths`, `trim-pattern`, `detect-path-error`, `detect-read-errors`, `classify-result`, `relevant-errors`
+- Comprehensive RCT and deftest coverage: partial success, all-error, nested errors, ILookup errors, custom detect-fn, exceptions, schema violations
+
+### Changed
+
+- Shared `make-detect-fn` extracted from `execute-mutation` for use by both read and mutation paths
+- Remote spec bumped to v0.3
+
+## [0.1.1] - 2026-02-25
+
+### Changed
+
+- `parse-mutation` replaced hardcoded two-case `cond` with a recursive walk over single-key keyword maps until reaching the mutation leaf `{nil-or-map value}`
+- Supports mutation patterns at arbitrary nesting depth (e.g. `{:a {:role/member {:posts {nil data}}}}`)
+- All existing behaviour preserved
 
 ## [0.1.0] - 2026-02-19
 
