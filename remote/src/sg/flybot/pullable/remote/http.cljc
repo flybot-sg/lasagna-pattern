@@ -17,12 +17,22 @@
 ;; Wire Serialization
 ;;=============================================================================
 
+(defn- wireable?
+  "Fast replacement for `(satisfies? coll/Wireable v)`.
+   Combines a direct Java-interface `instance?` check (catches inline `deftype`
+   and `reify`) with a class-keyed lookup in the protocol's `:impls` map
+   (catches `extend-type` / `extend-protocol`)."
+  [v]
+  #?(:clj (or (instance? (:on-interface coll/Wireable) v)
+              (some? (get (:impls coll/Wireable) (class v))))
+     :cljs (satisfies? coll/Wireable v)))
+
 (defn- prepare-for-wire
   "Recursively convert Wireable objects to serializable data.
    Walks maps and vectors, converting any Wireable values."
   [x]
   (cond
-    (satisfies? coll/Wireable x)
+    (wireable? x)
     (prepare-for-wire (coll/->wire x))
 
     (map? x)
@@ -343,7 +353,7 @@
   [x]
   (clojure.walk/postwalk
    (fn [v]
-     (if (satisfies? coll/Wireable v)
+     (if (wireable? v)
        (coll/->wire v)
        v))
    x))
