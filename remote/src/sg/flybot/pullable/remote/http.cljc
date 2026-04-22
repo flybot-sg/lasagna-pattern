@@ -27,29 +27,6 @@
               (some? (get (:impls coll/Wireable) (class v))))
      :cljs (satisfies? coll/Wireable v)))
 
-(defn- prepare-for-wire
-  "Recursively convert Wireable objects to serializable data.
-   Walks maps and vectors, converting any Wireable values."
-  [x]
-  (cond
-    (wireable? x)
-    (prepare-for-wire (coll/->wire x))
-
-    (map? x)
-    (persistent!
-     (reduce-kv (fn [m k v]
-                  (assoc! m k (prepare-for-wire v)))
-                (transient {})
-                x))
-
-    (vector? x)
-    (mapv prepare-for-wire x)
-
-    (sequential? x)
-    (map prepare-for-wire x)
-
-    :else x))
-
 ;;=============================================================================
 ;; Security: Safe Pattern Evaluation
 ;;=============================================================================
@@ -428,7 +405,9 @@
    :body #?(:clj (ByteArrayInputStream. body-bytes) :cljs body-bytes)})
 
 (defn- encode-response [response format]
-  {:body (encode (prepare-for-wire response) format)
+  ;; Wireable conversion already happened in `success` via `normalize-value`
+  ;; (and in `handle-schema` for schema responses). No need to re-walk here.
+  {:body (encode response format)
    :content-type (get content-types format)})
 
 (defn parse-mutation
