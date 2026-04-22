@@ -62,8 +62,8 @@ Ring Handler (make-handler / wrap-api)
     │         │                        │
     │         └────────┬───────────────┘
     │                  ▼
-    ├── prepare-for-wire (Wireable → serializable)
     └── encode response → Ring response
+        (Wireable → serializable handled in `success` via normalize-value)
 ```
 
 **Key**: `pattern` (match-fn) is only used on the READ path. On the MUTATION path, `remote` walks the pattern path itself and calls `coll/mutate!` directly — `pattern` is not involved.

@@ -14,31 +14,21 @@
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
 
 ;;=============================================================================
-;; Wire Serialization
+;; Protocol Utilities
 ;;=============================================================================
 
-(defn- prepare-for-wire
-  "Recursively convert Wireable objects to serializable data.
-   Walks maps and vectors, converting any Wireable values."
-  [x]
-  (cond
-    (satisfies? coll/Wireable x)
-    (prepare-for-wire (coll/->wire x))
+(defn- direct-satisfies?
+  "Fast alternative to `clojure.core/satisfies?`. True when `v`'s class directly
+   implements the protocol interface (covers `deftype` inline and `reify`) OR is
+   registered in the protocol's `:impls` map (covers `extend-type` /
+   `extend-protocol`).
 
-    (map? x)
-    (persistent!
-     (reduce-kv (fn [m k v]
-                  (assoc! m k (prepare-for-wire v)))
-                (transient {})
-                x))
-
-    (vector? x)
-    (mapv prepare-for-wire x)
-
-    (sequential? x)
-    (map prepare-for-wire x)
-
-    :else x))
+   Does not cover `:extend-via-metadata` — values whose protocol impl is attached
+   via metadata aren't detected."
+  [protocol v]
+  #?(:clj (or (instance? (:on-interface protocol) v)
+              (some? (get (:impls protocol) (class v))))
+     :cljs (satisfies? protocol v)))
 
 ;;=============================================================================
 ;; Security: Safe Pattern Evaluation
@@ -343,7 +333,7 @@
   [x]
   (clojure.walk/postwalk
    (fn [v]
-     (if (satisfies? coll/Wireable v)
+     (if (direct-satisfies? coll/Wireable v)
        (coll/->wire v)
        v))
    x))
@@ -418,7 +408,9 @@
    :body #?(:clj (ByteArrayInputStream. body-bytes) :cljs body-bytes)})
 
 (defn- encode-response [response format]
-  {:body (encode (prepare-for-wire response) format)
+  ;; Wireable conversion already happened in `success` via `normalize-value`
+  ;; (and in `handle-schema` for schema responses). No need to re-walk here.
+  {:body (encode response format)
    :content-type (get content-types format)})
 
 (defn parse-mutation
@@ -657,7 +649,7 @@
           res (if path-err
                 (let [{:keys [type message]} path-err]
                   (failure (error type (or message (name type)) (:path path-err))))
-                (if (and coll (satisfies? coll/Mutable coll))
+                (if (and coll (direct-satisfies? coll/Mutable coll))
                   (let [result (coll/mutate! coll query value)]
                     (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
                       (failure (error type (or message (name type)) (vec path)))
