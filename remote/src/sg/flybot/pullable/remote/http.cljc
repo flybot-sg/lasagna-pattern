@@ -14,18 +14,18 @@
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
 
 ;;=============================================================================
-;; Wire Serialization
+;; Protocol Utilities
 ;;=============================================================================
 
-(defn- wireable?
-  "Fast replacement for `(satisfies? coll/Wireable v)`.
-   Combines a direct Java-interface `instance?` check (catches inline `deftype`
-   and `reify`) with a class-keyed lookup in the protocol's `:impls` map
-   (catches `extend-type` / `extend-protocol`)."
-  [v]
-  #?(:clj (or (instance? (:on-interface coll/Wireable) v)
-              (some? (get (:impls coll/Wireable) (class v))))
-     :cljs (satisfies? coll/Wireable v)))
+(defn- direct-satisfies?
+  "Fast alternative to `clojure.core/satisfies?`. True when `v`'s class directly
+   implements the protocol interface (covers `deftype` inline and `reify`) OR is
+   registered in the protocol's `:impls` map (covers `extend-type` /
+   `extend-protocol`)."
+  [protocol v]
+  #?(:clj (or (instance? (:on-interface protocol) v)
+              (some? (get (:impls protocol) (class v))))
+     :cljs (satisfies? protocol v)))
 
 ;;=============================================================================
 ;; Security: Safe Pattern Evaluation
@@ -330,7 +330,7 @@
   [x]
   (clojure.walk/postwalk
    (fn [v]
-     (if (wireable? v)
+     (if (direct-satisfies? coll/Wireable v)
        (coll/->wire v)
        v))
    x))
@@ -646,7 +646,7 @@
           res (if path-err
                 (let [{:keys [type message]} path-err]
                   (failure (error type (or message (name type)) (:path path-err))))
-                (if (and coll (satisfies? coll/Mutable coll))
+                (if (and coll (direct-satisfies? coll/Mutable coll))
                   (let [result (coll/mutate! coll query value)]
                     (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
                       (failure (error type (or message (name type)) (vec path)))
