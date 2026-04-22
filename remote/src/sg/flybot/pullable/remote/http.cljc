@@ -21,7 +21,10 @@
   "Fast alternative to `clojure.core/satisfies?`. True when `v`'s class directly
    implements the protocol interface (covers `deftype` inline and `reify`) OR is
    registered in the protocol's `:impls` map (covers `extend-type` /
-   `extend-protocol`)."
+   `extend-protocol`).
+
+   Does not cover `:extend-via-metadata` — values whose protocol impl is attached
+   via metadata aren't detected."
   [protocol v]
   #?(:clj (or (instance? (:on-interface protocol) v)
               (some? (get (:impls protocol) (class v))))
