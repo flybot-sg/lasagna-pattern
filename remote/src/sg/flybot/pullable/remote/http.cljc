@@ -713,142 +713,6 @@
   ;=> {[:user :name] {:type :forbidden}}
   )
 
-(defn- var-binding
-  "If `x` is a pattern variable (simple `?x` or extended `(?x :when ...)`),
-   returns the bound symbol that the matcher uses in `:vars` (`?x` → `'x`).
-   Returns nil otherwise."
-  [x]
-  (let [sym (cond
-              (and (symbol? x)
-                   (str/starts-with? (name x) "?"))
-              x
-
-              (and (sequential? x) (not (vector? x))
-                   (symbol? (first x))
-                   (str/starts-with? (name (first x)) "?"))
-              (first x))]
-    (when sym (symbol (subs (name sym) 1)))))
-
-(defn- extract-var-bindings
-  "Extract {bound-symbol path-vec} mapping from pattern."
-  [pattern]
-  (letfn [(walk [p prefix]
-            (cond
-              (map? p)
-              (reduce-kv (fn [acc k v] (merge acc (walk v (conj prefix k))))
-                         {} p)
-
-              :else
-              (if-let [sym (var-binding p)]
-                {sym prefix}
-                {})))]
-    (walk pattern [])))
-
-^:rct/test
-(comment
-  ;; var-binding — unified predicate+strip
-  (var-binding '?x) ;=> 'x
-  (var-binding '?result) ;=> 'result
-  (var-binding 'x) ;=> nil           ; not a var (no ? prefix)
-  (var-binding :keyword) ;=> nil
-  (var-binding "?x") ;=> nil          ; string, not symbol
-  (var-binding '(?x :when string?)) ;=> 'x    ; extended form
-  (var-binding '(not-a-var :when x)) ;=> nil
-
-  ;; extract-var-bindings
-  (extract-var-bindings '{:a ?x})
-  ;=> {'x [:a]}
-
-  (extract-var-bindings '{:analytics2 {:raw ?result}})
-  ;=> {'result [:analytics2 :raw]}
-
-  (extract-var-bindings '{:ok {:name ?n} :err {:name ?e}})
-  ;=>> {'n [:ok :name] 'e [:err :name]}
-
-  (extract-var-bindings '{:a (?x :when string?)})
-  ;=> {'x [:a]}
-
-  (extract-var-bindings '{:q {{:id 1} ?user}})
-  ;=> {'user [:q {:id 1}]}
-
-  (extract-var-bindings '{:a "literal"})
-  ;=> {}
-
-  (extract-var-bindings '{:a {:b :c}})
-  ;=> {}
-  )
-
-(defn- detect-var-errors
-  "After match success, check each bound variable's value for error maps via
-   detect-fn. Uses var-bindings ({sym path}) to attach the originating path
-   to each detected error."
-  [vars var-bindings detect-fn]
-  (when (and detect-fn (seq vars))
-    (let [errors (reduce-kv
-                  (fn [acc sym val]
-                    (if-let [err (when (map? val) (detect-fn val))]
-                      (if-let [path (get var-bindings sym)]
-                        (cond-> acc
-                          (not (contains? acc path)) (assoc path err))
-                        acc)
-                      acc))
-                  {}
-                  vars)]
-      (when (seq errors) errors))))
-
-^:rct/test
-(comment
-  (def err-detect #(get % :error))
-
-  ;; No vars bound → nil
-  (detect-var-errors {} {} err-detect)
-  ;=> nil
-
-  ;; Var bound to plain value → no error
-  (detect-var-errors '{result [:records 1 2 3]}
-                     '{result [:analytics2 :raw]}
-                     err-detect)
-  ;=> nil
-
-  ;; Var bound to error map → records error at that var's path
-  (detect-var-errors '{e {:error {:type :forbidden}}}
-                     '{e [:err :name]}
-                     err-detect)
-  ;=> {[:err :name] {:type :forbidden}}
-
-  ;; Mixed: one var non-error, one var error → only the error path recorded
-  (detect-var-errors '{n "Alice"
-                       e {:error {:type :forbidden}}}
-                     '{n [:ok :name]
-                       e [:err :name]}
-                     err-detect)
-  ;=> {[:err :name] {:type :forbidden}}
-
-  ;; Var bound to nil → not a map, skipped
-  (detect-var-errors '{n nil}
-                     '{n [:role :resource :name]}
-                     err-detect)
-  ;=> nil
-
-  ;; Var bound to non-map (string, vector) → skipped
-  (detect-var-errors '{x "hello" y [1 2]}
-                     '{x [:a] y [:b]}
-                     err-detect)
-  ;=> nil
-
-  ;; No detect-fn → nil
-  (detect-var-errors '{e {:error {}}}
-                     '{e [:x]}
-                     nil)
-  ;=> nil
-
-  ;; Sym in vars but not in var-bindings → skipped (defensive)
-  (detect-var-errors '{orphan {:error {}}}
-                     {}
-                     err-detect)
-  ;=> nil
-  )
-
 (defn- execute-mutation
   "Execute a mutation against the API collection.
    Path can be flat [:posts] or nested [:member :posts].
@@ -890,23 +754,21 @@
 
 (defn- execute-read
   "Execute a read pattern against api-fn data.
-   Symmetric with execute-mutation:
-     1. Shallow pre-walk (plain maps only) to catch role/auth errors early
+     1. Shallow pre-walk (plain maps only) catches role/auth errors early
         without invoking ILookup/Collection.
-     2. Compile + run matcher (single ILookup invocation per accessed key).
-     3. Post-match: check matched var bindings for `{:error ...}` leaves.
-     4. Fallback: deep detect walk (invokes ILookup) on paths whose var is
-        nil or whose matcher failed, to surface errors inside a collection."
+     2. Compile + run matcher (one ILookup invocation per accessed key).
+     3. Post-match: walk the matcher's realized `:val` to surface errors
+        inside collections — no second ILookup pass. On failure, `:val`
+        is nil and `classify-result` handles path-coverage itself."
   [api-fn ctx pattern opts]
   (let [{:keys [data schema errors]} (api-fn ctx)
-        detect-fn     (make-detect-fn (:detect errors))
-        var-paths     (extract-var-paths pattern)
-        var-bindings  (extract-var-bindings pattern)
-        pre-errors    (detect-read-errors data var-paths detect-fn)
-        error-paths   (when (seq pre-errors) (set (keys pre-errors)))
-        trimmed       (if error-paths
-                        (trim-pattern pattern error-paths)
-                        pattern)]
+        detect-fn   (make-detect-fn (:detect errors))
+        var-paths   (extract-var-paths pattern)
+        pre-errors  (detect-read-errors data var-paths detect-fn)
+        error-paths (when (seq pre-errors) (set (keys pre-errors)))
+        trimmed     (if error-paths
+                      (trim-pattern pattern error-paths)
+                      pattern)]
     (-> (if-not trimmed
           (failure (error-map->errors pre-errors))
           (let [compiled (pattern/compile-pattern
@@ -915,27 +777,17 @@
                             (not (:resolve opts)) (assoc :resolve safe-resolve)
                             (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
                             schema (assoc :schema schema)))
-                result   (compiled (pattern/vmr data))]
-            (if (pattern/failure? result)
-              (let [deep-errors (detect-read-errors data var-paths detect-fn :deep? true)
-                    combined    (merge pre-errors deep-errors)]
-                (classify-result result (error-map->errors combined)))
-              (let [leaf-errors  (detect-var-errors (:vars result) var-bindings detect-fn)
-                    nil-paths    (vec (keep (fn [[sym path]]
-                                              (when (nil? (get (:vars result) sym))
-                                                path))
-                                            var-bindings))
-                    val-errors   (when (seq nil-paths)
-                                   (detect-read-errors (:val result) nil-paths detect-fn))
-                    combined     (merge pre-errors leaf-errors val-errors)
-                    err-paths    (keys combined)
-                    all-covered? (and (seq combined)
-                                      (every? (fn [vp]
-                                                (some #(path-prefix? % vp) err-paths))
-                                              var-paths))]
-                (if all-covered?
-                  (failure (error-map->errors combined))
-                  (classify-result result (error-map->errors combined)))))))
+                result   (compiled (pattern/vmr data))
+                combined (merge pre-errors
+                                (detect-read-errors (:val result) var-paths detect-fn :deep? true))
+                err-paths    (keys combined)
+                all-covered? (and (seq combined)
+                                  (every? (fn [vp]
+                                            (some #(path-prefix? % vp) err-paths))
+                                          var-paths))]
+            (if (and (not (pattern/failure? result)) all-covered?)
+              (failure (error-map->errors combined))
+              (classify-result result (error-map->errors combined)))))
         (vary-meta assoc ::error-codes (:codes errors)))))
 
 (defn execute
