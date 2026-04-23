@@ -6,7 +6,7 @@
    [clojure.string :as str]
    [clojure.walk]
    [sg.flybot.pullable.impl :as pattern]
-   [sg.flybot.pullable.util :refer [contains-variables?]]
+   [sg.flybot.pullable.util :refer [contains-variables? variable?]]
    [sg.flybot.pullable.collection :as coll]
    #?(:clj [cognitect.transit :as transit])
    #?(:clj [clojure.edn :as edn])
@@ -482,44 +482,37 @@
          (or (zero? pc)
              (= prefix (subvec (vec path) 0 pc))))))
 
-(defn- extract-var-paths
-  "Extract paths from pattern root to variable-containing leaves.
-   Returns a seq of keyword vectors, e.g. [[:a :b] [:a :c] [:d]]."
-  ([pattern] (extract-var-paths pattern []))
-  ([pattern prefix]
-   (when (map? pattern)
-     (mapcat (fn [[k v]]
-               (let [path (conj prefix k)]
-                 (if (map? v)
-                   (extract-var-paths v path)
-                   (when (contains-variables? v) [path]))))
-             pattern))))
+(defn- pattern-var-bindings
+  "Walk pattern, return {sym path} for each bound variable.
+   Handles plain `?x` and extended `(?x :when ...)` forms."
+  [pattern]
+  (letfn [(bound-sym [x]
+            (cond
+              (variable? x) x
+              (and (seq? x) (variable? (first x))) (first x)))
+          (walk [acc p prefix]
+            (if (map? p)
+              (reduce-kv (fn [a k v] (walk a v (conj prefix k))) acc p)
+              (if-let [s (bound-sym p)]
+                (assoc acc (symbol (subs (name s) 1)) prefix)
+                acc)))]
+    (walk {} pattern [])))
 
 ^:rct/test
 (comment
-  ;; extract-var-paths — flat pattern
-  (set (extract-var-paths '{:a ?x :b ?y}))
-  ;=> #{[:a] [:b]}
+  (pattern-var-bindings '{:a ?x :b ?y})
+  ;=>> {'x [:a] 'y [:b]}
 
-  ;; extract-var-paths — nested pattern
-  (extract-var-paths '{:a {:b ?x}})
-  ;=> [[:a :b]]
+  (pattern-var-bindings '{:a {:b ?x}})
+  ;=> {'x [:a :b]}
 
-  ;; extract-var-paths — mixed depths
-  (set (extract-var-paths '{:a {:b ?x :c ?y} :d ?z}))
-  ;=> #{[:a :b] [:a :c] [:d]}
+  (pattern-var-bindings '{:a (?x :when string?)})
+  ;=> {'x [:a]}
 
-  ;; extract-var-paths — extended variable form
-  (extract-var-paths '{:a (?x :when string?)})
-  ;=> [[:a]]
+  (pattern-var-bindings '{:a "literal" :b ?x})
+  ;=> {'x [:b]}
 
-  ;; extract-var-paths — literal values ignored
-  (extract-var-paths '{:a "literal" :b ?x})
-  ;=> [[:b]]
-
-  ;; extract-var-paths — nil pattern
-  (extract-var-paths nil)
-  ;=> nil
+  (pattern-var-bindings nil) ;=> {}
 
   ;; path-prefix?: empty prefix matches any path
   (path-prefix? [] [:a]) ;=> true
@@ -534,8 +527,8 @@
 
 (defn- error-map->errors
   "Convert error-map {path error-data} into wire-format error vectors.
-   Error paths are always pattern-derived (from extract-var-paths), so no
-   filtering is needed — all errors are relevant by construction."
+   Error paths are always pattern-derived, so no filtering is needed —
+   all errors are relevant by construction."
   [error-map]
   (when (seq error-map)
     (mapv (fn [[path err]]
@@ -657,15 +650,14 @@
       detected (vary-meta assoc ::detected-errors detected))))
 
 (defn- execute-read
-  "Execute a read pattern against api-fn data.
-   Compile + run matcher (one ILookup invocation per accessed key), then walk
-   the matcher's realized `:val` to surface errors inside collections —
-   no second ILookup pass. On match failure `:val` is nil and
-   `classify-result` appends the match-failure to any detected errors."
+  "Execute a read pattern: compile, match, then inspect the matcher's realized
+   `:val` for per-path errors. Returns partial success when some var-paths
+   resolve cleanly, or full failure when every var-path is error-covered."
   [api-fn ctx pattern opts]
   (let [{:keys [data schema errors]} (api-fn ctx)
         detect-fn    (make-detect-fn (:detect errors))
-        var-paths    (extract-var-paths pattern)
+        var-bindings (when detect-fn (pattern-var-bindings pattern))
+        var-paths    (vals var-bindings)
         compiled     (pattern/compile-pattern
                       pattern
                       (cond-> (select-keys opts [:resolve :eval-fn])
@@ -675,13 +667,16 @@
         result       (compiled (pattern/vmr data))
         detected     (detect-read-errors (:val result) var-paths detect-fn)
         err-paths    (keys detected)
+        covered?     (fn [p] (some #(path-prefix? % p) err-paths))
+        kept-vars    (when (and (:vars result) (seq err-paths))
+                       (into {} (remove (fn [[sym _]] (covered? (get var-bindings sym)))
+                                        (:vars result))))
         all-covered? (and (seq detected)
-                          (every? (fn [vp]
-                                    (some #(path-prefix? % vp) err-paths))
-                                  var-paths))]
+                          (every? covered? var-paths))
+        errs         (error-map->errors detected)]
     (-> (if (and (not (pattern/failure? result)) all-covered?)
-          (failure (error-map->errors detected))
-          (classify-result result (error-map->errors detected)))
+          (failure errs)
+          (classify-result (cond-> result kept-vars (assoc :vars kept-vars)) errs))
         (vary-meta assoc ::error-codes (:codes errors)))))
 
 (defn execute
