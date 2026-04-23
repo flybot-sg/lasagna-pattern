@@ -495,31 +495,6 @@
                    (when (contains-variables? v) [path]))))
              pattern))))
 
-(defn- trim-pattern
-  "Remove pattern keys at paths where errors were detected.
-   Descends into sub-patterns when the current path is a prefix of any error path.
-   Returns trimmed pattern, or nil if all keys were removed."
-  ([pattern error-paths]
-   (trim-pattern pattern error-paths []))
-  ([pattern error-paths current-path]
-   (when (and (map? pattern)
-              (not (contains? error-paths current-path)))
-     (let [trimmed (reduce-kv
-                    (fn [acc k v]
-                      (let [child-path (conj current-path k)]
-                        (cond
-                          (contains? error-paths child-path)
-                          acc
-                          (and (map? v)
-                               (some #(path-prefix? child-path %) error-paths))
-                          (let [v' (trim-pattern v error-paths child-path)]
-                            (if (seq v') (assoc acc k v') acc))
-                          :else
-                          (assoc acc k v))))
-                    {}
-                    pattern)]
-       (when (seq trimmed) trimmed)))))
-
 ^:rct/test
 (comment
   ;; extract-var-paths — flat pattern
@@ -546,36 +521,6 @@
   (extract-var-paths nil)
   ;=> nil
 
-  ;; trim-pattern: removes keys at known error paths
-  (trim-pattern '{:a {:x ?x} :b {:y ?y}}
-                #{[:b]})
-  ;=> '{:a {:x ?x}}
-
-  ;; trim-pattern: nested error removal
-  (trim-pattern '{:section {:ok {:name ?n} :denied {:name ?d}}}
-                #{[:section :denied]})
-  ;=> '{:section {:ok {:name ?n}}}
-
-  ;; trim-pattern: all keys error -> nil
-  (trim-pattern '{:a {:x ?x} :b {:y ?y}}
-                #{[:a] [:b]})
-  ;=> nil
-
-  ;; trim-pattern: no error paths -> pattern unchanged
-  (trim-pattern '{:a ?x :b ?y}
-                #{})
-  ;=> '{:a ?x :b ?y}
-
-  ;; trim-pattern: sub-pattern entirely empty after trimming -> parent removed
-  (trim-pattern '{:section {:denied {:name ?d}}}
-                #{[:section :denied]})
-  ;=> nil
-
-  ;; trim-pattern: root-level error path [] -> entire pattern trimmed
-  (trim-pattern '{:a ?x :b ?y}
-                #{[]})
-  ;=> nil
-
   ;; path-prefix?: empty prefix matches any path
   (path-prefix? [] [:a]) ;=> true
   (path-prefix? [] [:a :b]) ;=> true
@@ -600,22 +545,15 @@
           error-map)))
 
 (defn- detect-path-error
-  "Walk a path through data, checking `detect-fn` on plain-map nodes.
-   Returns [value nil] on success, [nil err-map-with-:path] on error.
-
-   By default stops at the first non-map node (ILookup/Collection/reify) and
-   returns it without invoking `get` — detection must be a pure predicate, it
-   must not drive side-effecting lookups.
-
-   With `:deep? true` walks THROUGH non-map nodes via `get` (invoking
-   ILookup/Collection valAt). Used as a fallback only, to surface errors
-   inside a collection after match failure or nil-var binding."
-  [data path detect-fn & {:keys [deep?]}]
+  "Walk path checking for errors at each step via detect-fn.
+   Only checks standard maps (via `map?` guard) — pure ILookup implementations
+   pass through unchecked because `map?` returns false for reified ILookup,
+   and calling detect-fn on them could trigger side effects or lazy evaluation.
+   Returns [value nil] on success, [nil err-map] with :path on error."
+  [data path detect-fn]
   (loop [m data, [k & ks] path, traversed []]
-    (cond
-      (nil? k) [m nil]
-      (and (not deep?) (not (map? m))) [m nil]
-      :else
+    (if-not k
+      [m nil]
       (if-let [err (when (and detect-fn (map? m)) (detect-fn m))]
         [nil (assoc err :path traversed)]
         (recur (get m k) ks (conj traversed k))))))
@@ -624,54 +562,39 @@
 (comment
   (def err-detect #(get % :error))
 
-  ;; --- shallow (default) ---
   (detect-path-error {:a {:b 42}} [:a :b] err-detect)
   ;=> [42 nil]
 
   (detect-path-error {:a {:error {:type :forbidden}} :b 1} [:a :b] err-detect)
   ;=> [nil {:type :forbidden :path [:a]}]
 
-  ;; Stops at non-map, never invokes it
-  (let [stub (reify clojure.lang.ILookup
-               (valAt [_ _] (throw (ex-info "should not be called" {}))))]
-    (detect-path-error {:x stub} [:x :y] err-detect))
-  ;=>> [some? nil]
-
-  ;; --- :deep? true — walks through ILookup ---
+  ;; Walks through ILookup (mutation path finding)
   (let [stub (reify clojure.lang.ILookup
                (valAt [_ k] (case k :resource {:error {:type :forbidden}} nil))
                (valAt [this k _] (.valAt this k)))]
-    (detect-path-error {:role stub} [:role :resource :name] err-detect :deep? true))
+    (detect-path-error {:role stub} [:role :resource :name] err-detect))
   ;=> [nil {:type :forbidden :path [:role :resource]}]
 
-  ;; Empty path / nil detect-fn
   (detect-path-error {:x 1} [] err-detect) ;=> [{:x 1} nil]
   (detect-path-error {:a {:b 42}} [:a :b] nil) ;=> [42 nil]
   )
 
 (defn- detect-read-errors
-  "For each var-path, record any error found by `detect-path-error`.
-   With `:deep? true` also checks the leaf value reached through ILookup —
-   catches cases like an ILookup that returns `{:error ...}` directly.
+  "For each var-path, record any error found along the path or at the leaf.
    Returns {path error-data} map, or nil if no errors."
-  [data var-paths detect-fn & {:keys [deep?]}]
+  [data var-paths detect-fn]
   (when detect-fn
     (let [errors (reduce
                   (fn [acc path]
-                    (let [[val err] (detect-path-error data path detect-fn :deep? deep?)]
-                      (cond
-                        err
+                    (let [[val err] (detect-path-error data path detect-fn)]
+                      (if err
                         (let [ep (:path err)]
                           (cond-> acc
                             (not (contains? acc ep)) (assoc ep (dissoc err :path))))
-
-                        (and deep? (map? val))
-                        (if-let [leaf-err (detect-fn val)]
+                        (if-let [leaf-err (when (map? val) (detect-fn val))]
                           (cond-> acc
                             (not (contains? acc path)) (assoc path leaf-err))
-                          acc)
-
-                        :else acc)))
+                          acc))))
                   {}
                   var-paths)]
       (when (seq errors) errors))))
@@ -680,37 +603,18 @@
 (comment
   (def err-detect #(get % :error))
 
-  ;; --- shallow (default) — hibou happy path: stub guards valAt ---
-  (let [stub (reify clojure.lang.ILookup
-               (valAt [_ _] (throw (ex-info "should not be called" {})))
-               (valAt [_ _ _] (throw (ex-info "should not be called" {}))))]
-    (detect-read-errors {:analytics2 {:raw stub}}
-                        [[:analytics2 :raw {:q 1}]]
-                        err-detect))
-  ;=> nil
-
-  ;; Plain-map intermediate error
   (detect-read-errors {:dashboards {:user {:error {:type :forbidden}}}}
                       [[:dashboards :user :dashboard]]
                       err-detect)
   ;=> {[:dashboards :user] {:type :forbidden}}
 
-  ;; No detect-fn → nil (walk skipped)
+  ;; Leaf error (var path reaches an error map)
+  (detect-read-errors {:user {:error {:type :forbidden}}}
+                      [[:user]]
+                      err-detect)
+  ;=> {[:user] {:type :forbidden}}
+
   (detect-read-errors {:a {:error {}}} [[:a :x]] nil) ;=> nil
-
-  ;; --- :deep? true — walks through ILookup ---
-  (let [stub (reify clojure.lang.ILookup
-               (valAt [_ k] (case k :resource {:error {:type :forbidden}} nil))
-               (valAt [this k _] (.valAt this k)))]
-    (detect-read-errors {:role stub} [[:role :resource :name]] err-detect :deep? true))
-  ;=> {[:role :resource] {:type :forbidden}}
-
-  ;; :deep? true — leaf error (stub returns error map directly)
-  (let [stub (reify clojure.lang.ILookup
-               (valAt [_ k] (case k :name {:error {:type :forbidden}} nil))
-               (valAt [this k _] (.valAt this k)))]
-    (detect-read-errors {:user stub} [[:user :name]] err-detect :deep? true))
-  ;=> {[:user :name] {:type :forbidden}}
   )
 
 (defn- execute-mutation
@@ -754,40 +658,30 @@
 
 (defn- execute-read
   "Execute a read pattern against api-fn data.
-     1. Shallow pre-walk (plain maps only) catches role/auth errors early
-        without invoking ILookup/Collection.
-     2. Compile + run matcher (one ILookup invocation per accessed key).
-     3. Post-match: walk the matcher's realized `:val` to surface errors
-        inside collections — no second ILookup pass. On failure, `:val`
-        is nil and `classify-result` handles path-coverage itself."
+   Compile + run matcher (one ILookup invocation per accessed key), then walk
+   the matcher's realized `:val` to surface errors inside collections —
+   no second ILookup pass. On match failure `:val` is nil and
+   `classify-result` appends the match-failure to any detected errors."
   [api-fn ctx pattern opts]
   (let [{:keys [data schema errors]} (api-fn ctx)
-        detect-fn   (make-detect-fn (:detect errors))
-        var-paths   (extract-var-paths pattern)
-        pre-errors  (detect-read-errors data var-paths detect-fn)
-        error-paths (when (seq pre-errors) (set (keys pre-errors)))
-        trimmed     (if error-paths
-                      (trim-pattern pattern error-paths)
-                      pattern)]
-    (-> (if-not trimmed
-          (failure (error-map->errors pre-errors))
-          (let [compiled (pattern/compile-pattern
-                          trimmed
-                          (cond-> (select-keys opts [:resolve :eval-fn])
-                            (not (:resolve opts)) (assoc :resolve safe-resolve)
-                            (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
-                            schema (assoc :schema schema)))
-                result   (compiled (pattern/vmr data))
-                combined (merge pre-errors
-                                (detect-read-errors (:val result) var-paths detect-fn :deep? true))
-                err-paths    (keys combined)
-                all-covered? (and (seq combined)
-                                  (every? (fn [vp]
-                                            (some #(path-prefix? % vp) err-paths))
-                                          var-paths))]
-            (if (and (not (pattern/failure? result)) all-covered?)
-              (failure (error-map->errors combined))
-              (classify-result result (error-map->errors combined)))))
+        detect-fn    (make-detect-fn (:detect errors))
+        var-paths    (extract-var-paths pattern)
+        compiled     (pattern/compile-pattern
+                      pattern
+                      (cond-> (select-keys opts [:resolve :eval-fn])
+                        (not (:resolve opts)) (assoc :resolve safe-resolve)
+                        (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
+                        schema (assoc :schema schema)))
+        result       (compiled (pattern/vmr data))
+        detected     (detect-read-errors (:val result) var-paths detect-fn)
+        err-paths    (keys detected)
+        all-covered? (and (seq detected)
+                          (every? (fn [vp]
+                                    (some #(path-prefix? % vp) err-paths))
+                                  var-paths))]
+    (-> (if (and (not (pattern/failure? result)) all-covered?)
+          (failure (error-map->errors detected))
+          (classify-result result (error-map->errors detected)))
         (vary-meta assoc ::error-codes (:codes errors)))))
 
 (defn execute
