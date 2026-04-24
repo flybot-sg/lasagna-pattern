@@ -712,16 +712,16 @@
   (detect-read-errors {:a {:error {}}} #{[:a]} nil) ;=> nil
   )
 
-(defn- classify-vars
-  "Walk each bound var's path in `val`; classify as kept or errored in one pass.
+(defn- detect-val-errors
+  "Walk each bound var's path in `result`'s `:val`; for paths `detect-fn`
+   flags, record the error and drop the corresponding var from `:vars`.
    Returns {:kept-vars <matcher vars minus errored symbols>
-            :val-errs  <wire-format errors found in :val, deduped by path>
-            :all-covered? <true when every bound var is errored>}.
+            :val-errs  <wire-format errors, deduped by path>}.
    `var-bindings` drives the error walk only — `kept-vars` is seeded from
    the matcher's full `vars` so variables in vector/sequence patterns (which
    share a single enclosing path) still surface in the response.
    When `detect-fn` is nil or `var-bindings` empty, returns {:kept-vars vars}."
-  [val vars var-bindings detect-fn]
+  [{:keys [val vars]} var-bindings detect-fn]
   (if (or (nil? detect-fn) (empty? var-bindings))
     {:kept-vars vars}
     (let [{:keys [err-map errored]}
@@ -737,75 +737,69 @@
                          (assoc-in [:err-map ep] (dissoc err :path)))))
                  acc)))
            {:err-map {} :errored #{}}
-           var-bindings)
-          kept (reduce dissoc vars errored)]
-      {:kept-vars    kept
-       :val-errs     (error-map->errors err-map)
-       :all-covered? (boolean (and (seq err-map) (empty? kept)))})))
+           var-bindings)]
+      {:kept-vars (reduce dissoc vars errored)
+       :val-errs  (error-map->errors err-map)})))
 
 ^:rct/test
 (comment
   (def err-detect #(get % :error))
 
   ;; partial: one path errored, one kept
-  (classify-vars {:pub  {:items [1 2 3]}
-                  :priv {:error {:type :forbidden :message "NA"}}}
-                 '{all [1 2 3] secret nil}
-                 '{all [:pub :items] secret [:priv :items]}
-                 err-detect)
-  ;=> {:kept-vars     '{all [1 2 3]}
-  ;    :val-errs      [{:code :forbidden :reason "NA" :path [:priv]}]
-  ;    :all-covered?  false}
+  (detect-val-errors {:val  {:pub  {:items [1 2 3]}
+                             :priv {:error {:type :forbidden :message "NA"}}}
+                      :vars '{all [1 2 3] secret nil}}
+                     '{all [:pub :items] secret [:priv :items]}
+                     err-detect)
+  ;=> {:kept-vars '{all [1 2 3]}
+  ;    :val-errs  [{:code :forbidden :reason "NA" :path [:priv]}]}
 
   ;; all covered
-  (:all-covered?
-   (classify-vars {:a {:error {:type :forbidden}} :b {:error {:type :forbidden}}}
-                  '{x nil y nil}
-                  '{x [:a :foo] y [:b :bar]}
-                  err-detect))
-  ;=>> true
+  (detect-val-errors {:val  {:a {:error {:type :forbidden}} :b {:error {:type :forbidden}}}
+                      :vars '{x nil y nil}}
+                     '{x [:a :foo] y [:b :bar]}
+                     err-detect)
+  ;=>> {:kept-vars empty?}
 
   ;; leaf error: var binds directly to error map
-  (-> (classify-vars {:a {:error {:type :forbidden :message "NA"}}}
-                     '{x {:error {:type :forbidden :message "NA"}}}
-                     '{x [:a]}
-                     err-detect)
-      (select-keys [:kept-vars :all-covered?]))
-  ;=> {:kept-vars {} :all-covered? true}
+  (:kept-vars
+   (detect-val-errors {:val  {:a {:error {:type :forbidden :message "NA"}}}
+                       :vars '{x {:error {:type :forbidden :message "NA"}}}}
+                      '{x [:a]}
+                      err-detect))
+  ;=> {}
 
   ;; dedup: multiple vars under the same error path produce one error
   (:val-errs
-   (classify-vars {:p {:error {:type :forbidden :message "denied"}}}
-                  '{x nil y nil}
-                  '{x [:p :a] y [:p :b]}
-                  err-detect))
+   (detect-val-errors {:val  {:p {:error {:type :forbidden :message "denied"}}}
+                       :vars '{x nil y nil}}
+                      '{x [:p :a] y [:p :b]}
+                      err-detect))
   ;=> [{:code :forbidden :reason "denied" :path [:p]}]
 
   ;; no detect-fn: vars pass through
-  (classify-vars {:a 1} '{x 1} '{x [:a]} nil)
+  (detect-val-errors {:val {:a 1} :vars '{x 1}} '{x [:a]} nil)
   ;=> {:kept-vars '{x 1}}
 
   ;; empty var-bindings: vars pass through
-  (classify-vars {} nil {} err-detect)
+  (detect-val-errors {:val {} :vars nil} {} err-detect)
   ;=> {:kept-vars nil}
 
   ;; vector-pattern vars survive even though var-bindings collapses them
   ;; onto a single enclosing path
-  (classify-vars {:items [10 20 30]}
-                 '{first 10 rest (20 30)}
-                 '{first [:items] rest [:items]}
-                 err-detect)
-  ;=>> {:kept-vars {'first 10 'rest '(20 30)}
-  ;     :all-covered? false}
+  (detect-val-errors {:val  {:items [10 20 30]}
+                      :vars '{first 10 rest (20 30)}}
+                     '{first [:items] rest [:items]}
+                     err-detect)
+  ;=>> {:kept-vars {'first 10 'rest '(20 30)}}
 
   ;; vector-pattern error: both vars drop and error surfaces
-  (classify-vars {:items {:error {:type :forbidden :message "NA"}}}
-                 '{first [:error {:type :forbidden :message "NA"}] rest ()}
-                 '{first [:items] rest [:items]}
-                 err-detect)
-  ;=> {:kept-vars     {}
-  ;    :val-errs      [{:code :forbidden :reason "NA" :path [:items]}]
-  ;    :all-covered?  true}
+  (detect-val-errors {:val  {:items {:error {:type :forbidden :message "NA"}}}
+                      :vars '{first [:error {:type :forbidden :message "NA"}] rest ()}}
+                     '{first [:items] rest [:items]}
+                     err-detect)
+  ;=> {:kept-vars {}
+  ;    :val-errs  [{:code :forbidden :reason "NA" :path [:items]}]}
   )
 
 (defn- execute-mutation
@@ -847,14 +841,15 @@
    2. Match the trimmed pattern. Untrimmed branches see the original data;
       ILookup collections are invoked at most once.
 
-   3. Walk the matcher's realized `:val` (via `classify-vars`) for errors
-      inside materialized data — leaf error maps, or errors inside
-      ILookup returns the matcher descended into.
+   3. Walk the matcher's realized `:val` over the *trimmed* pattern's
+      var-bindings (via `detect-val-errors`) for errors inside
+      materialized data — leaf error maps or errors inside ILookup
+      returns the matcher descended into. Scoping the walk to trimmed
+      bindings avoids re-reporting step-1 errors that map passthrough
+      otherwise leaks back into `:val`.
 
-   Merges the two error sources (`data-errs` from data walk, `val-errs`
-   from :val walk) for classification. Returns partial success when some
-   var-paths resolve cleanly, or full failure when every var-path is
-   error-covered.
+   Returns partial success when some var-paths resolve cleanly, or full
+   failure when every var-path is error-covered.
 
    Note: `{:error ...}` returned from `ILookup.valAt` is invisible — the
    data walk stops at ILookup, and on match failure `:val` is nil.
@@ -878,7 +873,7 @@
                             schema (assoc :schema schema)))
                 result   (compiled (pattern/vmr data))
                 {:keys [kept-vars val-errs]}
-                (classify-vars (:val result) (:vars result) var-bindings detect-fn)
+                (detect-val-errors result (pattern-var-bindings trimmed) detect-fn)
                 all-errs (into data-errs val-errs)]
             (cond
               (pattern/failure? result)

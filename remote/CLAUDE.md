@@ -158,7 +158,7 @@ Collections return errors as data (not exceptions):
 
 1. **Walk raw `data`** along pattern var-paths (`detect-read-errors`). Collects errors upfront and trims those branches from the pattern. The walk stops at any non-map value — ILookup implementations are **not** probed. This handles role-gate denials where the pattern nests past the error level (e.g., `{:member {:posts/history {{:post/id 1} ?v}}}` against `{:member {:error ...}}`).
 2. **Match** on the trimmed pattern. Untrimmed branches see the original data; each accessed ILookup key fires exactly once.
-3. **Walk the matcher's `:val`** (`classify-vars`) for errors inside materialized data — leaf errors or errors inside ILookup returns the matcher descended into. Paths already found in step 1 don't surface here either way, since the trimmed pattern never produced those branches in `:val`.
+3. **Walk the matcher's `:val`** (`detect-val-errors`), using the **trimmed** pattern's var-bindings, for errors inside materialized data — leaf errors or errors inside ILookup returns the matcher descended into. Scoping the walk to trimmed bindings prevents re-detecting step-1 errors that map passthrough copies into `:val`.
 
 Errors from step 1 (`data-errs`) and step 3 (`val-errs`) merge into `all-errs`. If every var path is error-covered, the read fails; otherwise it returns the successful bindings with `::detected-errors` metadata (exposed on the wire as `:errors`).
 

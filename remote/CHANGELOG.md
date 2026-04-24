@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `execute-read` now runs three steps: walk raw `data` along pattern var-paths to catch role-gate errors, trim the pattern at those paths, match the trimmed pattern, then walk the matcher's `:val` for errors inside materialized data. Merges `data-errs` and `val-errs` for classification
+- `execute-read` now runs three steps: walk raw `data` along pattern var-paths to catch role-gate errors, trim the pattern at those paths, match the trimmed pattern, then walk the matcher's `:val` over the **trimmed** pattern's var-bindings for errors inside materialized data. Scoping the `:val` walk to trimmed bindings prevents re-reporting step-1 errors that map passthrough leaks into `:val`. Merges `data-errs` and `val-errs` for classification
 - Data walk stops at any non-map value — ILookup implementations are not probed, preserving the single-invocation guarantee on happy paths
 - Contract clarified: `{:error ...}` must live in plain data. Errors returned from `ILookup.valAt` remain invisible to detection and will still surface as `:match-failure` when the pattern descends past them
 

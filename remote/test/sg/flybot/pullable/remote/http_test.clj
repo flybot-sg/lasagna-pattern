@@ -137,6 +137,7 @@
           body (decode-body resp)]
       (is (= 200 (:status resp)))
       (is (vector? (get body 'all)) "Successful branch returns vars")
+      (is (= 1 (count (:errors body))) "Error reported exactly once")
       (is (= :forbidden (get-in body [:errors 0 :code])) "Error branch reported")
       (is (= [:private] (get-in body [:errors 0 :path]))))))
 
@@ -174,6 +175,7 @@
           body (decode-body resp)]
       (is (= 200 (:status resp)))
       (is (= "Alice" (get body 'n)) "Successful branch returns vars")
+      (is (= 1 (count (:errors body))) "Error reported exactly once")
       (is (= :forbidden (get-in body [:errors 0 :code])) "Error branch reported")
       (is (= [:section :denied] (get-in body [:errors 0 :path]))))))
 
@@ -204,7 +206,26 @@
           resp (handler (pull-request '{:section {:admin {:items {:all ?all}}}}))
           body (decode-body resp)]
       (is (= 403 (:status resp)))
-      (is (= [:section :admin] (get-in body [:errors 0 :path]))))))
+      (is (= [:section :admin] (get-in body [:errors 0 :path])))))
+
+  (testing "Partial success: sibling role succeeds, denied role reported exactly once"
+    ;; Regression against double-reporting: the matcher's :val keeps unmatched
+    ;; source-map keys (passthrough), so without scoping the post-walk to the
+    ;; trimmed pattern's bindings, :member's error surfaces in both data-errs
+    ;; and val-errs.
+    (let [api (fn [_req]
+                {:data   {:guest  {:posts [{:post/id 1 :post/title "Hello"}]}
+                          :member {:error {:type :forbidden :message "Role :member required"}}}
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request
+                         '{:guest {:posts ?p}
+                           :member {:posts/history {{:post/id 1} ?versions}}}))
+          body (decode-body resp)]
+      (is (= 200 (:status resp)))
+      (is (vector? (get body 'p)) "Guest branch returns posts")
+      (is (= 1 (count (:errors body))) "Denied role reported exactly once")
+      (is (= [:member] (get-in body [:errors 0 :path]))))))
 
 (deftest read-schema-violation-403-test
   (testing "Accessing undeclared schema key returns 403"
