@@ -6,7 +6,7 @@
    [clojure.string :as str]
    [clojure.walk]
    [sg.flybot.pullable.impl :as pattern]
-   [sg.flybot.pullable.util :refer [contains-variables?]]
+   [sg.flybot.pullable.util :refer [contains-variables? variable?]]
    [sg.flybot.pullable.collection :as coll]
    #?(:clj [cognitect.transit :as transit])
    #?(:clj [clojure.edn :as edn])
@@ -482,99 +482,73 @@
          (or (zero? pc)
              (= prefix (subvec (vec path) 0 pc))))))
 
-(defn- extract-var-paths
-  "Extract paths from pattern root to variable-containing leaves.
-   Returns a seq of keyword vectors, e.g. [[:a :b] [:a :c] [:d]]."
-  ([pattern] (extract-var-paths pattern []))
-  ([pattern prefix]
-   (when (map? pattern)
-     (mapcat (fn [[k v]]
-               (let [path (conj prefix k)]
-                 (if (map? v)
-                   (extract-var-paths v path)
-                   (when (contains-variables? v) [path]))))
-             pattern))))
+(defn- var-binding-sym
+  "For a pattern variable symbol, return the matcher's binding symbol
+   (same rule `pattern/matching-var-rewrite` uses), or nil for wildcards
+   (`?_`, `?_?`, `?_*`, ...) and the bare `?` core-form marker.
+   Delegates quantifier parsing to `pattern/parse-matching-var`."
+  [s]
+  (if-let [{:keys [sym]} (pattern/parse-matching-var s)]
+    ;; Quantified: :sym is `?x` with ? prefix, or nil for ?_* etc.
+    (when sym (symbol (subs (name sym) 1)))
+    ;; Plain ?x or ?_ (parse-matching-var returns nil for unquantified)
+    (let [nm (name s)]
+      (when (and (> (count nm) 1) (not= "?_" nm))
+        (symbol (subs nm 1))))))
 
-(defn- trim-pattern
-  "Remove pattern keys at paths where errors were detected.
-   Descends into sub-patterns when the current path is a prefix of any error path.
-   Returns trimmed pattern, or nil if all keys were removed."
-  ([pattern error-paths]
-   (trim-pattern pattern error-paths []))
-  ([pattern error-paths current-path]
-   (when (and (map? pattern)
-              (not (contains? error-paths current-path)))
-     (let [trimmed (reduce-kv
-                    (fn [acc k v]
-                      (let [child-path (conj current-path k)]
-                        (cond
-                          (contains? error-paths child-path)
-                          acc
-                          (and (map? v)
-                               (some #(path-prefix? child-path %) error-paths))
-                          (let [v' (trim-pattern v error-paths child-path)]
-                            (if (seq v') (assoc acc k v') acc))
-                          :else
-                          (assoc acc k v))))
-                    {}
-                    pattern)]
-       (when (seq trimmed) trimmed)))))
+(defn- pattern-var-bindings
+  "Walk pattern, return {sym path} for each bound variable.
+   Descends into maps, vectors, and extended `(?x :when ...)` forms.
+   Vector/sequence elements share the enclosing map path so that error
+   detection covers the whole sub-pattern; individual element positions
+   are not distinguished. Wildcards (`?_`-family) are skipped."
+  [pattern]
+  (letfn [(bound-sym [x]
+            (cond
+              (variable? x) x
+              (and (seq? x) (variable? (first x))) (first x)))
+          (walk [acc p prefix]
+            (cond
+              (map? p)
+              (reduce-kv (fn [a k v] (walk a v (conj prefix k))) acc p)
+
+              (vector? p)
+              (reduce (fn [a v] (walk a v prefix)) acc p)
+
+              :else
+              (if-let [bound (some-> (bound-sym p) var-binding-sym)]
+                (assoc acc bound prefix)
+                acc)))]
+    (walk {} pattern [])))
 
 ^:rct/test
 (comment
-  ;; extract-var-paths — flat pattern
-  (set (extract-var-paths '{:a ?x :b ?y}))
-  ;=> #{[:a] [:b]}
+  (pattern-var-bindings '{:a ?x :b ?y})
+  ;=>> {'x [:a] 'y [:b]}
 
-  ;; extract-var-paths — nested pattern
-  (extract-var-paths '{:a {:b ?x}})
-  ;=> [[:a :b]]
+  (pattern-var-bindings '{:a {:b ?x}})
+  ;=> {'x [:a :b]}
 
-  ;; extract-var-paths — mixed depths
-  (set (extract-var-paths '{:a {:b ?x :c ?y} :d ?z}))
-  ;=> #{[:a :b] [:a :c] [:d]}
+  (pattern-var-bindings '{:a (?x :when string?)})
+  ;=> {'x [:a]}
 
-  ;; extract-var-paths — extended variable form
-  (extract-var-paths '{:a (?x :when string?)})
-  ;=> [[:a]]
+  (pattern-var-bindings '{:a "literal" :b ?x})
+  ;=> {'x [:b]}
 
-  ;; extract-var-paths — literal values ignored
-  (extract-var-paths '{:a "literal" :b ?x})
-  ;=> [[:b]]
+  (pattern-var-bindings nil) ;=> {}
 
-  ;; extract-var-paths — nil pattern
-  (extract-var-paths nil)
-  ;=> nil
+  ;; quantifier suffixes are stripped to match matcher binding names
+  (pattern-var-bindings '{:a ?x?})  ;=> {'x [:a]}
+  (pattern-var-bindings '{:a ?x*})  ;=> {'x [:a]}
+  (pattern-var-bindings '{:a ?x+!}) ;=> {'x [:a]}
 
-  ;; trim-pattern: removes keys at known error paths
-  (trim-pattern '{:a {:x ?x} :b {:y ?y}}
-                #{[:b]})
-  ;=> '{:a {:x ?x}}
+  ;; vector elements share the enclosing map path
+  (pattern-var-bindings '{:items [?first ?rest*]})
+  ;=>> {'first [:items] 'rest [:items]}
 
-  ;; trim-pattern: nested error removal
-  (trim-pattern '{:section {:ok {:name ?n} :denied {:name ?d}}}
-                #{[:section :denied]})
-  ;=> '{:section {:ok {:name ?n}}}
-
-  ;; trim-pattern: all keys error -> nil
-  (trim-pattern '{:a {:x ?x} :b {:y ?y}}
-                #{[:a] [:b]})
-  ;=> nil
-
-  ;; trim-pattern: no error paths -> pattern unchanged
-  (trim-pattern '{:a ?x :b ?y}
-                #{})
-  ;=> '{:a ?x :b ?y}
-
-  ;; trim-pattern: sub-pattern entirely empty after trimming -> parent removed
-  (trim-pattern '{:section {:denied {:name ?d}}}
-                #{[:section :denied]})
-  ;=> nil
-
-  ;; trim-pattern: root-level error path [] -> entire pattern trimmed
-  (trim-pattern '{:a ?x :b ?y}
-                #{[]})
-  ;=> nil
+  ;; nested vectors
+  (pattern-var-bindings '{:a [[?x ?y]]})
+  ;=>> {'x [:a] 'y [:a]}
 
   ;; path-prefix?: empty prefix matches any path
   (path-prefix? [] [:a]) ;=> true
@@ -589,8 +563,8 @@
 
 (defn- error-map->errors
   "Convert error-map {path error-data} into wire-format error vectors.
-   Error paths are always pattern-derived (from extract-var-paths), so no
-   filtering is needed — all errors are relevant by construction."
+   Error paths are always pattern-derived, so no filtering is needed —
+   all errors are relevant by construction."
   [error-map]
   (when (seq error-map)
     (mapv (fn [[path err]]
@@ -613,26 +587,122 @@
         [nil (assoc err :path traversed)]
         (recur (get m k) ks (conj traversed k))))))
 
-(defn- detect-read-errors
-  "Detect errors along var paths, including through ILookup.
-   Checks both intermediate nodes (via detect-path-error) and leaf values.
-   Returns {path error-data} map, or nil if no errors."
-  [data var-paths detect-fn]
-  (when detect-fn
-    (let [errors (reduce
-                  (fn [acc path]
-                    (let [[val err] (detect-path-error data path detect-fn)]
-                      (if err
-                        (let [ep (:path err)]
-                          (cond-> acc
-                            (not (contains? acc ep)) (assoc ep (dissoc err :path))))
-                        (if-let [leaf-err (when (map? val) (detect-fn val))]
-                          (cond-> acc
-                            (not (contains? acc path)) (assoc path leaf-err))
-                          acc))))
-                  {}
-                  var-paths)]
-      (when (seq errors) errors))))
+^:rct/test
+(comment
+  (def err-detect #(get % :error))
+
+  (detect-path-error {:a {:b 42}} [:a :b] err-detect)
+  ;=> [42 nil]
+
+  (detect-path-error {:a {:error {:type :forbidden}} :b 1} [:a :b] err-detect)
+  ;=> [nil {:type :forbidden :path [:a]}]
+
+  ;; Walks through ILookup (mutation path finding)
+  (let [stub (reify clojure.lang.ILookup
+               (valAt [_ k] (case k :resource {:error {:type :forbidden}} nil))
+               (valAt [this k _] (.valAt this k)))]
+    (detect-path-error {:role stub} [:role :resource :name] err-detect))
+  ;=> [nil {:type :forbidden :path [:role :resource]}]
+
+  (detect-path-error {:x 1} [] err-detect) ;=> [{:x 1} nil]
+  (detect-path-error {:a {:b 42}} [:a :b] nil) ;=> [42 nil]
+  )
+
+(defn- classify-vars
+  "Walk each bound var's path in `val`; classify as kept or errored in one pass.
+   Returns {:kept-vars <matcher vars minus errored symbols>
+            :errs      <wire-format errors, deduped by error path>
+            :all-covered? <true when every bound var is errored>}.
+   `var-bindings` drives the error walk only — `kept-vars` is seeded from
+   the matcher's full `vars` so variables in vector/sequence patterns (which
+   share a single enclosing path) still surface in the response.
+   When `detect-fn` is nil or `var-bindings` empty, returns {:kept-vars vars}."
+  [val vars var-bindings detect-fn]
+  (if (or (nil? detect-fn) (empty? var-bindings))
+    {:kept-vars vars}
+    (let [{:keys [err-map errored]}
+          (reduce-kv
+           (fn [acc sym path]
+             (let [[v e] (detect-path-error val path detect-fn)
+                   err   (or e (when (map? v) (detect-fn v)))]
+               (if err
+                 (let [ep (or (:path err) path)]
+                   (-> acc
+                       (update :errored conj sym)
+                       (cond-> (not (contains? (:err-map acc) ep))
+                         (assoc-in [:err-map ep] (dissoc err :path)))))
+                 acc)))
+           {:err-map {} :errored #{}}
+           var-bindings)
+          kept (reduce dissoc vars errored)]
+      {:kept-vars    kept
+       :errs         (error-map->errors err-map)
+       :all-covered? (boolean (and (seq err-map) (empty? kept)))})))
+
+^:rct/test
+(comment
+  (def err-detect #(get % :error))
+
+  ;; partial: one path errored, one kept
+  (classify-vars {:pub  {:items [1 2 3]}
+                  :priv {:error {:type :forbidden :message "NA"}}}
+                 '{all [1 2 3] secret nil}
+                 '{all [:pub :items] secret [:priv :items]}
+                 err-detect)
+  ;=> {:kept-vars     '{all [1 2 3]}
+  ;    :errs          [{:code :forbidden :reason "NA" :path [:priv]}]
+  ;    :all-covered?  false}
+
+  ;; all covered
+  (:all-covered?
+   (classify-vars {:a {:error {:type :forbidden}} :b {:error {:type :forbidden}}}
+                  '{x nil y nil}
+                  '{x [:a :foo] y [:b :bar]}
+                  err-detect))
+  ;=>> true
+
+  ;; leaf error: var binds directly to error map
+  (-> (classify-vars {:a {:error {:type :forbidden :message "NA"}}}
+                     '{x {:error {:type :forbidden :message "NA"}}}
+                     '{x [:a]}
+                     err-detect)
+      (select-keys [:kept-vars :all-covered?]))
+  ;=> {:kept-vars {} :all-covered? true}
+
+  ;; dedup: multiple vars under the same error path produce one error
+  (:errs
+   (classify-vars {:p {:error {:type :forbidden :message "denied"}}}
+                  '{x nil y nil}
+                  '{x [:p :a] y [:p :b]}
+                  err-detect))
+  ;=> [{:code :forbidden :reason "denied" :path [:p]}]
+
+  ;; no detect-fn: vars pass through
+  (classify-vars {:a 1} '{x 1} '{x [:a]} nil)
+  ;=> {:kept-vars '{x 1}}
+
+  ;; empty var-bindings: vars pass through
+  (classify-vars {} nil {} err-detect)
+  ;=> {:kept-vars nil}
+
+  ;; vector-pattern vars survive even though var-bindings collapses them
+  ;; onto a single enclosing path
+  (classify-vars {:items [10 20 30]}
+                 '{first 10 rest (20 30)}
+                 '{first [:items] rest [:items]}
+                 err-detect)
+  ;=>> {:kept-vars {'first 10 'rest '(20 30)}
+  ;     :all-covered? false}
+
+  ;; vector-pattern error: both vars drop and error surfaces
+  (classify-vars {:items {:error {:type :forbidden :message "NA"}}}
+                 '{first [:error {:type :forbidden :message "NA"}] rest ()}
+                 '{first [:items] rest [:items]}
+                 err-detect)
+  ;=> {:kept-vars     {}
+  ;    :errs          [{:code :forbidden :reason "NA" :path [:items]}]
+  ;    :all-covered?  true}
+  )
 
 (defn- execute-mutation
   "Execute a mutation against the API collection.
@@ -661,42 +731,35 @@
       (failure (error :execution-error
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
 
-(defn- classify-result
-  "Classify a match result into a success or failure response.
-   On success with detected errors, attaches them as ::detected-errors metadata.
-   On failure, checks if the failure path is covered by a detected error."
-  [result detected]
-  (if (pattern/failure? result)
-    (let [pattern-err (match-failure->error result)
-          covered?    (some #(path-prefix? (:path %) (:path pattern-err)) detected)]
-      (failure (if covered? detected (conj (or detected []) pattern-err))))
-    (cond-> (success (:val result) (:vars result))
-      detected (vary-meta assoc ::detected-errors detected))))
-
 (defn- execute-read
-  "Execute a read pattern against api-fn data.
-   Detects errors along var paths (via detect-path-error, works through ILookup),
-   trims pattern at error paths, compiles, matches, and classifies the result."
+  "Execute a read pattern: compile, match, then inspect the matcher's realized
+   `:val` for per-path errors. Returns partial success when some var-paths
+   resolve cleanly, or full failure when every var-path is error-covered."
   [api-fn ctx pattern opts]
   (let [{:keys [data schema errors]} (api-fn ctx)
-        detect-fn   (make-detect-fn (:detect errors))
-        var-paths   (extract-var-paths pattern)
-        error-map   (detect-read-errors data var-paths detect-fn)
-        error-paths (when (seq error-map) (set (keys error-map)))
-        trimmed     (if error-paths
-                      (trim-pattern pattern error-paths)
-                      pattern)
-        detected    (error-map->errors error-map)]
-    (-> (if-not trimmed
-          (failure detected)
-          (let [compiled (pattern/compile-pattern
-                          trimmed
-                          (cond-> (select-keys opts [:resolve :eval-fn])
-                            (not (:resolve opts)) (assoc :resolve safe-resolve)
-                            (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
-                            schema (assoc :schema schema)))
-                result   (compiled (pattern/vmr data))]
-            (classify-result result detected)))
+        detect-fn    (make-detect-fn (:detect errors))
+        var-bindings (when detect-fn (pattern-var-bindings pattern))
+        compiled     (pattern/compile-pattern
+                      pattern
+                      (cond-> (select-keys opts [:resolve :eval-fn])
+                        (not (:resolve opts)) (assoc :resolve safe-resolve)
+                        (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
+                        schema (assoc :schema schema)))
+        result       (compiled (pattern/vmr data))
+        {:keys [kept-vars errs all-covered?]}
+        (classify-vars (:val result) (:vars result) var-bindings detect-fn)]
+    (-> (cond
+          (pattern/failure? result)
+          (let [perr (match-failure->error result)]
+            (failure
+             (if (some #(path-prefix? (:path %) (:path perr)) errs)
+               errs
+               (conj (or errs []) perr))))
+          all-covered?
+          (failure errs)
+          :else
+          (cond-> (success (:val result) kept-vars)
+            (seq errs) (vary-meta assoc ::detected-errors errs)))
         (vary-meta assoc ::error-codes (:codes errors)))))
 
 (defn execute
@@ -994,6 +1057,33 @@
 
   (:errors (execute test-no-detect-fail-api-fn '{:broken {:deep ?v}}))
   ;=>> [{:code :match-failure}]
+
+  ;; --- read: vector patterns preserve their bindings in the response ---
+
+  (def test-vec-api-fn
+    (fn [_ctx]
+      {:data {:items [10 20 30] :meta {:count 3}}
+       :errors {:detect :error :codes {:forbidden 403}}}))
+
+  (execute test-vec-api-fn '{:items [?first ?rest*] :meta {:count ?c}})
+  ;=>> {'first 10 'rest '(20 30) 'c 3}
+
+  ;; vector-leaf error path is detected; remaining vars survive
+  (def test-vec-error-api-fn
+    (fn [_ctx]
+      {:data {:ok {:n 1}
+              :denied {:error {:type :forbidden :message "NA"}}}
+       :errors {:detect :error :codes {:forbidden 403}}}))
+
+  (let [r (execute test-vec-error-api-fn '{:ok {:n ?n} :denied [?items*]})]
+    [(get r 'n) (contains? r 'items) (::detected-errors (meta r))])
+  ;=>> [1 false [{:code :forbidden :reason "NA" :path [:denied]}]]
+
+  ;; --- read: quantifier suffixes (?x?, ?x*, ?x+) bind to stripped name ---
+
+  (execute (fn [_ctx] {:data {:items 42} :errors {:detect :error}})
+           '{:items ?x?})
+  ;=>> {'x 42}
 
   ;; --- mutations ---
 

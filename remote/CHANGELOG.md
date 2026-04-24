@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.4] - 2026-04-24
+
+### Changed
+
+- `execute-read` invokes each ILookup at most once: the compiled pattern matches against data, then a post-match walk on the matcher's `:val` surfaces per-path errors without re-pulling from collections
+- Drop error-covered bindings from partial-success read responses (previously leaked as `nil`, or as the error map itself when a var's path landed exactly on the error)
+- Fold read-error detection, var filtering, and all-covered classification into a single pass via new private `classify-vars`
+
+### Removed
+
+- `detect-read-errors` and `classify-result` (private fns) — replaced by `classify-vars`
+
 ## [0.1.3] - 2026-04-22
 
 ### Changed
