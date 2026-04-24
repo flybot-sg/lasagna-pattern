@@ -830,30 +830,8 @@
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
 
 (defn- execute-read
-  "Execute a read pattern in three phases:
-
-   1. Walk raw `data` along each var path through plain maps only, collect
-      errors (via `detect-read-errors`), and trim the pattern at those
-      paths. Catches role-gate denials like `{:member {:error ...}}`
-      before the matcher descends past them and fails with
-      `:match-failure`.
-
-   2. Match the trimmed pattern. Untrimmed branches see the original data;
-      ILookup collections are invoked at most once.
-
-   3. Walk the matcher's realized `:val` over the *trimmed* pattern's
-      var-bindings (via `detect-val-errors`) for errors inside
-      materialized data — leaf error maps or errors inside ILookup
-      returns the matcher descended into. Scoping the walk to trimmed
-      bindings avoids re-reporting step-1 errors that map passthrough
-      otherwise leaks back into `:val`.
-
-   Returns partial success when some var-paths resolve cleanly, or full
-   failure when every var-path is error-covered.
-
-   Note: `{:error ...}` returned from `ILookup.valAt` is invisible — the
-   data walk stops at ILookup, and on match failure `:val` is nil.
-   Errors must live in plain data."
+  "Returns partial success when some var-paths resolve cleanly, or full
+   failure when every var-path is error-covered."
   [api-fn ctx pattern opts]
   (let [{:keys [data schema errors]} (api-fn ctx)
         detect-fn    (make-detect-fn (:detect errors))

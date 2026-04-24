@@ -181,13 +181,6 @@
 
 (deftest read-role-denied-nested-pattern-403-test
   (testing "Role-gate {:error ...} in plain data with pattern nesting past it returns 403 at the role path"
-    ;; Regression: mirrors flybot-site's :select-post sending
-    ;;   '{:member {:posts/history {{:post/id 1} ?versions}}}
-    ;; When :member is denied, `with-role` puts {:error ...} at the role
-    ;; level as plain data. The matcher would descend :member → {:error ...}
-    ;; → :posts/history → nil → fails with "expected map, got nil" at the
-    ;; indexed-lookup level, reporting :match-failure (422). Pre-walk detects
-    ;; the error at [:member] and trims the branch, returning :forbidden (403).
     (let [api (fn [_req]
                 {:data   {:member {:error {:type :forbidden :message "Role :member required"}}}
                  :errors {:detect :error :codes {:forbidden 403}}})
@@ -209,10 +202,6 @@
       (is (= [:section :admin] (get-in body [:errors 0 :path])))))
 
   (testing "Partial success: sibling role succeeds, denied role reported exactly once"
-    ;; Regression against double-reporting: the matcher's :val keeps unmatched
-    ;; source-map keys (passthrough), so without scoping the post-walk to the
-    ;; trimmed pattern's bindings, :member's error surfaces in both data-errs
-    ;; and val-errs.
     (let [api (fn [_req]
                 {:data   {:guest  {:posts [{:post/id 1 :post/title "Hello"}]}
                           :member {:error {:type :forbidden :message "Role :member required"}}}
