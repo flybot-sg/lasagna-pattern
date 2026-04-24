@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-04-24
+
+### Fixed
+
+- `direct-satisfies?` regressions from 0.1.3, breaking `Wireable` / `Mutable` detection:
+  - CLJS: always returned false — a function wrapper hid the protocol symbol from CLJS's `satisfies?` macro. Fixed by making `direct-satisfies?` a macro.
+  - JVM: missed types extended via an interface (e.g. Malli schemas, reify over `malli.core.Schema`) — caused transit encoding to throw on `GET /api/_schema`. Fast path now falls through `supers` on direct-class miss.
+
 ## [0.1.5] - 2026-04-24
 
 ### Fixed

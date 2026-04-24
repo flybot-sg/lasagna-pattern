@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Bump `lasagna-remote` to 0.1.5
+- Bump `lasagna-remote` to 0.1.6 — role-gate pre-walk, CLJS Wireable/Mutable detection, and transit encoding of `/api/_schema` (Malli schemas no longer leak through `normalize-value`)
 
 ## [0.4.0] - 2026-04-14
 
