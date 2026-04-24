@@ -177,6 +177,35 @@
       (is (= :forbidden (get-in body [:errors 0 :code])) "Error branch reported")
       (is (= [:section :denied] (get-in body [:errors 0 :path]))))))
 
+(deftest read-role-denied-nested-pattern-403-test
+  (testing "Role-gate {:error ...} in plain data with pattern nesting past it returns 403 at the role path"
+    ;; Regression: mirrors flybot-site's :select-post sending
+    ;;   '{:member {:posts/history {{:post/id 1} ?versions}}}
+    ;; When :member is denied, `with-role` puts {:error ...} at the role
+    ;; level as plain data. The matcher would descend :member → {:error ...}
+    ;; → :posts/history → nil → fails with "expected map, got nil" at the
+    ;; indexed-lookup level, reporting :match-failure (422). Pre-walk detects
+    ;; the error at [:member] and trims the branch, returning :forbidden (403).
+    (let [api (fn [_req]
+                {:data   {:member {:error {:type :forbidden :message "Role :member required"}}}
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request '{:member {:posts/history {{:post/id 1} ?versions}}}))
+          body (decode-body resp)]
+      (is (= 403 (:status resp)))
+      (is (= :forbidden (get-in body [:errors 0 :code])))
+      (is (= [:member] (get-in body [:errors 0 :path])))))
+
+  (testing "Deeper nesting past the role key still returns 403 at the role path"
+    (let [api (fn [_req]
+                {:data   {:section {:admin {:error {:type :forbidden :message "No"}}}}
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request '{:section {:admin {:items {:all ?all}}}}))
+          body (decode-body resp)]
+      (is (= 403 (:status resp)))
+      (is (= [:section :admin] (get-in body [:errors 0 :path]))))))
+
 (deftest read-schema-violation-403-test
   (testing "Accessing undeclared schema key returns 403"
     (let [resp (test-handler (pull-request '{:restricted {:secret ?s}}))]

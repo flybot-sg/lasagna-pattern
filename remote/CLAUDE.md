@@ -154,16 +154,17 @@ Collections return errors as data (not exceptions):
 
 **Mutations** are all-or-nothing: Remote checks the mutation result with `:detect`, maps `:type` to HTTP status via `:codes`. Path-level errors (e.g., role gate returning `{:error ...}` along the path) are detected before attempting the mutation.
 
-**Reads** support partial success. `execute-read` invokes each ILookup at most once:
+**Reads** support partial success via three phases. Each ILookup is invoked at most once:
 
-1. **Match** runs the compiled pattern against data (one ILookup call per accessed key).
-2. **Post-match walk** on the matcher's `:val` — every value in `:val` was already realized by the matcher, so the walk surfaces errors inside collections without a second ILookup pass. On match failure, `:val` is nil and `execute-read` appends the match-failure itself to any detected errors.
+1. **Pre-match walk** of plain-map data along pattern var-paths. Collects auth errors upfront and trims those branches from the pattern. Walk stops at any non-map value — ILookup implementations are **not** probed. This handles role-gate denials where the pattern nests past the error level (e.g., `{:member {:posts/history {{:post/id 1} ?v}}}` against `{:member {:error ...}}`).
+2. **Match** on the trimmed pattern. Untrimmed branches see the original data; each accessed ILookup key fires exactly once.
+3. **Post-match walk** of the matcher's `:val` for errors inside materialized data (leaf errors, errors deep inside ILookup returns). Skips paths already covered by pre-match errors.
 
-If some branches succeed and others fail:
-- Successful bindings are returned normally
-- Detected errors are attached as `::detected-errors` metadata and included in the wire response as `:errors`
+Pre- and post-errors merge. If all pattern paths are error-covered, the read fails; otherwise it returns the successful bindings with `::detected-errors` metadata (exposed on the wire as `:errors`).
 
-If all pattern paths are covered by error paths, the read fails with the full error list.
+**Error-data contract: errors must live in plain maps.** `{:error {:type ... :message ...}}` inside plain data is detected by pre-walk and post-walk alike. Errors returned from `ILookup.valAt` are invisible to pre-walk (it stops at ILookup boundaries) and to post-walk on match failure (`:val` is nil). If a pattern descends past such an error, the response is `:match-failure` (422), not the domain error.
+
+In practice, produce `{:error ...}` at role-gate points (e.g., flybot-site's `with-role`) as plain data, not from inside `valAt`.
 
 **Partial success applies to reads only.** Mutations remain all-or-nothing.
 
