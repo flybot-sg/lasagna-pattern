@@ -482,19 +482,42 @@
          (or (zero? pc)
              (= prefix (subvec (vec path) 0 pc))))))
 
+(defn- var-binding-sym
+  "For a pattern variable symbol, return the matcher's binding symbol
+   (same rule `pattern/matching-var-rewrite` uses), or nil for wildcards
+   (`?_`, `?_?`, `?_*`, ...) and the bare `?` core-form marker.
+   Delegates quantifier parsing to `pattern/parse-matching-var`."
+  [s]
+  (if-let [{:keys [sym]} (pattern/parse-matching-var s)]
+    ;; Quantified: :sym is `?x` with ? prefix, or nil for ?_* etc.
+    (when sym (symbol (subs (name sym) 1)))
+    ;; Plain ?x or ?_ (parse-matching-var returns nil for unquantified)
+    (let [nm (name s)]
+      (when (and (> (count nm) 1) (not= "?_" nm))
+        (symbol (subs nm 1))))))
+
 (defn- pattern-var-bindings
   "Walk pattern, return {sym path} for each bound variable.
-   Handles plain `?x` and extended `(?x :when ...)` forms."
+   Descends into maps, vectors, and extended `(?x :when ...)` forms.
+   Vector/sequence elements share the enclosing map path so that error
+   detection covers the whole sub-pattern; individual element positions
+   are not distinguished. Wildcards (`?_`-family) are skipped."
   [pattern]
   (letfn [(bound-sym [x]
             (cond
               (variable? x) x
               (and (seq? x) (variable? (first x))) (first x)))
           (walk [acc p prefix]
-            (if (map? p)
+            (cond
+              (map? p)
               (reduce-kv (fn [a k v] (walk a v (conj prefix k))) acc p)
-              (if-let [s (bound-sym p)]
-                (assoc acc (symbol (subs (name s) 1)) prefix)
+
+              (vector? p)
+              (reduce (fn [a v] (walk a v prefix)) acc p)
+
+              :else
+              (if-let [bound (some-> (bound-sym p) var-binding-sym)]
+                (assoc acc bound prefix)
                 acc)))]
     (walk {} pattern [])))
 
@@ -513,6 +536,19 @@
   ;=> {'x [:b]}
 
   (pattern-var-bindings nil) ;=> {}
+
+  ;; quantifier suffixes are stripped to match matcher binding names
+  (pattern-var-bindings '{:a ?x?})  ;=> {'x [:a]}
+  (pattern-var-bindings '{:a ?x*})  ;=> {'x [:a]}
+  (pattern-var-bindings '{:a ?x+!}) ;=> {'x [:a]}
+
+  ;; vector elements share the enclosing map path
+  (pattern-var-bindings '{:items [?first ?rest*]})
+  ;=>> {'first [:items] 'rest [:items]}
+
+  ;; nested vectors
+  (pattern-var-bindings '{:a [[?x ?y]]})
+  ;=>> {'x [:a] 'y [:a]}
 
   ;; path-prefix?: empty prefix matches any path
   (path-prefix? [] [:a]) ;=> true
@@ -574,29 +610,34 @@
 
 (defn- classify-vars
   "Walk each bound var's path in `val`; classify as kept or errored in one pass.
-   Returns {:kept-vars <vars minus errored ones>
+   Returns {:kept-vars <matcher vars minus errored symbols>
             :errs      <wire-format errors, deduped by error path>
             :all-covered? <true when every bound var is errored>}.
+   `var-bindings` drives the error walk only — `kept-vars` is seeded from
+   the matcher's full `vars` so variables in vector/sequence patterns (which
+   share a single enclosing path) still surface in the response.
    When `detect-fn` is nil or `var-bindings` empty, returns {:kept-vars vars}."
   [val vars var-bindings detect-fn]
   (if (or (nil? detect-fn) (empty? var-bindings))
     {:kept-vars vars}
-    (let [{:keys [kept err-map]}
+    (let [{:keys [err-map errored]}
           (reduce-kv
            (fn [acc sym path]
              (let [[v e] (detect-path-error val path detect-fn)
                    err   (or e (when (map? v) (detect-fn v)))]
                (if err
                  (let [ep (or (:path err) path)]
-                   (cond-> acc
-                     (not (contains? (:err-map acc) ep))
-                     (assoc-in [:err-map ep] (dissoc err :path))))
-                 (assoc-in acc [:kept sym] (get vars sym)))))
-           {:kept {} :err-map {}}
-           var-bindings)]
+                   (-> acc
+                       (update :errored conj sym)
+                       (cond-> (not (contains? (:err-map acc) ep))
+                         (assoc-in [:err-map ep] (dissoc err :path)))))
+                 acc)))
+           {:err-map {} :errored #{}}
+           var-bindings)
+          kept (reduce dissoc vars errored)]
       {:kept-vars    kept
        :errs         (error-map->errors err-map)
-       :all-covered? (and (seq err-map) (empty? kept))})))
+       :all-covered? (boolean (and (seq err-map) (empty? kept)))})))
 
 ^:rct/test
 (comment
@@ -643,6 +684,24 @@
   ;; empty var-bindings: vars pass through
   (classify-vars {} nil {} err-detect)
   ;=> {:kept-vars nil}
+
+  ;; vector-pattern vars survive even though var-bindings collapses them
+  ;; onto a single enclosing path
+  (classify-vars {:items [10 20 30]}
+                 '{first 10 rest (20 30)}
+                 '{first [:items] rest [:items]}
+                 err-detect)
+  ;=>> {:kept-vars {'first 10 'rest '(20 30)}
+  ;     :all-covered? false}
+
+  ;; vector-pattern error: both vars drop and error surfaces
+  (classify-vars {:items {:error {:type :forbidden :message "NA"}}}
+                 '{first [:error {:type :forbidden :message "NA"}] rest ()}
+                 '{first [:items] rest [:items]}
+                 err-detect)
+  ;=> {:kept-vars     {}
+  ;    :errs          [{:code :forbidden :reason "NA" :path [:items]}]
+  ;    :all-covered?  true}
   )
 
 (defn- execute-mutation
@@ -998,6 +1057,33 @@
 
   (:errors (execute test-no-detect-fail-api-fn '{:broken {:deep ?v}}))
   ;=>> [{:code :match-failure}]
+
+  ;; --- read: vector patterns preserve their bindings in the response ---
+
+  (def test-vec-api-fn
+    (fn [_ctx]
+      {:data {:items [10 20 30] :meta {:count 3}}
+       :errors {:detect :error :codes {:forbidden 403}}}))
+
+  (execute test-vec-api-fn '{:items [?first ?rest*] :meta {:count ?c}})
+  ;=>> {'first 10 'rest '(20 30) 'c 3}
+
+  ;; vector-leaf error path is detected; remaining vars survive
+  (def test-vec-error-api-fn
+    (fn [_ctx]
+      {:data {:ok {:n 1}
+              :denied {:error {:type :forbidden :message "NA"}}}
+       :errors {:detect :error :codes {:forbidden 403}}}))
+
+  (let [r (execute test-vec-error-api-fn '{:ok {:n ?n} :denied [?items*]})]
+    [(get r 'n) (contains? r 'items) (::detected-errors (meta r))])
+  ;=>> [1 false [{:code :forbidden :reason "NA" :path [:denied]}]]
+
+  ;; --- read: quantifier suffixes (?x?, ?x*, ?x+) bind to stripped name ---
+
+  (execute (fn [_ctx] {:data {:items 42} :errors {:detect :error}})
+           '{:items ?x?})
+  ;=>> {'x 42}
 
   ;; --- mutations ---
 
