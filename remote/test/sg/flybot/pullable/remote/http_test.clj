@@ -137,6 +137,7 @@
           body (decode-body resp)]
       (is (= 200 (:status resp)))
       (is (vector? (get body 'all)) "Successful branch returns vars")
+      (is (= 1 (count (:errors body))) "Error reported exactly once")
       (is (= :forbidden (get-in body [:errors 0 :code])) "Error branch reported")
       (is (= [:private] (get-in body [:errors 0 :path]))))))
 
@@ -174,8 +175,46 @@
           body (decode-body resp)]
       (is (= 200 (:status resp)))
       (is (= "Alice" (get body 'n)) "Successful branch returns vars")
+      (is (= 1 (count (:errors body))) "Error reported exactly once")
       (is (= :forbidden (get-in body [:errors 0 :code])) "Error branch reported")
       (is (= [:section :denied] (get-in body [:errors 0 :path]))))))
+
+(deftest read-role-denied-nested-pattern-403-test
+  (testing "Role-gate {:error ...} in plain data with pattern nesting past it returns 403 at the role path"
+    (let [api (fn [_req]
+                {:data   {:member {:error {:type :forbidden :message "Role :member required"}}}
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request '{:member {:posts/history {{:post/id 1} ?versions}}}))
+          body (decode-body resp)]
+      (is (= 403 (:status resp)))
+      (is (= :forbidden (get-in body [:errors 0 :code])))
+      (is (= [:member] (get-in body [:errors 0 :path])))))
+
+  (testing "Deeper nesting past the role key still returns 403 at the role path"
+    (let [api (fn [_req]
+                {:data   {:section {:admin {:error {:type :forbidden :message "No"}}}}
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request '{:section {:admin {:items {:all ?all}}}}))
+          body (decode-body resp)]
+      (is (= 403 (:status resp)))
+      (is (= [:section :admin] (get-in body [:errors 0 :path])))))
+
+  (testing "Partial success: sibling role succeeds, denied role reported exactly once"
+    (let [api (fn [_req]
+                {:data   {:guest  {:posts [{:post/id 1 :post/title "Hello"}]}
+                          :member {:error {:type :forbidden :message "Role :member required"}}}
+                 :errors {:detect :error :codes {:forbidden 403}}})
+          handler (http/make-handler api)
+          resp (handler (pull-request
+                         '{:guest {:posts ?p}
+                           :member {:posts/history {{:post/id 1} ?versions}}}))
+          body (decode-body resp)]
+      (is (= 200 (:status resp)))
+      (is (vector? (get body 'p)) "Guest branch returns posts")
+      (is (= 1 (count (:errors body))) "Denied role reported exactly once")
+      (is (= [:member] (get-in body [:errors 0 :path]))))))
 
 (deftest read-schema-violation-403-test
   (testing "Accessing undeclared schema key returns 403"

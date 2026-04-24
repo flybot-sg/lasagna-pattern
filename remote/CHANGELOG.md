@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-04-24
+
+### Fixed
+
+- Role-gate denials with patterns nesting more than one level past the role key now return the correct `:forbidden` (e.g. 403) instead of `:match-failure` (422). Example: `{:member {:posts/history {{:post/id 1} ?v}}}` against `{:member {:error {:type :forbidden}}}` — the matcher would previously descend past the error into nil and fail with "expected map, got nil" at the deepest level, masking the auth denial
+
+### Changed
+
+- `execute-read` now runs three steps: walk raw `data` along pattern var-paths to catch role-gate errors, trim the pattern at those paths, match the trimmed pattern, then walk the matcher's `:val` over the **trimmed** pattern's var-bindings for errors inside materialized data. Scoping the `:val` walk to trimmed bindings prevents re-reporting step-1 errors that map passthrough leaks into `:val`. Merges `data-errs` and `val-errs` for classification
+- Data walk stops at any non-map value — ILookup implementations are not probed, preserving the single-invocation guarantee on happy paths
+- Contract clarified: `{:error ...}` must live in plain data. Errors returned from `ILookup.valAt` remain invisible to detection and will still surface as `:match-failure` when the pattern descends past them
+
+### Added
+
+- `trim-pattern` (private fn) — removes pattern branches at detected error paths, returns nil when all branches are trimmed
+- `detect-read-errors` (private fn) — walks raw `data` along var-paths through plain maps only
+
 ## [0.1.4] - 2026-04-24
 
 ### Changed

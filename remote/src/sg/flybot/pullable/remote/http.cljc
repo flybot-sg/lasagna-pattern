@@ -608,16 +608,120 @@
   (detect-path-error {:a {:b 42}} [:a :b] nil) ;=> [42 nil]
   )
 
-(defn- classify-vars
-  "Walk each bound var's path in `val`; classify as kept or errored in one pass.
+(defn- trim-pattern
+  "Remove pattern keys at or under paths in `error-paths`. Descends into
+   sub-patterns only when the current path is a prefix of some error path.
+   Returns trimmed pattern, or nil if all keys were removed."
+  ([pattern error-paths]
+   (trim-pattern pattern error-paths []))
+  ([pattern error-paths current-path]
+   (when (and (map? pattern)
+              (not (contains? error-paths current-path)))
+     (let [trimmed (reduce-kv
+                    (fn [acc k v]
+                      (let [child-path (conj current-path k)]
+                        (cond
+                          (contains? error-paths child-path)
+                          acc
+                          (and (map? v)
+                               (some #(path-prefix? child-path %) error-paths))
+                          (let [v' (trim-pattern v error-paths child-path)]
+                            (if (seq v') (assoc acc k v') acc))
+                          :else
+                          (assoc acc k v))))
+                    {}
+                    pattern)]
+       (when (seq trimmed) trimmed)))))
+
+(defn- detect-read-errors
+  "Pre-match error detection: walk `data` along each var path through
+   plain maps only. Stops at any non-map value — ILookup implementations
+   are not probed, matching the contract that `{:error ...}` must live in
+   plain data (errors returned from ILookup.valAt are invisible here).
+
+   Checks detect-fn at every map encountered, including the leaf, so both
+   intermediate role-gate errors and leaf errors surface. Returns
+   {err-path err-data} or nil."
+  [data var-paths detect-fn]
+  (when (and detect-fn (seq var-paths))
+    (let [errors
+          (reduce
+           (fn [acc path]
+             (loop [m data, [k & ks] path, traversed []]
+               (let [err (when (map? m) (detect-fn m))]
+                 (cond
+                   (not (map? m)) acc
+                   err            (cond-> acc
+                                    (not (contains? acc traversed))
+                                    (assoc traversed err))
+                   (nil? k)       acc
+                   :else          (recur (get m k) ks (conj traversed k))))))
+           {}
+           var-paths)]
+      (when (seq errors) errors))))
+
+^:rct/test
+(comment
+  ;; trim-pattern — removes known error paths
+  (trim-pattern '{:a {:x ?x} :b {:y ?y}} #{[:b]})
+  ;=> '{:a {:x ?x}}
+
+  ;; trim-pattern — nested removal
+  (trim-pattern '{:section {:ok {:name ?n} :denied {:name ?d}}}
+                #{[:section :denied]})
+  ;=> '{:section {:ok {:name ?n}}}
+
+  ;; trim-pattern — all keys errored → nil
+  (trim-pattern '{:a {:x ?x} :b {:y ?y}} #{[:a] [:b]}) ;=> nil
+
+  ;; trim-pattern — sub-pattern entirely empty after trim → parent removed
+  (trim-pattern '{:section {:denied {:name ?d}}} #{[:section :denied]}) ;=> nil
+
+  ;; trim-pattern — root error path trims entire pattern
+  (trim-pattern '{:a ?x :b ?y} #{[]}) ;=> nil
+
+  ;; detect-read-errors — intermediate error at role gate
+  (detect-read-errors {:member {:error {:type :forbidden :message "No"}}}
+                      #{[:member :posts :x]}
+                      err-detect)
+  ;=> {[:member] {:type :forbidden :message "No"}}
+
+  ;; detect-read-errors — leaf error (var binds directly to error map)
+  (detect-read-errors {:a {:error {:type :forbidden}}}
+                      #{[:a]}
+                      err-detect)
+  ;=> {[:a] {:type :forbidden}}
+
+  ;; detect-read-errors — root-level error
+  (detect-read-errors {:error {:type :forbidden :message "Unauth"}}
+                      #{[:a] [:b]}
+                      err-detect)
+  ;=> {[] {:type :forbidden :message "Unauth"}}
+
+  ;; detect-read-errors — stops at ILookup (does not probe)
+  (let [stub (reify clojure.lang.ILookup
+               (valAt [_ k] (case k :admin {:error {:type :forbidden}} nil))
+               (valAt [this k _] (.valAt this k)))]
+    (detect-read-errors {:section stub} #{[:section :admin :x]} err-detect))
+  ;=> nil
+
+  ;; detect-read-errors — no errors
+  (detect-read-errors {:a {:b 42}} #{[:a :b]} err-detect) ;=> nil
+
+  ;; detect-read-errors — nil detect-fn
+  (detect-read-errors {:a {:error {}}} #{[:a]} nil) ;=> nil
+  )
+
+(defn- detect-val-errors
+  "Walk each bound var's path in `result`'s `:val`; for paths `detect-fn`
+   flags, record the error and drop the corresponding var from `:vars`.
    Returns {:kept-vars <matcher vars minus errored symbols>
-            :errs      <wire-format errors, deduped by error path>
-            :all-covered? <true when every bound var is errored>}.
+            :val-errs  <wire-format errors, deduped by path>}.
    `var-bindings` drives the error walk only — `kept-vars` is seeded from
    the matcher's full `vars` so variables in vector/sequence patterns (which
    share a single enclosing path) still surface in the response.
    When `detect-fn` is nil or `var-bindings` empty, returns {:kept-vars vars}."
-  [val vars var-bindings detect-fn]
+  [{:keys [val vars]} var-bindings detect-fn]
   (if (or (nil? detect-fn) (empty? var-bindings))
     {:kept-vars vars}
     (let [{:keys [err-map errored]}
@@ -633,75 +737,69 @@
                          (assoc-in [:err-map ep] (dissoc err :path)))))
                  acc)))
            {:err-map {} :errored #{}}
-           var-bindings)
-          kept (reduce dissoc vars errored)]
-      {:kept-vars    kept
-       :errs         (error-map->errors err-map)
-       :all-covered? (boolean (and (seq err-map) (empty? kept)))})))
+           var-bindings)]
+      {:kept-vars (reduce dissoc vars errored)
+       :val-errs  (error-map->errors err-map)})))
 
 ^:rct/test
 (comment
   (def err-detect #(get % :error))
 
   ;; partial: one path errored, one kept
-  (classify-vars {:pub  {:items [1 2 3]}
-                  :priv {:error {:type :forbidden :message "NA"}}}
-                 '{all [1 2 3] secret nil}
-                 '{all [:pub :items] secret [:priv :items]}
-                 err-detect)
-  ;=> {:kept-vars     '{all [1 2 3]}
-  ;    :errs          [{:code :forbidden :reason "NA" :path [:priv]}]
-  ;    :all-covered?  false}
+  (detect-val-errors {:val  {:pub  {:items [1 2 3]}
+                             :priv {:error {:type :forbidden :message "NA"}}}
+                      :vars '{all [1 2 3] secret nil}}
+                     '{all [:pub :items] secret [:priv :items]}
+                     err-detect)
+  ;=> {:kept-vars '{all [1 2 3]}
+  ;    :val-errs  [{:code :forbidden :reason "NA" :path [:priv]}]}
 
   ;; all covered
-  (:all-covered?
-   (classify-vars {:a {:error {:type :forbidden}} :b {:error {:type :forbidden}}}
-                  '{x nil y nil}
-                  '{x [:a :foo] y [:b :bar]}
-                  err-detect))
-  ;=>> true
+  (detect-val-errors {:val  {:a {:error {:type :forbidden}} :b {:error {:type :forbidden}}}
+                      :vars '{x nil y nil}}
+                     '{x [:a :foo] y [:b :bar]}
+                     err-detect)
+  ;=>> {:kept-vars empty?}
 
   ;; leaf error: var binds directly to error map
-  (-> (classify-vars {:a {:error {:type :forbidden :message "NA"}}}
-                     '{x {:error {:type :forbidden :message "NA"}}}
-                     '{x [:a]}
-                     err-detect)
-      (select-keys [:kept-vars :all-covered?]))
-  ;=> {:kept-vars {} :all-covered? true}
+  (:kept-vars
+   (detect-val-errors {:val  {:a {:error {:type :forbidden :message "NA"}}}
+                       :vars '{x {:error {:type :forbidden :message "NA"}}}}
+                      '{x [:a]}
+                      err-detect))
+  ;=> {}
 
   ;; dedup: multiple vars under the same error path produce one error
-  (:errs
-   (classify-vars {:p {:error {:type :forbidden :message "denied"}}}
-                  '{x nil y nil}
-                  '{x [:p :a] y [:p :b]}
-                  err-detect))
+  (:val-errs
+   (detect-val-errors {:val  {:p {:error {:type :forbidden :message "denied"}}}
+                       :vars '{x nil y nil}}
+                      '{x [:p :a] y [:p :b]}
+                      err-detect))
   ;=> [{:code :forbidden :reason "denied" :path [:p]}]
 
   ;; no detect-fn: vars pass through
-  (classify-vars {:a 1} '{x 1} '{x [:a]} nil)
+  (detect-val-errors {:val {:a 1} :vars '{x 1}} '{x [:a]} nil)
   ;=> {:kept-vars '{x 1}}
 
   ;; empty var-bindings: vars pass through
-  (classify-vars {} nil {} err-detect)
+  (detect-val-errors {:val {} :vars nil} {} err-detect)
   ;=> {:kept-vars nil}
 
   ;; vector-pattern vars survive even though var-bindings collapses them
   ;; onto a single enclosing path
-  (classify-vars {:items [10 20 30]}
-                 '{first 10 rest (20 30)}
-                 '{first [:items] rest [:items]}
-                 err-detect)
-  ;=>> {:kept-vars {'first 10 'rest '(20 30)}
-  ;     :all-covered? false}
+  (detect-val-errors {:val  {:items [10 20 30]}
+                      :vars '{first 10 rest (20 30)}}
+                     '{first [:items] rest [:items]}
+                     err-detect)
+  ;=>> {:kept-vars {'first 10 'rest '(20 30)}}
 
   ;; vector-pattern error: both vars drop and error surfaces
-  (classify-vars {:items {:error {:type :forbidden :message "NA"}}}
-                 '{first [:error {:type :forbidden :message "NA"}] rest ()}
-                 '{first [:items] rest [:items]}
-                 err-detect)
-  ;=> {:kept-vars     {}
-  ;    :errs          [{:code :forbidden :reason "NA" :path [:items]}]
-  ;    :all-covered?  true}
+  (detect-val-errors {:val  {:items {:error {:type :forbidden :message "NA"}}}
+                      :vars '{first [:error {:type :forbidden :message "NA"}] rest ()}}
+                     '{first [:items] rest [:items]}
+                     err-detect)
+  ;=> {:kept-vars {}
+  ;    :val-errs  [{:code :forbidden :reason "NA" :path [:items]}]}
   )
 
 (defn- execute-mutation
@@ -732,34 +830,41 @@
                       #?(:clj (.getMessage e) :cljs (.-message e)))))))
 
 (defn- execute-read
-  "Execute a read pattern: compile, match, then inspect the matcher's realized
-   `:val` for per-path errors. Returns partial success when some var-paths
-   resolve cleanly, or full failure when every var-path is error-covered."
+  "Returns partial success when some var-paths resolve cleanly, or full
+   failure when every var-path is error-covered."
   [api-fn ctx pattern opts]
   (let [{:keys [data schema errors]} (api-fn ctx)
         detect-fn    (make-detect-fn (:detect errors))
         var-bindings (when detect-fn (pattern-var-bindings pattern))
-        compiled     (pattern/compile-pattern
-                      pattern
-                      (cond-> (select-keys opts [:resolve :eval-fn])
-                        (not (:resolve opts)) (assoc :resolve safe-resolve)
-                        (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
-                        schema (assoc :schema schema)))
-        result       (compiled (pattern/vmr data))
-        {:keys [kept-vars errs all-covered?]}
-        (classify-vars (:val result) (:vars result) var-bindings detect-fn)]
-    (-> (cond
-          (pattern/failure? result)
-          (let [perr (match-failure->error result)]
-            (failure
-             (if (some #(path-prefix? (:path %) (:path perr)) errs)
-               errs
-               (conj (or errs []) perr))))
-          all-covered?
-          (failure errs)
-          :else
-          (cond-> (success (:val result) kept-vars)
-            (seq errs) (vary-meta assoc ::detected-errors errs)))
+        data-err-map (detect-read-errors data (set (vals var-bindings)) detect-fn)
+        trimmed      (if (seq data-err-map)
+                       (trim-pattern pattern (set (keys data-err-map)))
+                       pattern)
+        data-errs    (vec (error-map->errors data-err-map))]
+    (-> (if-not trimmed
+          (failure data-errs)
+          (let [compiled (pattern/compile-pattern
+                          trimmed
+                          (cond-> (select-keys opts [:resolve :eval-fn])
+                            (not (:resolve opts)) (assoc :resolve safe-resolve)
+                            (not (:eval-fn opts)) (assoc :eval-fn safe-eval)
+                            schema (assoc :schema schema)))
+                result   (compiled (pattern/vmr data))
+                {:keys [kept-vars val-errs]}
+                (detect-val-errors result (pattern-var-bindings trimmed) detect-fn)
+                all-errs (into data-errs val-errs)]
+            (cond
+              (pattern/failure? result)
+              (let [perr (match-failure->error result)]
+                (failure
+                 (if (some #(path-prefix? (:path %) (:path perr)) all-errs)
+                   all-errs
+                   (conj all-errs perr))))
+              (and (seq all-errs) (empty? kept-vars))
+              (failure all-errs)
+              :else
+              (cond-> (success (:val result) kept-vars)
+                (seq all-errs) (vary-meta assoc ::detected-errors all-errs)))))
         (vary-meta assoc ::error-codes (:codes errors)))))
 
 (defn execute
