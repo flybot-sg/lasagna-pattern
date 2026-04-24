@@ -11,24 +11,27 @@
    #?(:clj [cognitect.transit :as transit])
    #?(:clj [clojure.edn :as edn])
    #?(:clj [clojure.java.io :as io]))
+  #?(:cljs (:require-macros [sg.flybot.pullable.remote.http :refer [direct-satisfies?]]))
   #?(:clj (:import [java.io ByteArrayInputStream ByteArrayOutputStream])))
 
 ;;=============================================================================
 ;; Protocol Utilities
 ;;=============================================================================
 
-(defn- direct-satisfies?
-  "Fast alternative to `clojure.core/satisfies?`. True when `v`'s class directly
-   implements the protocol interface (covers `deftype` inline and `reify`) OR is
-   registered in the protocol's `:impls` map (covers `extend-type` /
-   `extend-protocol`).
-
-   Does not cover `:extend-via-metadata` — values whose protocol impl is attached
-   via metadata aren't detected."
-  [protocol v]
-  #?(:clj (or (instance? (:on-interface protocol) v)
-              (some? (get (:impls protocol) (class v))))
-     :cljs (satisfies? protocol v)))
+#?(:clj
+   (defmacro ^:private direct-satisfies?
+     "Fast path for `satisfies?`. Macro — CLJS's `satisfies?` needs the
+   protocol as a compile-time symbol, which a function wrapper would lose."
+     [protocol-sym v]
+     (if (:ns &env)
+       `(cljs.core/satisfies? ~protocol-sym ~v)
+       `(let [v#        ~v
+              protocol# ~protocol-sym
+              impls#    (:impls protocol#)
+              cls#      (class v#)]
+          (or (instance? (:on-interface protocol#) v#)
+              (contains? impls# cls#)
+              (boolean (some impls# (supers cls#))))))))
 
 ;;=============================================================================
 ;; Security: Safe Pattern Evaluation
