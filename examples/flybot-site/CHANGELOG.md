@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2] - 2026-06-29
+
+### Fixed
+
+- Style markdown tables in post content — tables in `.post-body`/`.post-content`/`.page-content` now render with borders, cell padding, a shaded header row, and responsive horizontal scroll instead of unstyled browser defaults
+
 ## [0.4.1] - 2026-04-24
 
 ### Changed

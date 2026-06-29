@@ -734,6 +734,43 @@ code, pre, .font-mono {
   border-radius: var(--radius-lg);
 }
 
+/* Tables (from markdown) */
+.post-body table,
+.post-content table,
+.page-content table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: var(--space-4) 0;
+  font-size: 0.95em;
+}
+
+.post-body th,
+.post-body td,
+.post-content th,
+.post-content td,
+.page-content th,
+.page-content td {
+  border: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.post-body th,
+.post-content th,
+.page-content th {
+  background: var(--bg-secondary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.post-body tbody tr:nth-child(even) td,
+.post-content tbody tr:nth-child(even) td,
+.page-content tbody tr:nth-child(even) td {
+  background: var(--bg-secondary);
+}
+
 /* Content headings (from markdown) */
 .page-content h2,
 .post-content h2,

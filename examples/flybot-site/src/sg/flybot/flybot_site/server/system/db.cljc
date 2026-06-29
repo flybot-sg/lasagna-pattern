@@ -523,6 +523,15 @@ You describe the *shape of data* you need:
 '{:user {:address {:city ?city}}}
 ```
 
+## Syntax Cheatsheet
+
+| Pattern | Meaning            | Example            |
+|---------|--------------------|--------------------|
+| `?x`    | Bind value to `x`  | `{:name ?x}`       |
+| `?_`    | Wildcard           | `{:id ?_}`         |
+| `?x?`   | Optional (0-1)     | `{:nick ?nick?}`   |
+| `?x*`   | Zero or more       | `{:tags ?tags*}`   |
+
 > Let the pattern engine do the work."})
 
     (coll/mutate! p nil {:post/title "Building APIs with Lazy Data"
