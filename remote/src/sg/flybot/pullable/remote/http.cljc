@@ -357,9 +357,10 @@
 (defn default-ex->error
   "Exception → {:code :execution-error :reason <message>}.
    Default for :ex->error; compose with it to log then delegate."
-  [e]
-  (error :execution-error
-         #?(:clj (.getMessage ^Exception e) :cljs (.-message e))))
+  ([e] (default-ex->error e nil))
+  ([e _]
+   (error :execution-error
+          #?(:clj (.getMessage ^Exception e) :cljs (.-message e)))))
 
 (defn- success? [response]
   (not (contains? response :errors)))
@@ -895,9 +896,8 @@
            (execute-mutation api-fn ctx mutation)
            (execute-read api-fn ctx resolved opts)))
        (catch #?(:clj Exception :cljs js/Error) e
-         (failure (if-let [ex->error (:ex->error opts)]
-                    (ex->error e {:pattern pattern :context ctx})
-                    (default-ex->error e))))))))
+         (failure ((or (:ex->error opts) default-ex->error)
+                   e {:pattern pattern :context ctx})))))))
 
 (defn- execute-pull
   "Execute pull pattern against API data. Delegates to `execute`."
@@ -912,20 +912,23 @@
                     :transit-json)
         res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
         body (read-body (:body ring-request))
+        [req decode-ex] (when body
+                          (try [(decode body req-fmt) nil]
+                               (catch #?(:clj Exception :cljs js/Error) e
+                                 [nil e])))
         response (cond
                    (nil? body)
                    (failure (error :invalid-request "Request body required"))
 
+                   decode-ex
+                   (failure (error :decode-error
+                                   (str "Failed to decode: " (ex-message decode-ex))))
+
+                   (and (map? req) (contains? req :pattern))
+                   (execute-pull api-fn ring-request req ex->error)
+
                    :else
-                   (try
-                     (let [req (decode body req-fmt)]
-                       (if (and (map? req) (contains? req :pattern))
-                         (execute-pull api-fn ring-request req ex->error)
-                         (failure (error :invalid-request "Request must contain :pattern"))))
-                     (catch #?(:clj Exception :cljs js/Error) e
-                       (failure (error :decode-error
-                                       (str "Failed to decode: "
-                                            #?(:clj (.getMessage e) :cljs (.-message e))))))))
+                   (failure (error :invalid-request "Request must contain :pattern")))
         error-codes (::error-codes (meta response))
         detected-errors (::detected-errors (meta response))
         wire-response (cond-> response
@@ -1263,6 +1266,10 @@
   (default-ex->error (ex-info "boom" {}))
   ;=> {:code :execution-error :reason "boom"}
 
+  ;; 2-arity matches the hook contract — passing it directly as :ex->error works
+  (:errors (execute test-crashing-api-fn '{:x ?x} {:ex->error default-ex->error}))
+  ;=>> [{:code :execution-error :reason "Service unavailable"}]
+
   ;; hook receives original throwable (ex-data intact) and {:pattern :context};
   ;; delegating to default-ex->error keeps the default wire response
   (let [seen (atom nil)
@@ -1310,5 +1317,22 @@
         [e hctx] @seen]
     [(:status resp) (ex-message e) (:uri (:context hctx))])
   ;=> [500 "Service unavailable" "/api"]
+
+  ;; throwing hook escapes the handler — not mislabeled :decode-error 400
+  (let [handler (make-handler test-crashing-api-fn
+                              {:ex->error (fn [_ _] (throw (ex-info "hook bug" {})))})]
+    (handler {:request-method :post :uri "/api"
+              :headers {"content-type" "application/edn"}
+              :body (encode {:pattern '{:x ?x}} :edn)}))
+  ;throws=>> #:error{:message "hook bug"}
+
+  ;; malformed body is still :decode-error 400
+  (let [handler (make-handler test-crashing-api-fn {})
+        resp    (handler {:request-method :post :uri "/api"
+                          :headers {"content-type" "application/edn"
+                                    "accept"       "application/edn"}
+                          :body (.getBytes "{unbalanced")})]
+    [(:status resp) (-> (decode (:body resp) :edn) :errors first :code)])
+  ;=> [400 :decode-error]
   )
 
