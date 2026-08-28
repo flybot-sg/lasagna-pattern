@@ -64,7 +64,10 @@
    Collections return errors as data: {:error {:type :forbidden :message \"...\"}}
 
    Options:
-   - :path - Base path for API (default \"/api\")
+   - :path      - Base path for API (default \"/api\")
+   - :ex->error - (fn [throwable {:pattern p :context ring-request}]) →
+                  {:code _ :reason _}; default `default-ex->error`;
+                  must not throw.
 
    Example:
    ```clojure
@@ -84,7 +87,8 @@
    Delegates non-API requests to the wrapped handler.
 
    Options:
-   - :path - Base path for API (default \"/api\")
+   - :path      - Base path for API (default \"/api\")
+   - :ex->error - Exception → wire-error conversion, see `make-handler`
 
    ```clojure
    (def app
@@ -115,10 +119,13 @@
 
    api-fn:  (fn [context] {:data ... :schema ... :errors ...})
    pattern: Clojure data structure (EDN)
-   opts:    {:params  {...}  ; $-param substitution
-             :resolve fn     ; symbol resolver (default: safe whitelist)
-             :eval-fn fn     ; form evaluator (default: blocked)
-             :context map}   ; passed to api-fn
+   opts:    {:params    {...}  ; $-param substitution
+             :resolve   fn     ; symbol resolver (default: safe whitelist)
+             :eval-fn   fn     ; form evaluator (default: blocked)
+             :context   map    ; passed to api-fn
+             :ex->error fn}    ; (fn [throwable {:pattern p :context ctx}]) →
+                               ; {:code _ :reason _}; default
+                               ; `default-ex->error`; must not throw
 
    Returns vars map on success, {:errors [...]} on failure.
 
@@ -130,6 +137,11 @@
    ;; => {'all [...]}
    ```"
   http/execute)
+
+(def default-ex->error
+  "Exception → {:code :execution-error :reason <message>}.
+   Default for :ex->error; compose with it to log then delegate."
+  http/default-ex->error)
 
 ;; For client implementations
 (def encode
@@ -146,6 +158,7 @@
   wrap-api ;=>> fn?
   parse-mutation ;=>> fn?
   execute ;=>> fn?
+  default-ex->error ;=>> fn?
   encode ;=>> fn?
   decode ;=>> fn?
   )

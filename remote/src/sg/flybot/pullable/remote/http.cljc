@@ -354,6 +354,13 @@
 (defn- failure [err]
   {:errors (if (sequential? err) err [err])})
 
+(defn default-ex->error
+  "Exception → {:code :execution-error :reason <message>}.
+   Default for :ex->error; compose with it to log then delegate."
+  [e]
+  (error :execution-error
+         #?(:clj (.getMessage ^Exception e) :cljs (.-message e))))
+
 (defn- success? [response]
   (not (contains? response :errors)))
 
@@ -806,31 +813,24 @@
   )
 
 (defn- execute-mutation
-  "Execute a mutation against the API collection.
-   Path can be flat [:posts] or nested [:member :posts].
-
-   errors: {:detect fn, :codes map} from api-fn response
-   If detect returns truthy, treats result as error with :type and :message."
+  "Returns success with the full mutation result, or failure when the
+   path errors, the collection is missing, or :detect flags the result."
   [api-fn ring-request {:keys [path query value]}]
-  (try
-    (let [{:keys [data errors]} (api-fn ring-request)
-          detect-fn (make-detect-fn (:detect errors))
-          [coll path-err] (detect-path-error data path detect-fn)
-          result-key (last path)
-          res (if path-err
-                (let [{:keys [type message]} path-err]
-                  (failure (error type (or message (name type)) (:path path-err))))
-                (if (and coll (direct-satisfies? coll/Mutable coll))
-                  (let [result (coll/mutate! coll query value)]
-                    (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
-                      (failure (error type (or message (name type)) (vec path)))
-                      (success {result-key result} {(keyword->symbol result-key) result})))
-                  (failure (error :invalid-collection
-                                  (str "Collection " (pr-str path) " not found or unavailable")))))]
-      (vary-meta res assoc ::error-codes (:codes errors)))
-    (catch #?(:clj Exception :cljs js/Error) e
-      (failure (error :execution-error
-                      #?(:clj (.getMessage e) :cljs (.-message e)))))))
+  (let [{:keys [data errors]} (api-fn ring-request)
+        detect-fn (make-detect-fn (:detect errors))
+        [coll path-err] (detect-path-error data path detect-fn)
+        result-key (last path)
+        res (if path-err
+              (let [{:keys [type message]} path-err]
+                (failure (error type (or message (name type)) (:path path-err))))
+              (if (and coll (direct-satisfies? coll/Mutable coll))
+                (let [result (coll/mutate! coll query value)]
+                  (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
+                    (failure (error type (or message (name type)) (vec path)))
+                    (success {result-key result} {(keyword->symbol result-key) result})))
+                (failure (error :invalid-collection
+                                (str "Collection " (pr-str path) " not found or unavailable")))))]
+    (vary-meta res assoc ::error-codes (:codes errors))))
 
 (defn- execute-read
   "Returns partial success when some var-paths resolve cleanly, or full
@@ -878,31 +878,36 @@
 
    api-fn:  (fn [context] {:data ... :schema ... :errors ...})
    pattern: Clojure data structure (EDN)
-   opts:    {:params  {...}  ; $-param substitution
-             :resolve fn     ; symbol resolver (default: safe whitelist)
-             :eval-fn fn     ; form evaluator (default: blocked)
-             :context map}   ; passed to api-fn (default: {})"
+   opts:    {:params    {...}  ; $-param substitution
+             :resolve   fn     ; symbol resolver (default: safe whitelist)
+             :eval-fn   fn     ; form evaluator (default: blocked)
+             :context   map    ; passed to api-fn (default: {})
+             :ex->error fn}    ; (fn [throwable {:pattern p :context ctx}]) →
+                               ; {:code _ :reason _}; default
+                               ; `default-ex->error`; must not throw"
   ([api-fn pattern] (execute api-fn pattern {}))
   ([api-fn pattern opts]
-   (try
-     (let [resolved (resolve-params pattern (:params opts))
-           _        (validate-pattern-depth! resolved)
-           ctx      (or (:context opts) {})]
-       (if-let [mutation (parse-mutation resolved)]
-         (execute-mutation api-fn ctx mutation)
-         (execute-read api-fn ctx resolved opts)))
-     (catch #?(:clj Exception :cljs js/Error) e
-       (failure (error :execution-error
-                       #?(:clj (.getMessage e) :cljs (.-message e))))))))
+   (let [ctx (or (:context opts) {})]
+     (try
+       (let [resolved (resolve-params pattern (:params opts))
+             _        (validate-pattern-depth! resolved)]
+         (if-let [mutation (parse-mutation resolved)]
+           (execute-mutation api-fn ctx mutation)
+           (execute-read api-fn ctx resolved opts)))
+       (catch #?(:clj Exception :cljs js/Error) e
+         (failure (if-let [ex->error (:ex->error opts)]
+                    (ex->error e {:pattern pattern :context ctx})
+                    (default-ex->error e))))))))
 
 (defn- execute-pull
   "Execute pull pattern against API data. Delegates to `execute`."
-  [api-fn ring-request pull-request]
+  [api-fn ring-request pull-request ex->error]
   (execute api-fn (:pattern pull-request)
-           {:params  (:params pull-request)
-            :context ring-request}))
+           {:params    (:params pull-request)
+            :context   ring-request
+            :ex->error ex->error}))
 
-(defn- handle-pull [api-fn ring-request]
+(defn- handle-pull [api-fn ring-request ex->error]
   (let [req-fmt (or (parse-content-type (get-in ring-request [:headers "content-type"]))
                     :transit-json)
         res-fmt (negotiate-format (get-in ring-request [:headers "accept"]))
@@ -915,7 +920,7 @@
                    (try
                      (let [req (decode body req-fmt)]
                        (if (and (map? req) (contains? req :pattern))
-                         (execute-pull api-fn ring-request req)
+                         (execute-pull api-fn ring-request req ex->error)
                          (failure (error :invalid-request "Request must contain :pattern"))))
                      (catch #?(:clj Exception :cljs js/Error) e
                        (failure (error :decode-error
@@ -970,16 +975,19 @@
    Collections return errors as data: {:error {:type :forbidden :message \"...\"}}
 
    Options:
-   - :path - Base path (default \"/api\")"
+   - :path      - Base path (default \"/api\")
+   - :ex->error - (fn [throwable {:pattern p :context ring-request}]) →
+                  {:code _ :reason _}; default `default-ex->error`;
+                  must not throw."
   ([api-fn] (make-handler api-fn {}))
-  ([api-fn {:keys [path] :or {path "/api"}}]
+  ([api-fn {:keys [path ex->error] :or {path "/api"}}]
    (let [schema-path (str path "/_schema")]
      (fn [request]
        (let [uri (:uri request)
              method (:request-method request)]
          (cond
            (and (= uri path) (= method :post))
-           (handle-pull api-fn request)
+           (handle-pull api-fn request ex->error)
 
            (and (= uri schema-path) (= method :get))
            (handle-schema api-fn request)
@@ -1248,5 +1256,59 @@
   (:errors (execute (fn [_ctx] {:data {:broken {:items throwing-read-coll}}})
                     '{:broken {:items {{:id 1} ?x}}}))
   ;=>> [{:code :execution-error :reason "DB connection lost"}]
+
+  ;; --- :ex->error hook ---
+
+  ;; default conversion, exposed for composition
+  (default-ex->error (ex-info "boom" {}))
+  ;=> {:code :execution-error :reason "boom"}
+
+  ;; hook receives original throwable (ex-data intact) and {:pattern :context};
+  ;; delegating to default-ex->error keeps the default wire response
+  (let [seen (atom nil)
+        api  (fn [_ctx] (throw (ex-info "boom" {:cause :db})))
+        res  (execute api '{:x ?x}
+                      {:context {:req 1}
+                       :ex->error (fn [e hctx]
+                                    (reset! seen [e hctx])
+                                    (default-ex->error e))})
+        [e hctx] @seen]
+    [(:errors res) (ex-data e) (:pattern hctx) (:context hctx)])
+  ;=> [[{:code :execution-error :reason "boom"}] {:cause :db} '{:x ?x} {:req 1}]
+
+  ;; :ex->error replaces the wire error — ex-data maps to a domain code
+  (:errors (execute (fn [_ctx] (throw (ex-info "nope" {:type :not-found})))
+                    '{:x ?x}
+                    {:ex->error (fn [e _] {:code   (:type (ex-data e))
+                                           :reason (ex-message e)})}))
+  ;=> [{:code :not-found :reason "nope"}]
+
+  ;; mutation-path exception reaches the hook (single catch site in execute —
+  ;; fails if an inner catch is reintroduced in execute-mutation)
+  (let [seen (atom nil)]
+    [(:errors (execute test-throwing-api-fn '{:items {nil {:name "X"}}}
+                       {:ex->error (fn [e _]
+                                     (reset! seen e)
+                                     (default-ex->error e))}))
+     (ex-message @seen)])
+  ;=>> [[{:code :execution-error :reason "DB connection lost"}] "DB connection lost"]
+
+  ;; no hook → default conversion (nil :ex->error tolerated)
+  (:errors (execute test-crashing-api-fn '{:x ?x} {:ex->error nil}))
+  ;=>> [{:code :execution-error :reason "Service unavailable"}]
+
+  ;; make-handler threads :ex->error; :context in hook is the ring request
+  (let [seen    (atom nil)
+        handler (make-handler test-crashing-api-fn
+                              {:ex->error (fn [e hctx]
+                                            (reset! seen [e hctx])
+                                            (default-ex->error e))})
+        resp    (handler {:request-method :post :uri "/api"
+                          :headers {"content-type" "application/edn"
+                                    "accept"       "application/edn"}
+                          :body (encode {:pattern '{:x ?x}} :edn)})
+        [e hctx] @seen]
+    [(:status resp) (ex-message e) (:uri (:context hctx))])
+  ;=> [500 "Service unavailable" "/api"]
   )
 
