@@ -387,7 +387,7 @@
      200
      (let [code (get-in response [:errors 0 :code])
            all-codes (merge protocol-error-codes error-codes)]
-       (get all-codes code 400)))))
+       (get all-codes code 500)))))
 
 (defn- match-failure->error
   "Convert pattern MatchFailure to response error."
@@ -1024,7 +1024,7 @@
   ;; response->http-status with custom codes
   (response->http-status {:errors [{:code :forbidden}]} {:forbidden 403}) ;=> 403
   (response->http-status {:errors [{:code :custom}]} {:custom 418}) ;=> 418
-  (response->http-status {:errors [{:code :unknown}]} nil) ;=> 400
+  (response->http-status {:errors [{:code :unknown}]} nil) ;=> 500
 
   ;; --- execute ---
   ;;
