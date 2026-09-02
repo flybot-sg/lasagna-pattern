@@ -7,6 +7,7 @@
 
    - `read-only`     — disables mutations, delegates reads
    - `wrap-mutable`  — custom mutation logic (auth, ownership), delegates reads
+   - `validated`     — Malli validation of mutation input, delegates reads
    - `lookup`        — non-enumerable keyword->value ILookup with lazy delay support
 
    ## Basic Usage
@@ -38,7 +39,9 @@
 
    For in-memory use, `atom-source` provides a built-in DataSource
    with auto-incrementing IDs and transactional batch mutations via
-   `transact!` / `snapshot`.")
+   `transact!` / `snapshot`."
+  (:require [malli.core :as m]
+            [malli.error :as me]))
 
 ;;=============================================================================
 ;; Protocols
@@ -346,6 +349,49 @@
    ```"
   [coll mutate-fn]
   (->MutableWrapper coll mutate-fn))
+
+(defn- schema-error
+  "nil when `value` conforms to `schema`, error map otherwise."
+  [schema value]
+  (when (and schema (not (m/validate schema value)))
+    {:error {:type :invalid-mutation
+             :message (pr-str (me/humanize (m/explain schema value)))}}))
+
+(defn validated
+  "Wrap a mutable collection with Malli validation of mutation input.
+
+   Schemas is a map, any key omitted skips that check:
+
+   | key       | checks                          | applies to     |
+   |-----------|---------------------------------|----------------|
+   | `:query`  | the query                       | UPDATE, DELETE |
+   | `:create` | the value                       | CREATE         |
+   | `:update` | the value                       | UPDATE         |
+
+   The query is checked first, so a malformed query fails before the
+   value is looked at. Invalid input returns
+   {:error {:type :invalid-mutation :message <humanized>}} without
+   touching the inner collection.
+
+   Wrap outermost so it sees the raw client input, before other
+   wrappers add server-side fields:
+
+   ```clojure
+   (validated (wrap-mutable posts ownership-fn)
+              {:query  post-write-query
+               :create post-create-input
+               :update post-update-input})
+   ```
+
+   These schemas are the write policy (writable fields, required-on-create)
+   — usually a closed subset of the entity schema, not the read schema."
+  [coll {:keys [query create update]}]
+  (wrap-mutable coll
+                (fn [inner q value]
+                  (or (when (some? q) (schema-error query q))
+                      (when (some? value)
+                        (schema-error (if (nil? q) create update) value))
+                      (mutate! inner q value)))))
 
 ;;=============================================================================
 ;; Constructor
@@ -677,6 +723,54 @@
 
   ;; Mutable protocol IS satisfied
   (satisfies? Mutable owned) ;=> true
+
+  ;;---------------------------------------------------------------------------
+  ;; Validated Wrapper
+  ;;---------------------------------------------------------------------------
+
+  (def v-src (atom-source))
+  (def v-coll (collection v-src {:indexes #{#{:id}}}))
+  (def v (validated v-coll
+                    {:query  [:map {:closed true} [:id :int]]
+                     :create [:map {:closed true} [:name :string]]
+                     :update [:map {:closed true} [:name {:optional true} :string]]}))
+
+  ;; Valid create passes through
+  (:name (mutate! v nil {:name "Alice"})) ;=> "Alice"
+
+  ;; Create missing required key rejected
+  (:type (:error (mutate! v nil {}))) ;=> :invalid-mutation
+
+  ;; Unknown key rejected (closed schema), inner collection untouched
+  (:type (:error (mutate! v nil {:name "Bob" :admin? true}))) ;=> :invalid-mutation
+  (count v) ;=> 1
+
+  ;; Wrong type rejected with humanized message
+  (:message (:error (mutate! v {:id 1} {:name 42})))
+  ;=> "{:name [\"should be a string\"]}"
+
+  ;; Valid partial update passes
+  (:name (mutate! v {:id 1} {:name "Alice2"})) ;=> "Alice2"
+
+  ;; Bad query rejected on UPDATE, before the value is looked at
+  (:message (:error (mutate! v {:id "1"} {:name 42})))
+  ;=> "{:id [\"should be an integer\"]}"
+
+  ;; Bad query rejected on DELETE too (value nil, nothing else to check)
+  (:type (:error (mutate! v {:bogus 1} nil))) ;=> :invalid-mutation
+  (count v) ;=> 1
+
+  ;; DELETE with a valid query passes — the value is not validated
+  (mutate! v {:id 1} nil) ;=> true
+  (count v) ;=> 0
+
+  ;; Omitted schema skips that check
+  (def v-update-only (validated v-coll {:update [:map {:closed true}]}))
+  (:name (mutate! v-update-only nil {:anything 1 :name "raw"})) ;=> "raw"
+  (:type (:error (mutate! v-update-only {:id 2} {:name "x"}))) ;=> :invalid-mutation
+
+  ;; No schemas at all — a pass-through wrapper
+  (:name (mutate! (validated v-coll {}) nil {:name "anything"})) ;=> "anything"
 
   ;;---------------------------------------------------------------------------
   ;; Field Lookup (non-enumerable keyword-keyed resources)
