@@ -275,8 +275,8 @@ Compound indexes work: `:indexes #{#{:status :type}}` allows `(get coll {:status
 | Function | Purpose | Implements |
 |---|---|---|
 | `collection` | Wraps DataSource for pattern-compatible CRUD | ILookup, Seqable, Counted, Mutable, Wireable |
-| `read-only` | Disables mutations on a collection | ILookup, Seqable, Counted, Wireable |
-| `wrap-mutable` | Custom mutation logic, delegates reads | ILookup, Seqable, Counted, Mutable, Wireable |
+| `read-only` | Disables mutations on a collection | ILookup, Wireable (+ Seqable, Counted when the wrapped collection has them) |
+| `wrap-mutable` | Custom mutation logic, delegates reads | ILookup, Mutable, Wireable (+ Seqable, Counted when the wrapped collection has them) |
 | `lookup` | Non-enumerable keyword→value resource | ILookup, Wireable |
 | `atom-source` | In-memory DataSource + TxSource | DataSource, TxSource |
 
