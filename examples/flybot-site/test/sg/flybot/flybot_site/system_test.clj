@@ -292,6 +292,65 @@
     (let [{:keys [status]} (api-request '{:invalid-key ?x})]
       (is (= 403 status)))))
 
+(deftest write-validation-test
+  (let [valid {:post/title "Valid" :post/content "body"}
+        created (-> (api-request {:member {:posts {nil valid}}}) :body (get 'posts))
+        post-id (:post/id created)
+        invalid? (fn [pattern]
+                   (let [{:keys [status body]} (api-request pattern)]
+                     [status (-> body :errors first :code)]))]
+
+    (testing "a valid create still succeeds"
+      (is (some? post-id))
+      (is (= "Valid" (:post/title created))))
+
+    (testing "CREATE rejects missing required fields and unknown keys"
+      (is (= [422 :invalid-mutation] (invalid? {:member {:posts {nil {:post/title "no content"}}}})))
+      (is (= [422 :invalid-mutation] (invalid? {:member {:posts {nil {}}}})))
+      (is (= [422 :invalid-mutation]
+             (invalid? {:member {:posts {nil (assoc valid :post/titel "typo")}}}))))
+
+    (testing "wrong value types are rejected"
+      (is (= [422 :invalid-mutation]
+             (invalid? {:member {:posts {{:post/id post-id} {:post/title 123}}}})))
+      (is (= [422 :invalid-mutation]
+             (invalid? {:member {:posts {{:post/id post-id} {:post/tags "clj"}}}})))
+      (is (= [422 :invalid-mutation]
+             (invalid? {:member {:posts {{:post/id post-id} {:post/featured? "yes"}}}}))))
+
+    (testing "server-generated fields cannot be set by a client"
+      (doseq [k [:post/author :post/created-at :post/id]]
+        (is (= [422 :invalid-mutation]
+               (invalid? {:member {:posts {{:post/id post-id} {k "x"}}}}))
+            (str k " must not be writable"))))
+
+    (testing "a malformed mutation query is a 422, not a 500"
+      (is (= [422 :invalid-mutation]
+             (invalid? {:member {:posts {{:post/id "1"} {:post/title "X"}}}})))
+      (is (= [422 :invalid-mutation]
+             (invalid? {:member {:posts {{:bogus 1} nil}}})))
+      (is (= [422 :invalid-mutation]
+             (invalid? {:member {:posts {{:post/id "1"} nil}}}))))
+
+    (testing "admin writes are validated on the same policy"
+      (is (= [422 :invalid-mutation]
+             (invalid? {:admin {:posts {{:post/id post-id} {:post/author "m1"}}}}))))
+
+    (testing "role grants are limited to real roles"
+      (is (= [422 :invalid-mutation]
+             (invalid? {:owner {:users/roles {nil {:user/id "owner" :role/name :superadmin}}}})))
+      (is (= [422 :invalid-mutation]
+             (invalid? {:owner {:users/roles {nil {:user/id "owner" :role/name "admin"}}}}))))
+
+    (testing "a valid update still succeeds"
+      (let [{:keys [status body]} (api-request {:member {:posts {{:post/id post-id}
+                                                                 {:post/title "Updated"}}}})]
+        (is (= 200 status))
+        (is (= "Updated" (:post/title (get body 'posts))))))
+
+    (testing "cleanup: delete succeeds"
+      (is (= 200 (:status (api-request {:member {:posts {{:post/id post-id} nil}}})))))))
+
 ;;=============================================================================
 ;; REPL helpers
 ;;=============================================================================
