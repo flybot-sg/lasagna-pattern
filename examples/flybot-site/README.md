@@ -64,6 +64,13 @@ Environment variables (see `.env.example`):
 
 ## Role-Based API
 
+| Role | Who | Resources |
+|------|-----|-----------|
+| `:guest` | Anyone | `:posts` read-only, `:posts/history` |
+| `:member` | Logged-in employee | `:posts` CRUD on own posts, `:posts/history`, `:me` |
+| `:admin` | Granted by an owner | `:posts` CRUD on any post |
+| `:owner` | `BLOG_OWNER_EMAILS` | `:users`, role grants |
+
 Patterns use role as top-level key:
 
 ```clojure

@@ -91,6 +91,8 @@ The `:errors` config tells the handler how to detect and translate these:
          :invalid   422}}
 ```
 
+Errors must be plain data in the tree, for example a role gate that evaluates to `{:error {:type :forbidden}}`, not values returned from inside an `ILookup`.
+
 **Mutations** are all-or-nothing — a detected error fails the entire mutation. Errors along the path (e.g., a role gate) are detected before attempting the mutation.
 
 **Reads** support partial success — when some branches succeed and others contain detected errors, the response includes both the successful bindings and an `:errors` array for the failed paths. If all paths fail, the response is a full error.
@@ -162,7 +164,7 @@ Same as [pattern](../pattern) DSL, sent over the wire:
 | `encode` | `[value format]` | Encode to bytes (for custom clients) |
 | `decode` | `[bytes format]` | Decode from bytes (for custom clients) |
 
-Options: `{:path "/api"}` (default path)
+Options: `:path` (default `"/api"`) and `:ex->error`, a `(fn [throwable {:keys [pattern context]}] {:code _ :reason _})` that turns an exception thrown during a pull into the wire error. The default returns `:execution-error` (500).
 
 ### Client (`sg.flybot.pullable.remote.client`)
 

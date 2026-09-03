@@ -103,6 +103,8 @@ Backend storage protocol. Implement this for your storage layer.
   (delete! [this query]  "Delete item. Returns true/false."))
 ```
 
+`create!` and `update!` must return the complete entity, in the same shape as `fetch` and `list-all`: it is what the client gets back from a mutation.
+
 ### Mutable
 
 Collection mutation protocol. Implemented by `Collection` type.

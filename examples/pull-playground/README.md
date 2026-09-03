@@ -72,7 +72,16 @@ Bump `resources/version.edn` before tagging.
 ## Development
 
 ```bash
+bb dev examples/pull-playground     # nREPL with CLJ + CLJS support
 bb serve examples/pull-playground   # Serve UI on port 3001
 bb server examples/pull-playground  # Start backend on port 8081
 bb clean examples/pull-playground   # Clean build artifacts
+```
+
+For hot reload, from the `bb dev` REPL:
+
+```clojure
+(shadow.cljs.devtools.server/start!)
+(shadow.cljs.devtools.api/watch :app)   ; http://localhost:3001
+(start!)                                ; backend, Remote mode only
 ```
