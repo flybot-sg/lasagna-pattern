@@ -815,11 +815,9 @@
 
 (defn- execute-mutation
   "Returns success with the full mutation result, or failure when the
-   path errors, the collection is missing, or :detect flags the result.
-   Schemas under the api-fn's :writes for this path are applied via
-   `coll/validated` before mutate!."
+   path errors, the collection is missing, or :detect flags the result."
   [api-fn ring-request {:keys [path query value]}]
-  (let [{:keys [data writes errors]} (api-fn ring-request)
+  (let [{:keys [data errors]} (api-fn ring-request)
         detect-fn (make-detect-fn (:detect errors))
         [coll path-err] (detect-path-error data path detect-fn)
         result-key (last path)
@@ -827,12 +825,7 @@
               (let [{:keys [type message]} path-err]
                 (failure (error type (or message (name type)) (:path path-err))))
               (if (and coll (direct-satisfies? coll/Mutable coll))
-                ;; Wrap only after the Mutable check, so a non-mutable
-                ;; collection still reports :invalid-collection.
-                (let [coll   (if-let [schemas (get writes path)]
-                               (coll/validated coll schemas)
-                               coll)
-                      result (coll/mutate! coll query value)]
+                (let [result (coll/mutate! coll query value)]
                   (if-let [{:keys [type message]} (when detect-fn (detect-fn result))]
                     (failure (error type (or message (name type)) (vec path)))
                     (success {result-key result} {(keyword->symbol result-key) result})))
@@ -884,7 +877,7 @@
 
    Used by both the Ring handler and direct callers (e.g., browser sandbox).
 
-   api-fn:  (fn [context] {:data ... :schema ... :writes ... :errors ...})
+   api-fn:  (fn [context] {:data ... :schema ... :errors ...})
    pattern: Clojure data structure (EDN)
    opts:    {:params    {...}  ; $-param substitution
              :resolve   fn     ; symbol resolver (default: safe whitelist)
@@ -976,8 +969,7 @@
 (defn make-handler
   "Create Ring handler for pull API.
 
-   api-fn: (ring-request) -> {:data lazy-map, :schema schema-map,
-                              :writes write-schemas, :errors errors-config}
+   api-fn: (ring-request) -> {:data lazy-map, :schema schema-map, :errors errors-config}
 
    The :errors key in api-fn response configures error handling:
    - :detect - keyword or (fn [result] error-map-or-nil) to detect mutation errors
@@ -1229,53 +1221,6 @@
   ;; mutation through error map (role-gated) → :forbidden (detected before collection)
   (:errors (execute test-api-fn '{:private {:items {nil {:name "X"}}}}))
   ;=>> [{:code :forbidden :reason "Not authorized" :path [:private]}]
-
-  ;; --- mutation input validation (:writes) ---
-  ;;
-  ;; Write schemas are declared as data in the api-fn, carried by remote,
-  ;; and enforced by `coll/validated` — the write-side mirror of :schema,
-  ;; which remote carries and `pattern` enforces on reads.
-
-  (def validated-api-fn
-    (let [items     (coll/collection (coll/atom-source {:initial [{:id 1 :name "Alice"}]}))
-          unchecked (coll/collection (coll/atom-source))]
-      (fn [_ctx]
-        {:data   {:items items :unchecked unchecked}
-         :writes {[:items] {:query  [:map {:closed true} [:id :int]]
-                            :create [:map {:closed true} [:name :string]]
-                            :update [:map {:closed true} [:name {:optional true} :string]]}}
-         :errors {:detect :error
-                  :codes  {:invalid-mutation 422}}})))
-
-  ;; valid create passes through
-  (get (execute validated-api-fn '{:items {nil {:name "Carol"}}}) 'items)
-  ;=>> {:name "Carol"}
-
-  ;; unknown key rejected (closed create schema)
-  (:errors (execute validated-api-fn '{:items {nil {:name "X" :admin? true}}}))
-  ;=>> [{:code :invalid-mutation :path [:items]}]
-
-  ;; missing required key rejected
-  (:errors (execute validated-api-fn '{:items {nil {}}}))
-  ;=>> [{:code :invalid-mutation}]
-
-  ;; wrong value type rejected on update
-  (:errors (execute validated-api-fn '{:items {{:id 1} {:name 42}}}))
-  ;=>> [{:code :invalid-mutation}]
-
-  ;; malformed query rejected — including DELETE, which has no value
-  (:errors (execute validated-api-fn '{:items {{:id "1"} nil}}))
-  ;=>> [{:code :invalid-mutation}]
-
-  ;; valid update and delete still pass
-  (get (execute validated-api-fn '{:items {{:id 1} {:name "Alice2"}}}) 'items)
-  ;=>> {:id 1 :name "Alice2"}
-
-  (get (execute validated-api-fn '{:items {{:id 1} nil}}) 'items) ;=> true
-
-  ;; a path with no :writes entry is not validated
-  (get (execute validated-api-fn '{:unchecked {nil {:anything true}}}) 'unchecked)
-  ;=>> {:anything true}
 
   ;; --- exceptions ---
 

@@ -55,8 +55,7 @@
   "Create a Ring handler for pull-based API.
 
    Arguments:
-   - api-fn: Function (ring-request) → {:data lazy-map, :schema schema-map,
-                                        :writes write-schemas, :errors errors-config}
+   - api-fn: Function (ring-request) → {:data lazy-map, :schema schema-map, :errors errors-config}
 
    The api-fn returns :errors config for error handling:
    - :detect - keyword or fn to detect errors in mutation results
@@ -118,7 +117,7 @@
   "Execute a pull pattern directly (no HTTP). Used by in-process callers
    like browser sandboxes that share the same execution engine as the server.
 
-   api-fn:  (fn [context] {:data ... :schema ... :writes ... :errors ...})
+   api-fn:  (fn [context] {:data ... :schema ... :errors ...})
    pattern: Clojure data structure (EDN)
    opts:    {:params    {...}  ; $-param substitution
              :resolve   fn     ; symbol resolver (default: safe whitelist)
