@@ -110,6 +110,55 @@
   "Schema for posts collection (list or lookup)."
   (m/schema [:or [:vector post-schema] [:map-of post-query post-schema]]))
 
+(def ^:private writable-post-keys
+  "Fields a client may set through the API. Server-generated fields
+   (:post/id, :post/author, timestamps) are excluded."
+  [:post/title :post/content :post/tags :post/pages :post/featured?])
+
+(def ^:private post-update-input
+  "Input schema for post UPDATE: any subset of writable fields, nothing else."
+  (-> post-schema
+      (mu/select-keys writable-post-keys)
+      mu/optional-keys
+      mu/closed-schema))
+
+(def ^:private post-create-input
+  "Input schema for post CREATE: title and content required."
+  (mu/required-keys post-update-input [:post/title :post/content]))
+
+(def ^:private post-write-query
+  "Query schema for post UPDATE/DELETE. Writes address exactly one post by
+   id — :post/author is a read-only index (it matches an arbitrary one of
+   an author's posts, which is meaningless for a write)."
+  (m/schema [:map {:closed true} [:post/id :int]]))
+
+(def ^:private post-writes
+  "Write policy for posts. Same for :member and :admin — the two differ in
+   *which* posts they may touch (ownership, enforced by member-posts), not
+   in which fields they may set."
+  {:query  post-write-query
+   :create post-create-input
+   :update post-update-input})
+
+(def ^:private role-name-schema
+  "The roles this API can grant. Anything else is a typo, not a role."
+  (m/schema [:enum :member :admin :owner]))
+
+(def ^:private role-grant-input
+  "Input schema for granting a role (CREATE on :users/roles)."
+  (m/schema [:map {:closed true}
+             [:user/id :string]
+             [:role/name role-name-schema]]))
+
+(def ^:private role-query
+  "Query schema for revoking a role (DELETE on :users/roles)."
+  role-grant-input)
+
+(def ^:private role-writes
+  "Write policy for :users/roles: grant is CREATE, revoke is DELETE."
+  {:query  role-query
+   :create role-grant-input})
+
 (def ^:private history-schema
   "Schema for post history lookup."
   (m/schema [:map-of post-query [:vector version-schema]]))
@@ -445,9 +494,10 @@
   [{:keys [conn]}]
   (let [posts       (db/posts conn)
         guest-posts (public-posts posts)
+        admin-posts (coll/validated posts post-writes)
         history     (public-history (db/post-history-lookup conn))
         users       (coll/read-only (db/users conn))
-        roles       (roles-lookup conn)]
+        roles       (coll/validated (roles-lookup conn) role-writes)]
     (fn [ring-request]
       (let [ident   (oie/get-identity ring-request)
             user-id (:user-id ident)]
@@ -458,14 +508,15 @@
 
           ;; Member: ILookups — DB calls only when pattern accesses them
           :member (with-role ident :member
-                    {:posts (member-posts posts user-id (:user-email ident))
+                    {:posts (coll/validated (member-posts posts user-id (:user-email ident))
+                                            post-writes)
                      :posts/history history
                      :me (me-lookup conn ident)
                      :me/profile (profile-lookup conn user-id)})
 
           ;; Admin: CRUD any post
           :admin (with-role ident :admin
-                   {:posts posts})
+                   {:posts admin-posts})
 
           ;; Owner: user management + role grant/revoke
           :owner (with-role ident :owner
@@ -546,6 +597,58 @@
         result (coll/mutate! (get-in data [:member :posts]) {:post/id 1} {:post/title "Hacked"})]
     (:type (:error result)))
   ;=> :forbidden
+
+  ;; CREATE: title and content required, nothing outside the writable set
+  (m/validate (:create post-writes) {:post/title "T" :post/content "C"}) ;=> true
+  (m/validate (:create post-writes) {:post/title "T"}) ;=> false
+  (m/validate (:create post-writes) {:post/title "T" :post/content "C" :post/titel "typo"}) ;=> false
+
+  ;; UPDATE: any subset of writable fields, correctly typed
+  (m/validate (:update post-writes) {:post/title "T"}) ;=> true
+  (m/validate (:update post-writes) {:post/tags ["a"] :post/featured? true}) ;=> true
+  (m/validate (:update post-writes) {:post/title 123}) ;=> false
+
+  ;; Server-generated fields are not writable by a client
+  (m/validate (:update post-writes) {:post/id 2}) ;=> false
+  (m/validate (:update post-writes) {:post/author "m1"}) ;=> false
+  (m/validate (:update post-writes) {:post/created-at #inst "2020"}) ;=> false
+
+  ;; Writes address one post by id — :post/author is a read-only index
+  (m/validate (:query post-writes) {:post/id 1}) ;=> true
+  (m/validate (:query post-writes) {:post/id "1"}) ;=> false
+  (m/validate (:query post-writes) {:post/author "alice"}) ;=> false
+
+  ;; Roles are an enum — a typo is not a role
+  (m/validate role-grant-input {:user/id "u1" :role/name :admin}) ;=> true
+  (m/validate role-grant-input {:user/id "u1" :role/name :superadmin}) ;=> false
+  (m/validate role-grant-input {:user/id "u1" :role/name "admin"}) ;=> false
+  (m/validate role-grant-input {:role/name :admin}) ;=> false
+
+  ;; Validation sits on the collection itself, so in-process callers get it too
+  (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member :admin :owner}}
+        {:keys [data]} (api-fn {::oie/identity ident})
+        invalid (fn [path q v] (:type (:error (coll/mutate! (get-in data path) q v))))]
+    [(invalid [:member :posts] nil {:post/title "no content"})
+     (invalid [:admin :posts] {:post/id 1} {:post/author "m1"})
+     (invalid [:owner :users/roles] nil {:user/id "u" :role/name :superadmin})])
+  ;=> [:invalid-mutation :invalid-mutation :invalid-mutation]
+
+  ;; Ownership still lives in the collection wrapper, not the schema
+  (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
+        {:keys [data]} (api-fn {::oie/identity ident})
+        result (coll/mutate! (get-in data [:member :posts]) {:post/id 1} {:post/title "Hacked"})]
+    (:type (:error result)))
+  ;=> :forbidden
+
+  ;; Valid create → partial update → delete round-trip
+  (let [ident {:user-id "m1" :user-email "m@test.com" :roles #{:member}}
+        {:keys [data]} (api-fn {::oie/identity ident})
+        posts (get-in data [:member :posts])
+        created (coll/mutate! posts nil {:post/title "V" :post/content "c"})
+        updated (coll/mutate! posts {:post/id (:post/id created)} {:post/title "V2"})
+        deleted (coll/mutate! posts {:post/id (:post/id created)} nil)]
+    [(:post/title created) (:post/title updated) deleted])
+  ;=> ["V" "V2" true]
 
   ;; Admin: can update any post via :admin :posts
   (db/create-user! conn #:user{:id "a1" :email "a@test.com" :name "A" :picture ""})
