@@ -404,9 +404,9 @@
 (defn- schema-error
   "nil when `value` conforms to `schema`, error map otherwise."
   [schema value]
-  (when (and schema (not (m/validate schema value)))
+  (when-let [explanation (some-> schema (m/explain value))]
     {:error {:type :invalid-mutation
-             :message (pr-str (me/humanize (m/explain schema value)))}}))
+             :message (pr-str (me/humanize explanation))}}))
 
 (defn validated
   "Wrap a mutable collection with Malli validation of mutation input.

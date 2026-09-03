@@ -3,8 +3,6 @@
 .clj-kondo/imports/
 .calva/
 .vscode/
-**/.claude/settings.local.json
-.claude/.clojure-ready
 .cpcache/
 .nrepl*
 .rebel*

@@ -257,4 +257,4 @@ bb rct pattern     # Run RCT tests only
 bb dev pattern     # Start REPL
 ```
 
-See `CLAUDE.md` for architecture, internals, and extension points. See `doc/performance-analysis.md` for complexity characteristics.
+See `doc/performance-analysis.md` for complexity characteristics.
