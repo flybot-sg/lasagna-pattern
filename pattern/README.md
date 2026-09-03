@@ -257,4 +257,4 @@ bb rct pattern     # Run RCT tests only
 bb dev pattern     # Start REPL
 ```
 
-See `doc/performance-analysis.md` for complexity characteristics.
+See `docs/internals.md` for core forms, extension handlers, symbol resolution, and gotchas, and `docs/performance-analysis.md` for complexity characteristics.

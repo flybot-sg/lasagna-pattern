@@ -88,6 +88,8 @@ Implement the `DataSource` protocol for your storage layer — that's all it tak
 
 Then `get`, `seq`, and `mutate!` work immediately. See [examples/flybot-site/.../db/post.cljc](../examples/flybot-site/src/sg/flybot/flybot_site/server/system/db/post.cljc) for a complete Datahike implementation.
 
+Create the DataSource and its collection once and close over them. Only wrappers that depend on per-request context, such as an ownership check for the current user, are built per request.
+
 ## Protocols
 
 ### DataSource
@@ -225,7 +227,7 @@ Invalid input returns `{:error {:type :invalid-mutation :message <humanized>}}` 
 
 These schemas are the write policy — usually a closed subset of the entity schema (writable fields only, required-on-create), not the read schema.
 
-When serving over `remote`, map `:invalid-mutation` in the api-fn's `:codes` (e.g. `{:invalid-mutation 422}`). Unmapped codes fall back to 500.
+When serving over `remote`, map `:invalid-mutation` to a status in the `:codes` of the api-fn's `:errors` map, e.g. `{:errors {:detect :error :codes {:invalid-mutation 422}}}`. Unmapped codes fall back to 500.
 
 ### lookup
 
@@ -243,7 +245,20 @@ Non-enumerable keyword-keyed resources where some fields are cheap and others re
 
 Delay values are dereferenced transparently on access. Shared between `ILookup` and `->wire` — a DB query runs at most once.
 
-**Note:** `lookup` only supports keyword keys. For map-keyed queries (e.g., `{:post/id 3}`), use `reify` with `ILookup` + `Wireable` directly.
+**Note:** `lookup` only supports keyword keys. For map-keyed queries (e.g., `{:post/id 3}`) on a read-only, non-enumerable resource, `reify` `ILookup` and `Wireable` directly:
+
+```clojure
+(defn history-lookup [conn]
+  (reify
+    clojure.lang.ILookup
+    (valAt [_ query]
+      (when-let [id (:post/id query)]
+        (post-history @conn id)))
+    (valAt [this q nf] (or (.valAt this q) nf))
+
+    coll/Wireable
+    (->wire [_] nil)))   ; cannot be enumerated, so it serializes as nil
+```
 
 ## Collection Options
 

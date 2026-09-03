@@ -91,7 +91,7 @@ The `:errors` config tells the handler how to detect and translate these:
          :invalid   422}}
 ```
 
-Errors must be plain data in the tree, for example a role gate that evaluates to `{:error {:type :forbidden}}`, not values returned from inside an `ILookup`.
+Role-gate errors must be plain data in the tree, for example `{:error {:type :forbidden}}`, so the pre-match walk sees them before the pattern descends. An error returned from inside an `ILookup` is only seen by the post-match walk: it is reported when the match succeeds, but a pattern that nests past it far enough for the match to fail returns `:match-failure` (422) instead of the mapped code.
 
 **Mutations** are all-or-nothing — a detected error fails the entire mutation. Errors along the path (e.g., a role gate) are detected before attempting the mutation.
 
@@ -151,6 +151,12 @@ Same as [pattern](../pattern) DSL, sent over the wire:
 {:posts {{:id 1} nil}}                   ; Delete
 ```
 
+A pattern is a mutation when it is a chain of single-key maps ending in `{query value}` with no `?` variables in the value. A multi-key map is always a read, and a request carries at most one mutation.
+
+## Security
+
+Patterns are sandboxed: `:when` predicates are limited to a whitelist of type checks (`string?`, `int?`, ...), `fn` forms are rejected, nesting is capped at 100 levels, and with a `:schema` any undeclared key fails with `:schema-violation` (403).
+
 ## Public API
 
 ### Server (`sg.flybot.pullable.remote`)
@@ -164,7 +170,7 @@ Same as [pattern](../pattern) DSL, sent over the wire:
 | `encode` | `[value format]` | Encode to bytes (for custom clients) |
 | `decode` | `[bytes format]` | Decode from bytes (for custom clients) |
 
-Options: `:path` (default `"/api"`) and `:ex->error`, a `(fn [throwable {:keys [pattern context]}] {:code _ :reason _})` that turns an exception thrown during a pull into the wire error. The default returns `:execution-error` (500).
+`make-handler` and `wrap-api` take `:path` (default `"/api"`) and `:ex->error`, a `(fn [throwable {:keys [pattern context]}] {:code _ :reason _})` that turns an exception thrown during a pull into the wire error; it must not throw, and the default returns `:execution-error` (500). `execute` takes `:ex->error` plus `:params`, `:resolve`, `:eval-fn`, and `:context`.
 
 ### Client (`sg.flybot.pullable.remote.client`)
 

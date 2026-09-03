@@ -9,25 +9,25 @@
 
    ## Data Structure
 
-   | Role Key | Access   | Contents                                    |
-   |----------|----------|---------------------------------------------|
-   | :guest   | public   | {:posts read-only, :posts/history}          |
-   | :member  | :member  | {:posts CRUD-own, :posts/history, :me}      |
-   | :admin   | :admin   | {:posts CRUD-any}                           |
-   | :owner   | :owner   | {:users collection}                         |
+   | Role Key | Access   | Contents                                            |
+   |----------|----------|-----------------------------------------------------|
+   | :guest   | public   | {:posts read-only}                                  |
+   | :member  | :member  | {:posts CRUD-own, :posts/history, :me, :me/profile} |
+   | :admin   | :admin   | {:posts CRUD-any}                                   |
+   | :owner   | :owner   | {:users, :users/roles}                              |
 
    ## Pattern-Based CRUD (role in pattern)
 
    ```clojure
    '{:guest {:posts ?all}}                       ; guest list
-   '{:guest {:posts/history {{:post/id 1} ?v}}}  ; guest history
+   '{:member {:posts/history {{:post/id 1} ?v}}} ; member history
    {:member {:posts {nil {:post/title ...}}}}    ; member create
    {:member {:posts {{:post/id 1} nil}}}         ; member delete own
    {:admin {:posts {{:post/id 1} {...}}}}        ; admin update any
    '{:owner {:users ?all}}                       ; owner list users
    ```
 
-   See remote/doc/SPECIFICATION.md for wire protocol."
+   See remote/docs/SPECIFICATION.md for wire protocol."
   (:require
    [sg.flybot.flybot-site.server.system.db :as db]
    [sg.flybot.pullable.collection :as coll]
