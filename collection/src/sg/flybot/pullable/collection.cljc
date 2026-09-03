@@ -204,12 +204,33 @@
   (->wire [this]
     (->wire (.-coll this))))
 
+(deftype ReadOnlyLookup [coll]
+  #?@(:clj
+      [clojure.lang.ILookup
+       (valAt [_ query]
+              (get coll query))
+       (valAt [_ query not-found]
+              (get coll query not-found))]
+
+      :cljs
+      [ILookup
+       (-lookup [_ query]
+                (get coll query))
+       (-lookup [_ query not-found]
+                (get coll query not-found))]))
+
+(extend-type ReadOnlyLookup
+  Wireable
+  (->wire [this]
+    (->wire (.-coll this))))
+
 (defn read-only
   "Wrap a collection to make it read-only.
 
-   The returned collection supports ILookup, Seqable, Counted, and Wireable,
-   but NOT Mutable. Attempts to mutate via pattern will fail with
-   'collection not mutable' error.
+   Delegates ILookup and Wireable. Implements Seqable and Counted only
+   when `coll` implements them, so wrapping a lookup-only collection
+   produces a lookup-only wrapper. Never implements Mutable, so mutating
+   via pattern fails with 'collection not mutable' error.
 
    Use this for public API endpoints where reads are allowed but writes
    should be gated behind authentication.
@@ -224,7 +245,9 @@
    (mutate! public-posts ...)   ; throws - Mutable not implemented
    ```"
   [coll]
-  (->ReadOnly coll))
+  (if (seqable? coll)
+    (->ReadOnly coll)
+    (->ReadOnlyLookup coll)))
 
 ;;=============================================================================
 ;; Field Lookup (non-enumerable keyword-keyed resources)
@@ -325,6 +348,30 @@
   (->wire [this]
     (->wire (.-coll this))))
 
+(deftype MutableLookupWrapper [coll mutate-fn]
+  #?@(:clj
+      [clojure.lang.ILookup
+       (valAt [_ query]
+              (get coll query))
+       (valAt [_ query not-found]
+              (get coll query not-found))]
+
+      :cljs
+      [ILookup
+       (-lookup [_ query]
+                (get coll query))
+       (-lookup [_ query not-found]
+                (get coll query not-found))]))
+
+(extend-type MutableLookupWrapper
+  Mutable
+  (mutate! [this query value]
+    ((.-mutate-fn this) (.-coll this) query value))
+
+  Wireable
+  (->wire [this]
+    (->wire (.-coll this))))
+
 (defn wrap-mutable
   "Wrap a collection with custom mutation logic, delegating reads.
 
@@ -334,9 +381,11 @@
    - For delete (some query, nil value): true/false
    - For errors: {:error {:type ... :message ...}}
 
-   Reads (ILookup, Seqable, Counted) and Wireable delegate to the
-   inner collection. Use this to add authorization, ownership checks,
-   or field injection without reimplementing the full deftype boilerplate.
+   Reads and Wireable delegate to the inner collection. Seqable and
+   Counted are implemented only when `coll` implements them, so wrapping
+   a lookup-only collection produces a lookup-only wrapper. Use this to
+   add authorization, ownership checks, or field injection without
+   reimplementing the full deftype boilerplate.
 
    Example:
    ```clojure
@@ -348,7 +397,9 @@
            {:error {:type :forbidden}}))))
    ```"
   [coll mutate-fn]
-  (->MutableWrapper coll mutate-fn))
+  (if (seqable? coll)
+    (->MutableWrapper coll mutate-fn)
+    (->MutableLookupWrapper coll mutate-fn)))
 
 (defn- schema-error
   "nil when `value` conforms to `schema`, error map otherwise."
@@ -683,6 +734,13 @@
   ;; Mutable protocol NOT satisfied
   (satisfies? Mutable ro) ;=> false
 
+  ;; Wrapping a lookup-only collection adds no Seqable/Counted
+  (def ro-fields (read-only (lookup {:email "a@b.c"})))
+  (seqable? ro-fields) ;=> false
+  (counted? ro-fields) ;=> false
+  (get ro-fields :email) ;=> "a@b.c"
+  (->wire ro-fields) ;=> {:email "a@b.c"}
+
   ;;---------------------------------------------------------------------------
   ;; Mutable Wrapper
   ;;---------------------------------------------------------------------------
@@ -723,6 +781,15 @@
 
   ;; Mutable protocol IS satisfied
   (satisfies? Mutable owned) ;=> true
+
+  ;; Wrapping a lookup-only collection adds no Seqable/Counted
+  (def field-mut (wrap-mutable (lookup {:role :admin})
+                               (fn [_ q v] {:mutated [q v]})))
+  (seqable? field-mut) ;=> false
+  (counted? field-mut) ;=> false
+  (get field-mut :role) ;=> :admin
+  (->wire field-mut) ;=> {:role :admin}
+  (mutate! field-mut nil {:x 1}) ;=> {:mutated [nil {:x 1}]}
 
   ;;---------------------------------------------------------------------------
   ;; Validated Wrapper
