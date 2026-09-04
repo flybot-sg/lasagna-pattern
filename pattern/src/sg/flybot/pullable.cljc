@@ -30,13 +30,17 @@
    - :when <pred>    - Add predicate check
    - :default <val>  - Substitute default for nil
 
-   Example - register a :transform option:
-     (register-var-option! :transform
-       (fn [f] (list '? :sub f)))
+   The chained pattern sits inside the variable binding, so the variable
+   binds the chain's result rather than the raw matched value.
 
-     ;; Usage: (?x :transform str/upper-case)
-     ((match-fn {:name (?n :transform clojure.string/upper-case)} ?n)
-      {:name \"alice\"})  ;=> \"ALICE\""
+   Example - register an :extract option:
+     (register-var-option! :extract
+       (fn [k] (list '? :sub k)))
+
+     ;; The option value arrives unevaluated, so pass something already
+     ;; callable (a keyword here). Only (? :pred ...) resolves symbols.
+     ((match-fn {:user (?n :extract :name)} ?n)
+      {:user {:name \"alice\"}})  ;=> \"alice\""
   impl/register-var-option!)
 
 (def register-schema-rule!

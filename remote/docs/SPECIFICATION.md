@@ -1,6 +1,6 @@
 # Remote Pull Protocol Specification
 
-Reference specification for the remote pull wire protocol. For usage and API docs, see the [README](../README.md). For architecture and implementation details, see [CLAUDE.md](../CLAUDE.md).
+Reference specification for the remote pull wire protocol. For usage and API docs, see the [README](../README.md).
 
 ## Error Codes
 

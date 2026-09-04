@@ -64,14 +64,29 @@ Environment variables (see `.env.example`):
 
 ## Role-Based API
 
+| Role | Who | Resources |
+|------|-----|-----------|
+| `:guest` | Anyone | `:posts` read-only |
+| `:member` | Logged-in employee | `:posts` CRUD on own posts, `:posts/history`, `:me`, `:me/profile` |
+| `:admin` | Granted by an owner | `:posts` CRUD on any post |
+| `:owner` | `BLOG_OWNER_EMAILS` | `:users`, `:users/roles` |
+
+On first login a user is granted `:member`, or all three roles when the email is in `BLOG_OWNER_EMAILS`. Roles are cached in the session cookie, so a grant or revoke applies at that user's next login.
+
 Patterns use role as top-level key:
 
 ```clojure
-'{:guest {:posts ?all}}                              ; List posts (public)
-'{:guest {:posts {{:post/id 1} ?post}}}              ; Read post (public)
-{:member {:posts {nil {:post/title "New"}}}}         ; Create (member)
-{:member {:posts {{:post/id 1} {:post/title "X"}}}}  ; Update own (member)
-{:admin {:posts {{:post/id 1} nil}}}                 ; Delete any (admin)
+'{:guest {:posts ?all}}                                          ; List posts (public)
+'{:guest {:posts {{:post/id 1} ?post}}}                          ; Read post (public)
+{:member {:posts {nil {:post/title "New"}}}}                     ; Create (member)
+{:member {:posts {{:post/id 1} {:post/title "X"}}}}              ; Update own (member)
+'{:member {:posts/history {{:post/id 1} ?versions}}}             ; Post history (member)
+'{:member {:me ?user}}                                           ; Current user (member)
+'{:member {:me/profile ?profile}}                                ; Own profile (member)
+{:admin {:posts {{:post/id 1} nil}}}                             ; Delete any (admin)
+'{:owner {:users ?all}}                                          ; List users (owner)
+{:owner {:users/roles {nil {:user/id "u1" :role/name :admin}}}}  ; Grant a role (owner)
+{:owner {:users/roles {{:user/id "u1" :role/name :admin} nil}}}  ; Revoke a role (owner)
 ```
 
 ## Architecture

@@ -11,7 +11,7 @@ CRUD collection abstraction that wraps any data source in a uniform `ILookup + S
 Different data stores (databases, APIs, in-memory maps) have different interfaces, making it hard to write reusable data access code. This library provides a **uniform abstraction** so that:
 
 - **`get` and `seq` just work** — Your collection implements `ILookup` and `Seqable`, so it behaves like a Clojure map to any consumer
-- **One DataSource, many access levels** — Implement your storage logic once, then compose behavior with wrappers (`read-only`, `wrap-mutable`) instead of duplicating code per role
+- **One DataSource, many access levels** — Implement your storage logic once, then compose behavior with wrappers (`read-only`, `wrap-mutable`, `validated`) instead of duplicating code per role
 - **Pattern compatible** — Works seamlessly with the pattern DSL's indexed lookup and the remote HTTP transport
 
 The key design insight is the **decorator pattern**: instead of writing separate DataSource implementations per access level, you write one and stack thin wrappers on top:
@@ -22,6 +22,7 @@ The key design insight is the **decorator pattern**: instead of writing separate
 ;; Same DataSource, different access levels
 (def public     (coll/read-only posts))                     ; no writes
 (def restricted (coll/wrap-mutable posts ownership-check))  ; custom mutation logic
+(def checked    (coll/validated restricted write-schemas))  ; Malli validation of input
 posts                                                       ; unrestricted
 ```
 
@@ -87,6 +88,8 @@ Implement the `DataSource` protocol for your storage layer — that's all it tak
 
 Then `get`, `seq`, and `mutate!` work immediately. See [examples/flybot-site/.../db/post.cljc](../examples/flybot-site/src/sg/flybot/flybot_site/server/system/db/post.cljc) for a complete Datahike implementation.
 
+Create the DataSource and its collection once and close over them. Only wrappers that depend on per-request context, such as an ownership check for the current user, are built per request.
+
 ## Protocols
 
 ### DataSource
@@ -101,6 +104,8 @@ Backend storage protocol. Implement this for your storage layer.
   (update! [this q data] "Update item. Returns updated item or nil.")
   (delete! [this query]  "Delete item. Returns true/false."))
 ```
+
+`create!` and `update!` must return the complete entity, in the same shape as `fetch` and `list-all`: it is what the client gets back from a mutation.
 
 ### Mutable
 
@@ -195,6 +200,35 @@ Custom mutation logic (e.g., authorization, field injection) while delegating re
 (coll/mutate! restricted nil {:title "New"})    ; runs custom fn
 ```
 
+### validated
+
+Malli validation of mutation input before it reaches the inner collection. Takes a map of schemas; any key omitted skips that check:
+
+| Key | Checks | Applies to |
+|-----|--------|------------|
+| `:query` | the query | UPDATE, DELETE |
+| `:create` | the value | CREATE |
+| `:update` | the value | UPDATE |
+
+```clojure
+(def checked
+  (coll/validated restricted
+    {:query  [:map {:closed true} [:post/id :int]]
+     :create [:map {:closed true} [:title :string] [:content :string]]
+     :update [:map {:closed true} [:title {:optional true} :string]
+                                  [:content {:optional true} :string]]}))
+
+(coll/mutate! checked nil {:title "New" :content "..."})   ; passes through
+(coll/mutate! checked nil {:title "New"})                  ;=> {:error {:type :invalid-mutation :message "{:content [\"missing required key\"]}"}}
+(coll/mutate! checked {:post/id "1"} nil)                  ;=> {:error {:type :invalid-mutation ...}} — query checked first
+```
+
+Invalid input returns `{:error {:type :invalid-mutation :message <humanized>}}` without touching the inner collection. Wrap outermost so it sees the raw client input, before other wrappers inject server-side fields.
+
+These schemas are the write policy — usually a closed subset of the entity schema (writable fields only, required-on-create), not the read schema.
+
+When serving over `remote`, map `:invalid-mutation` to a status in the `:codes` of the api-fn's `:errors` map, e.g. `{:errors {:detect :error :codes {:invalid-mutation 422}}}`. Unmapped codes fall back to 500.
+
 ### lookup
 
 Non-enumerable keyword-keyed resources where some fields are cheap and others require expensive computation:
@@ -211,7 +245,20 @@ Non-enumerable keyword-keyed resources where some fields are cheap and others re
 
 Delay values are dereferenced transparently on access. Shared between `ILookup` and `->wire` — a DB query runs at most once.
 
-**Note:** `lookup` only supports keyword keys. For map-keyed queries (e.g., `{:post/id 3}`), use `reify` with `ILookup` + `Wireable` directly.
+**Note:** `lookup` only supports keyword keys. For map-keyed queries (e.g., `{:post/id 3}`) on a read-only, non-enumerable resource, `reify` `ILookup` and `Wireable` directly:
+
+```clojure
+(defn history-lookup [conn]
+  (reify
+    clojure.lang.ILookup
+    (valAt [_ query]
+      (when-let [id (:post/id query)]
+        (post-history @conn id)))
+    (valAt [this q nf] (or (.valAt this q) nf))
+
+    coll/Wireable
+    (->wire [_] nil)))   ; cannot be enumerated, so it serializes as nil
+```
 
 ## Collection Options
 
@@ -232,6 +279,7 @@ Queries must match a declared index or include the `id-key`, otherwise throws `"
 | `atom-source` | `[]` or `[opts]` | Create atom-backed DataSource + TxSource |
 | `read-only` | `[coll]` | Wrap collection to disable mutations |
 | `wrap-mutable` | `[coll mutate-fn]` | Wrap collection with custom mutation logic |
+| `validated` | `[coll schemas]` | Wrap collection with Malli validation of mutation input |
 | `lookup` | `[field-map]` | Create ILookup + Wireable from keyword→value map |
 | `mutate!` | `[coll query value]` | Protocol: create/update/delete |
 | `->wire` | `[x]` | Protocol: convert to serializable data |
