@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-02-27
+
+### Fixed
+
+- Schema violations return `:schema-violation` (HTTP 403) instead of `:execution-error` (HTTP 500) — `compile-pattern` returns a failing matcher instead of throwing `ExceptionInfo`
+
+## [0.1.2] - 2026-02-23
+
+### Changed
+
+- Installation documented with Clojars coordinates (`sg.flybot/lasagna-pattern`) instead of a git dependency
+
+## [0.1.1] - 2026-02-23
+
+### Fixed
+
+- `sg.flybot.pullable.malli` marked `^:no-doc` — hidden from the cljdoc API listing
+
 ## [0.1.0] - 2026-02-19
 
 ### Added
