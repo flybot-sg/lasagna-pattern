@@ -54,7 +54,7 @@ Keep bullets short; the issue carries the full context.
 
 ### Changelog entry
 
-A pull request with a user-facing change adds an entry under `## [Unreleased]` in [CHANGELOG.md](./CHANGELOG.md), in the same pull request, while the context is fresh. Describe the change as a user experiences it, the old symptom and the new behavior rather than the implementation, and end with the issue link. Internal refactors and test-only changes need no entry.
+Components version and release independently, so each keeps its own `CHANGELOG.md`. A pull request with a user-facing change adds an entry under `## [Unreleased]` in the changelog of every component it touches, in the same pull request, while the context is fresh. Describe the change as a user experiences it, the old symptom and the new behavior rather than the implementation, and end with the issue link. Internal refactors and test-only changes need no entry.
 
 ### Before opening one
 
