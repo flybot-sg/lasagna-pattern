@@ -243,13 +243,15 @@ Lasagna Pattern is a declarative query language: "here is the shape of data I ne
 
 ### Components
 
-| Component | Description |
-|-----------|-------------|
-| [pattern](./pattern) | Core pattern DSL for matching and transforming data |
-| [collection](./collection) | CRUD collection abstraction with DataSource protocol |
-| [remote](./remote) | HTTP transport layer using pattern language |
-| [flybot-site](./examples/flybot-site) | Production blog demonstrating pull pattern in web development |
-| [pull-playground](./examples/pull-playground) | Interactive browser playground |
+Each component versions and releases independently, so each keeps its own changelog.
+
+| Component | Description | Changelog |
+|-----------|-------------|-----------|
+| [pattern](./pattern) | Core pattern DSL for matching and transforming data | [CHANGELOG](./pattern/CHANGELOG.md) |
+| [collection](./collection) | CRUD collection abstraction with DataSource protocol | [CHANGELOG](./collection/CHANGELOG.md) |
+| [remote](./remote) | HTTP transport layer using pattern language | [CHANGELOG](./remote/CHANGELOG.md) |
+| [flybot-site](./examples/flybot-site) | Production blog demonstrating pull pattern in web development | [CHANGELOG](./examples/flybot-site/CHANGELOG.md) |
+| [pull-playground](./examples/pull-playground) | Interactive browser playground | [CHANGELOG](./examples/pull-playground/CHANGELOG.md) |
 
 ### Prerequisites
 
@@ -301,6 +303,17 @@ Each component has **Rich Comment Tests (RCT)** embedded in source files. Some c
 
 - `bb rct` - Fast feedback, runs only RCT assertions
 - `bb test` - Full test suite via Kaocha (RCT + integration tests)
+
+### Documentation
+
+| Document | Contents |
+|----------|----------|
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Filing issues, component labels, branch naming, PR and commit format, changelog entries, the local gate |
+| [pattern/docs/internals.md](./pattern/docs/internals.md) | Core `(? :type ...)` forms, extension handlers, symbol resolution, gotchas |
+| [pattern/docs/performance-analysis.md](./pattern/docs/performance-analysis.md) | Compilation vs runtime cost, backtracking, worst-case patterns to avoid |
+| [remote/docs/SPECIFICATION.md](./remote/docs/SPECIFICATION.md) | Wire protocol reference: error codes, HTTP statuses, headers, grammar |
+
+Release notes live in the per-component changelogs listed under [Components](#components).
 
 ## License
 
