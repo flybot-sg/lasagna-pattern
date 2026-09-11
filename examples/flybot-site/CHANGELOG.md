@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - GitHub icon in the site header - [#23](https://github.com/flybot-sg/lasagna-pattern/issues/23).
+- Mermaid diagrams in posts and pages: a ```` ```mermaid ```` fence used to render as a code block; it now renders as an SVG that follows the theme - [#25](https://github.com/flybot-sg/lasagna-pattern/issues/25).
 
 ## [0.4.3] - 2026-09-03
 

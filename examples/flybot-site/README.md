@@ -27,6 +27,12 @@ All commands are run from the **repository root** (see [root README](../../READM
 bb dev examples/flybot-site    # Start nREPL (includes shadow-cljs support)
 ```
 
+Once, fetch the self-hosted mermaid bundle (`bb serve` and `bb deploy` do this themselves):
+
+```bash
+cd examples/flybot-site && npm install && bb vendor
+```
+
 In REPL:
 ```clojure
 (user/start!)  ; Start server on port 8080 (dev mode with auto-login)

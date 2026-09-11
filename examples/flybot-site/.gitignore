@@ -3,6 +3,7 @@ resources/public/js/cljs-runtime/
 resources/public/js/main*.js
 resources/public/js/manifest.edn
 resources/public/index.html
+resources/public/vendor/
 
 # Node
 node_modules/

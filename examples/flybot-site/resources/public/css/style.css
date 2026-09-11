@@ -720,6 +720,34 @@ code, pre, .font-mono {
   padding: 0;
 }
 
+/* Mermaid diagrams */
+.post-body pre.mermaid,
+.post-content pre.mermaid,
+.page-content pre.mermaid {
+  background: none;
+  border: none;
+  padding: 0;
+  overflow-x: auto;
+  text-align: center;
+}
+
+.post-body pre.mermaid svg,
+.post-content pre.mermaid svg,
+.page-content pre.mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* Mermaid diagram that could not be drawn: its definition as a code block */
+.post-body pre.mermaid.mermaid-failed,
+.post-content pre.mermaid.mermaid-failed,
+.page-content pre.mermaid.mermaid-failed {
+  background: var(--code-bg);
+  border: 1px solid var(--border);
+  padding: var(--space-4);
+  text-align: left;
+}
+
 .post-body blockquote,
 .page-content blockquote {
   border-left: 3px solid var(--accent);
