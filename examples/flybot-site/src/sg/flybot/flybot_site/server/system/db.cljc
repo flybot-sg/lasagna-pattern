@@ -415,6 +415,13 @@ At Flybot, we're passionate about creating elegant solutions using **functional 
       persist!))
 ```
 
+```mermaid
+flowchart LR
+  E[Event] --> V[validate-schema]
+  V --> T[transform-data]
+  T --> P[persist!]
+```
+
 The pipeline handles *10,000 events/second* with sub-millisecond latency."})
 
     ;; About page content (featured = hero post)
@@ -578,4 +585,351 @@ They're evaluated during development but *ignored in production*."})
 - 纯函数 (*Pure functions*)
 - 高阶函数 (*Higher-order functions*)
 
-This approach leads to code that is easier to test, reason about, and parallelize."})))
+This approach leads to code that is easier to test, reason about, and parallelize."})
+
+    (coll/mutate! p nil {:post/title "A tour of the diagrams we draw"
+                         :post/author "sample-alice"
+                         :post/tags ["mermaid" "tech" "docs"]
+                         :post/content "Every post on this blog can hold diagrams. Write a fenced `mermaid` block in your Markdown and it renders as an SVG that follows the site theme, light or dark. This post is a working tour: each diagram below is drawn live from a plain code fence, and it doubles as a reference for the types we reach for most often.
+
+## Processes and behaviour
+
+A **flowchart** is our default for showing how something moves through a decision.
+
+```mermaid
+flowchart LR
+  A[Idea] --> B{Feasible?}
+  B -->|yes| C[Build]
+  B -->|no| D[Park]
+  C --> E((Ship))
+```
+
+A **sequence diagram** is clearer when the story is a conversation between parts.
+
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant S as Server
+  U->>S: Request posts
+  S-->>U: Posts + author
+  Note over U,S: One round trip
+```
+
+A **state diagram** captures how one thing changes over its life.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Draft
+  Draft --> Review : submit
+  Review --> Published : approve
+  Review --> Draft : request changes
+  Published --> [*]
+```
+
+A **user journey** records how each step feels, not just what happens.
+
+```mermaid
+journey
+  title Publishing a post
+  section Write
+    Draft content: 4: Author
+    Add a diagram: 3: Author
+  section Ship
+    Review: 4: Editor
+    Publish: 5: Author
+```
+
+## Data and structure
+
+An **entity-relationship diagram** shows how records relate.
+
+```mermaid
+erDiagram
+  AUTHOR ||--o{ POST : writes
+  POST ||--o{ TAG : has
+```
+
+A **class diagram** is handy for types and their relationships.
+
+```mermaid
+classDiagram
+  class Post {
+    +int id
+    +String title
+    +publish() void
+  }
+  Post <|-- FeaturedPost
+```
+
+A **tree view** lays out a hierarchy such as a source tree.
+
+```mermaid
+treeView-beta
+    src/
+        server/
+        ui/
+    resources/
+```
+
+A **treemap** shows nested parts sized by weight.
+
+```mermaid
+treemap-beta
+\"Repo\"
+    \"pattern\": 30
+    \"collection\": 25
+    \"remote\": 20
+    \"examples\": 25
+```
+
+## Planning and history
+
+A **Gantt chart** turns a plan with dates into a picture.
+
+```mermaid
+gantt
+  title Release plan
+  dateFormat YYYY-MM-DD
+  section Build
+    Design    :a1, 2026-09-01, 5d
+    Implement :after a1, 10d
+  section Ship
+    Launch    :milestone, 2026-09-20, 0d
+```
+
+A **timeline** is better for history at a glance.
+
+```mermaid
+timeline
+  title Company milestones
+  2018 : Founded
+  2021 : First product
+  2024 : Open-sourced the toolbox
+```
+
+A **git graph** tells a branching story.
+
+```mermaid
+gitGraph
+  commit
+  branch feature
+  checkout feature
+  commit
+  checkout main
+  merge feature
+```
+
+A **kanban board** shows work in progress.
+
+```mermaid
+kanban
+  todo[Todo]
+    t1[Write post]
+  doing[Doing]
+    t2[Draw diagram]
+  done[Done]
+    t3[Ship feature]
+```
+
+## Numbers
+
+A **pie chart** works for a few simple proportions.
+
+```mermaid
+pie showData
+  title Post topics
+  \"Clojure\" : 55
+  \"Tooling\" : 25
+  \"Company\" : 20
+```
+
+An **xy chart** shows a trend over time.
+
+```mermaid
+xychart-beta
+  title \"Monthly visitors\"
+  x-axis [jan, feb, mar, apr]
+  y-axis \"Visitors\" 0 --> 1000
+  bar [300, 500, 700, 900]
+```
+
+A **Sankey diagram** shows where a flow goes.
+
+```mermaid
+sankey-beta
+Visitors,Posts,60
+Visitors,About,25
+Visitors,Careers,15
+```
+
+A **radar chart** compares a profile across axes.
+
+```mermaid
+radar-beta
+  axis speed, safety, cost, dx, docs
+  curve now{3,4,2,4,3}
+```
+
+A **quadrant chart** places things on two axes.
+
+```mermaid
+quadrantChart
+  title Effort vs impact
+  x-axis Low Effort --> High Effort
+  y-axis Low Impact --> High Impact
+  quadrant-1 Do now
+  quadrant-2 Plan
+  quadrant-3 Skip
+  quadrant-4 Quick wins
+  Search: [0.3, 0.7]
+  Redesign: [0.8, 0.6]
+```
+
+## Systems
+
+An **architecture diagram** sketches services and their links.
+
+```mermaid
+architecture-beta
+  group site(cloud)[Site]
+  service db(database)[Datahike] in site
+  service api(server)[API] in site
+  db:R --> L:api
+```
+
+A **C4 context diagram** zooms out to the big picture.
+
+```mermaid
+C4Context
+  title System context
+  Person(reader, \"Reader\", \"Reads posts\")
+  System(blog, \"Flybot blog\", \"Serves posts\")
+  Rel(reader, blog, \"Reads\")
+```
+
+A **block diagram** arranges components in a fixed layout.
+
+```mermaid
+block-beta
+  columns 3
+  a[\"Parse\"] b[\"Render\"] c[\"Theme\"]
+  d[\"Markdown pipeline\"]:3
+```
+
+A **packet diagram** describes a byte layout.
+
+```mermaid
+packet-beta
+0-15: \"Source Port\"
+16-31: \"Destination Port\"
+32-63: \"Sequence Number\"
+```
+
+A **requirement diagram** ties a requirement to what satisfies it.
+
+```mermaid
+requirementDiagram
+  requirement render_req {
+    id: 1
+    text: diagrams render on the client.
+    risk: low
+    verifymethod: test
+  }
+  element client {
+    type: browser
+  }
+  client - satisfies -> render_req
+```
+
+## Thinking and strategy
+
+A **mindmap** branches an idea into its parts.
+
+```mermaid
+mindmap
+  root((Blog))
+    Content
+      Posts
+      Pages
+    Tech
+      Clojure
+      Datahike
+```
+
+An **Ishikawa** (fishbone) diagram groups the causes of a problem.
+
+```mermaid
+ishikawa-beta
+    Slow page
+    Frontend
+        Large bundle
+    Backend
+        N+1 queries
+```
+
+A **Venn diagram** shows how sets overlap.
+
+```mermaid
+venn-beta
+  set Reads
+  set Writes
+  union Reads,Writes
+```
+
+A **Wardley map** places components by value and maturity.
+
+```mermaid
+wardley-beta
+title Content delivery
+
+anchor Reader [0.95, 0.63]
+component Post [0.79, 0.61]
+component CDN [0.62, 0.80]
+
+Reader -> Post
+Post -> CDN
+
+evolve CDN 0.89
+```
+
+A **Cynefin** diagram sorts situations by how knowable they are.
+
+```mermaid
+cynefin-beta
+
+clear
+\"Publish a post\"
+
+complicated
+\"Tune the query\"
+
+complex
+\"Redesign navigation\"
+
+chaotic
+\"Incident response\"
+```
+
+An **event model** lines up UI, commands, and events over time.
+
+```mermaid
+eventmodeling
+
+tf 01 ui EditorUI
+tf 02 cmd PublishPost
+tf 03 evt PostPublished
+```
+
+## Grammars
+
+A **railroad diagram** draws a grammar. It also reads EBNF, ABNF, and PEG directly.
+
+```mermaid
+railroad-ebnf-beta
+title \"Digit\"
+
+digit = \"0\" | \"1\" | \"2\" | \"3\" | \"4\" | \"5\" | \"6\" | \"7\" | \"8\" | \"9\" ;
+```
+
+That is the whole toolbox. The mermaid bundle loads once, only on pages that actually contain a diagram, so posts without one stay light.
+"})))
