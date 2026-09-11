@@ -7,12 +7,12 @@
     "release": "npx shadow-cljs -A:cljs release app"
   },
   "devDependencies": {
-    "mermaid": "^11.17.2",
     "shadow-cljs": "^2.28.22"
   },
   "dependencies": {
     "@toast-ui/editor": "^3.2.2",
     "highlight.js": "^11.11.1",
-    "marked": "^15.0.6"
+    "marked": "^15.0.6",
+    "mermaid": "^11.17.2"
   }
 }

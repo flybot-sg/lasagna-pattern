@@ -79,8 +79,6 @@
   (escape-attr "a & b<br/>") ;=> "a &amp; b&lt;br/&gt;"
   )
 
-;; shadow-cljs cannot bundle mermaid's ESM ("Cannot redefine property: default"),
-;; so `bb vendor` self-hosts its IIFE build and it is loaded on first use.
 #?(:cljs
    (def ^:private mermaid-url "/vendor/mermaid.min.js"))
 
@@ -132,8 +130,8 @@
       time with the mermaid theme following body's data-theme."
      [root redraw?]
      (let [nodes (array-seq (.querySelectorAll root (if redraw?
-                                                     "pre.mermaid[data-src]"
-                                                     "pre.mermaid[data-src]:not([data-processed])")))
+                                                      "pre.mermaid[data-src]"
+                                                      "pre.mermaid[data-src]:not([data-processed])")))
            dark? (= "dark" (.getAttribute js/document.body "data-theme"))]
        (when (seq nodes)
          (doseq [n nodes] (.setAttribute n "data-processed" "true"))
