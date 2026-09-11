@@ -27,10 +27,10 @@ All commands are run from the **repository root** (see [root README](../../READM
 bb dev examples/flybot-site    # Start nREPL (includes shadow-cljs support)
 ```
 
-Once, fetch the self-hosted mermaid bundle (`bb serve` and `bb deploy` do this themselves):
+Install JS dependencies once. Every `bb` task that builds the frontend (`dev`, `watch`, `serve`, `deploy`) vendors the self-hosted mermaid bundle itself:
 
 ```bash
-cd examples/flybot-site && npm install && bb vendor
+cd examples/flybot-site && npm install
 ```
 
 In REPL:
