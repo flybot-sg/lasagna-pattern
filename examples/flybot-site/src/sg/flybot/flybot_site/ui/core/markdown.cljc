@@ -150,6 +150,13 @@
                        (run! show-source! nodes))))))))
 
 #?(:cljs
+   (defn- draw-diagrams!
+     "Draw the node's undrawn diagrams. A var, not a closure, so unchanged
+      hiccup stays `=`."
+     [{:keys [replicant/node]}]
+     (render-diagrams! node false)))
+
+#?(:cljs
    ;; mermaid bakes the theme into the SVG, so a theme change redraws.
    (defonce ^:private _theme-observer
      (doto (js/MutationObserver. (fn [_ _] (render-diagrams! js/document.body true)))
@@ -189,8 +196,8 @@
     #?(:clj [:pre body]
        :cljs (when (seq body)
                [:div {:innerHTML (.parse marked-instance body)
-                      :replicant/on-render (fn [{:keys [replicant/node]}]
-                                             (render-diagrams! node false))}]))))
+                      :replicant/on-mount draw-diagrams!
+                      :replicant/on-update draw-diagrams!}]))))
 
 (defn markdown->text
   "Markdown to plain text, through the DOM so HTML entities decode."
