@@ -539,7 +539,7 @@
   (def api-fn (make-api {:conn conn}))
 
   ;; Guest: can read posts via :guest
-  (count (seq (get-in (api-fn {}) [:data :guest :posts]))) ;=> 11
+  (count (seq (get-in (api-fn {}) [:data :guest :posts]))) ;=> 12
   (:post/title (get (get-in (api-fn {}) [:data :guest :posts]) {:post/id 1})) ;=> "Welcome to Flybot"
 
   ;; Guest: author PII stripped (no email, no Google ID)

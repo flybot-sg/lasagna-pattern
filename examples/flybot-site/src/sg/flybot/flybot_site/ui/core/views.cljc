@@ -1,82 +1,12 @@
 (ns sg.flybot.flybot-site.ui.core.views
   "UI views — defalias components with namespaced props.
 
-   Components receive data via ::keys and dispatch effect maps directly.
-   Markdown rendered at runtime via marked + highlight.js."
-  (:require [clojure.string :as str]
-            [sg.flybot.flybot-site.ui.core.db :as db]
+   Components receive data via ::keys and dispatch effect maps directly."
+  (:require [sg.flybot.flybot-site.ui.core.db :as db]
             [sg.flybot.flybot-site.ui.core.log :as log]
+            [sg.flybot.flybot-site.ui.core.markdown :as markdown]
             [replicant.alias :refer [defalias]]
-            #?(:cljs ["marked" :refer [Marked]])
-            #?(:cljs ["highlight.js/lib/core" :as hljs])
-            #?(:cljs ["highlight.js/lib/languages/clojure" :as hljs-clojure])
-            #?(:cljs ["highlight.js/lib/languages/javascript" :as hljs-js])
-            #?(:cljs ["highlight.js/lib/languages/typescript" :as hljs-ts])
-            #?(:cljs ["highlight.js/lib/languages/python" :as hljs-python])
-            #?(:cljs ["highlight.js/lib/languages/java" :as hljs-java])
-            #?(:cljs ["highlight.js/lib/languages/go" :as hljs-go])
-            #?(:cljs ["highlight.js/lib/languages/rust" :as hljs-rust])
-            #?(:cljs ["highlight.js/lib/languages/ruby" :as hljs-ruby])
-            #?(:cljs ["highlight.js/lib/languages/php" :as hljs-php])
-            #?(:cljs ["highlight.js/lib/languages/c" :as hljs-c])
-            #?(:cljs ["highlight.js/lib/languages/cpp" :as hljs-cpp])
-            #?(:cljs ["highlight.js/lib/languages/csharp" :as hljs-csharp])
-            #?(:cljs ["highlight.js/lib/languages/kotlin" :as hljs-kotlin])
-            #?(:cljs ["highlight.js/lib/languages/swift" :as hljs-swift])
-            #?(:cljs ["highlight.js/lib/languages/sql" :as hljs-sql])
-            #?(:cljs ["highlight.js/lib/languages/bash" :as hljs-bash])
-            #?(:cljs ["highlight.js/lib/languages/json" :as hljs-json])
-            #?(:cljs ["highlight.js/lib/languages/xml" :as hljs-xml])
-            #?(:cljs ["highlight.js/lib/languages/yaml" :as hljs-yaml])
-            #?(:cljs ["highlight.js/lib/languages/css" :as hljs-css])
-            #?(:cljs ["highlight.js/lib/languages/markdown" :as hljs-md])
-            #?(:cljs ["highlight.js/lib/languages/dockerfile" :as hljs-docker])
             #?(:cljs ["@toast-ui/editor" :as toastui])))
-
-;;=============================================================================
-;; Markdown rendering (CLJS only)
-;;=============================================================================
-
-#?(:cljs
-   (do
-     (hljs/registerLanguage "clojure" hljs-clojure)
-     (hljs/registerLanguage "javascript" hljs-js)
-     (hljs/registerLanguage "typescript" hljs-ts)
-     (hljs/registerLanguage "python" hljs-python)
-     (hljs/registerLanguage "java" hljs-java)
-     (hljs/registerLanguage "go" hljs-go)
-     (hljs/registerLanguage "rust" hljs-rust)
-     (hljs/registerLanguage "ruby" hljs-ruby)
-     (hljs/registerLanguage "php" hljs-php)
-     (hljs/registerLanguage "c" hljs-c)
-     (hljs/registerLanguage "cpp" hljs-cpp)
-     (hljs/registerLanguage "csharp" hljs-csharp)
-     (hljs/registerLanguage "kotlin" hljs-kotlin)
-     (hljs/registerLanguage "swift" hljs-swift)
-     (hljs/registerLanguage "sql" hljs-sql)
-     (hljs/registerLanguage "bash" hljs-bash)
-     (hljs/registerLanguage "shell" hljs-bash)
-     (hljs/registerLanguage "json" hljs-json)
-     (hljs/registerLanguage "xml" hljs-xml)
-     (hljs/registerLanguage "html" hljs-xml)
-     (hljs/registerLanguage "yaml" hljs-yaml)
-     (hljs/registerLanguage "css" hljs-css)
-     (hljs/registerLanguage "markdown" hljs-md)
-     (hljs/registerLanguage "dockerfile" hljs-docker)))
-
-#?(:cljs
-   (def marked-instance
-     (let [m (Marked.)]
-       (.use m (clj->js
-                {:renderer
-                 {:code (fn [obj]
-                          (let [code (.-text obj)
-                                lang (.-lang obj)
-                                highlighted (if (and lang (hljs/getLanguage lang))
-                                              (.-value (hljs/highlight code #js {:language lang}))
-                                              (.-value (hljs/highlightAuto code)))]
-                            (str "<pre><code class=\"hljs\">" highlighted "</code></pre>")))}}))
-       m)))
 
 ;;=============================================================================
 ;; Helpers
@@ -102,31 +32,8 @@
                                 (dispatch! {:db #(db/filter-by-tag % tag) :history :push}))})}
          tag])])))
 
-(defn- unescape-markdown [content]
-  #?(:clj content
-     :cljs (if (string? content)
-             (.replace content (js/RegExp. "\\\\([.()\\[\\]])" "g") "$1")
-             content)))
-
-(defn render-markdown [content]
-  (let [body (-> content db/strip-frontmatter unescape-markdown)]
-    #?(:clj [:pre body]
-       :cljs (when (seq body)
-               [:div {:innerHTML (.parse marked-instance body)}]))))
-
-(defn- markdown->text
-  "Convert markdown to plain text by rendering to HTML then extracting text.
-   Uses DOM to properly decode HTML entities."
-  [s]
-  #?(:clj s
-     :cljs (let [div (js/document.createElement "div")]
-             (set! (.-innerHTML div) (.parse marked-instance s))
-             (-> (.-textContent div)
-                 (str/replace #"\s+" " ")
-                 str/trim))))
-
 (defn- content-preview [content n]
-  (let [body (-> (or content "") db/strip-frontmatter markdown->text)]
+  (let [body (-> (or content "") db/strip-frontmatter markdown/markdown->text)]
     (if (> (count body) n)
       (str (subs body 0 n) "...")
       body)))
@@ -493,7 +400,7 @@
         (tag-list tags dispatch!)
         (page-badges pages dispatch!)]
        (when content
-         [:div.page-content (render-markdown content)])]
+         [:div.page-content (markdown/render-markdown content)])]
       [:div.post-card {:on {:click (fn [_] (dispatch! {:db #(db/select-post-start % id) :pull :select-post :history :push}))}}
        [:div.card-header
         [:h2.post-title title]
@@ -516,7 +423,7 @@
         (tag-list tags dispatch!)
         (page-badges pages dispatch!)]
        (when content
-         [:div.post-content (render-markdown content)])])))
+         [:div.post-content (markdown/render-markdown content)])])))
 
 (defn slide-card
   "Compact card for slideshow display."
@@ -642,7 +549,7 @@
        [:div.post-tags-row
         (tag-list (:post/tags post) dispatch!)
         (page-badges (:post/pages post) dispatch!)]
-       [:div.post-body (render-markdown (:post/content post))]
+       [:div.post-body (markdown/render-markdown (:post/content post))]
        (when can-edit?
          [:div.button-group
           [:button {:on {:click (fn [_] (dispatch! {:db #(db/edit-from-full-post % post) :history :push}))}} "Edit"]
@@ -749,7 +656,7 @@
      [:div.post-tags-row
       (tag-list (:post/tags version))
       (page-badges (:post/pages version) dispatch!)]
-     [:div.post-body.history-content (render-markdown (:post/content version))]
+     [:div.post-body.history-content (markdown/render-markdown (:post/content version))]
      (when can-edit?
        [:div.button-group {:style {:margin-top "2rem"}}
         [:button {:on {:click (fn [_] (dispatch! {:db #(db/edit-from-full-post % version) :history :push}))}} "Edit This Version"]

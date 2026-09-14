@@ -12,6 +12,7 @@
   "dependencies": {
     "@toast-ui/editor": "^3.2.2",
     "highlight.js": "^11.11.1",
-    "marked": "^15.0.6"
+    "marked": "^15.0.6",
+    "mermaid": "^11.17.2"
   }
 }

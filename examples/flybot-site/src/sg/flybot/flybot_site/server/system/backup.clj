@@ -158,7 +158,7 @@
 
   ;; Export
   (def result (export-all! conn "/tmp/flybot-backup-test"))
-  (:count result) ;=> 11
+  (:count result) ;=> 12
 
   ;; Check file content
   (str/includes? (slurp "/tmp/flybot-backup-test/1-Welcome-to-Flybot.md") "title: Welcome") ;=> true
@@ -167,7 +167,7 @@
   (def conn2 (db/create-conn! {:store {:backend :mem :id "test2"}
                                :schema-flexibility :write
                                :keep-history? true}))
-  (:count (import-all! conn2 "/tmp/flybot-backup-test")) ;=> 11
+  (:count (import-all! conn2 "/tmp/flybot-backup-test")) ;=> 12
 
   ;; Cleanup
   (db/release-conn! conn)

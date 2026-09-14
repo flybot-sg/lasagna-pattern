@@ -2,17 +2,32 @@
  {:requires [[clojure.edn :as edn]
              [clojure.string :as str]]
 
-  :init (defn current-env [] (into {} (System/getenv)))
+  :init (do
+          (defn current-env [] (into {} (System/getenv)))
+          (def mermaid-bundle "node_modules/mermaid/dist/mermaid.min.js"))
 
   dev
   {:doc "Start nREPL for development. Connect editor, then (start!) for backend.
          For CLJS: (shadow.cljs.devtools.api/watch :app) then (shadow.cljs.devtools.api/repl :app)"
-   :task (clojure {:env (current-env)} "-M:dev:cljs -m nrepl.cmdline --middleware \"[shadow.cljs.devtools.server.nrepl/middleware,cider.nrepl/cider-middleware]\"")}
+   :requires ([babashka.fs :as fs])
+   :task (do
+           (if (fs/exists? mermaid-bundle)
+             (run 'vendor)
+             (println "Skipping vendor: run 'npm install' to render mermaid diagrams (they show source until then)"))
+           (clojure {:env (current-env)} "-M:dev:cljs -m nrepl.cmdline --middleware \"[shadow.cljs.devtools.server.nrepl/middleware,cider.nrepl/cider-middleware]\""))}
+
+  vendor
+  {:doc "Copy the mermaid bundle from node_modules into resources/public/vendor"
+   :requires ([babashka.fs :as fs])
+   :task (let [dest "resources/public/vendor"]
+           (fs/create-dirs dest)
+           (fs/copy mermaid-bundle dest {:replace-existing true}))}
 
   serve
   {:doc "Build and serve release frontend on port 3000 (requires backend on 8080)"
    :task (do
            (shell "npm install")
+           (run 'vendor)
            (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
            ;; Render index-template.html with hashed asset paths
            (let [manifest (edn/read-string (slurp "resources/public/js/manifest.edn"))
@@ -29,7 +44,12 @@
 
   watch
   {:doc "Start shadow-cljs watch (alternative to REPL-based workflow)"
-   :task (shell "npx shadow-cljs -A:dev:cljs watch app")}
+   :requires ([babashka.fs :as fs])
+   :task (do
+           (if (fs/exists? mermaid-bundle)
+             (run 'vendor)
+             (println "Skipping vendor: run 'npm install' to render mermaid diagrams (they show source until then)"))
+           (shell "npx shadow-cljs -A:dev:cljs watch app"))}
 
   test
   {:doc "Run tests (kaocha includes RCT via rct-test.clj)"
@@ -45,6 +65,7 @@
    :task (do
            ;; Build frontend
            (shell "npm install")
+           (run 'vendor)
            (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
            ;; Build and push container
            (clojure "-T:jib build"))}}}
