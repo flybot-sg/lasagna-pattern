@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Code blocks lost backslashes before `.`, `(`, `)`, `[` and `]`, so `#"\d+\.\d+"` showed as `#"\d+.\d+"`; they now render as written - [#28](https://github.com/flybot-sg/lasagna-pattern/issues/28).
 
+### Security
+
+- Post content is sanitized with DOMPurify before it is rendered.
+
 ## [0.4.4] - 2026-09-14
 
 ### Added
