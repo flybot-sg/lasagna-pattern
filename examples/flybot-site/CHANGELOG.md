@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-09-14
+
 ### Added
 
 - GitHub icon in the site header - [#23](https://github.com/flybot-sg/lasagna-pattern/issues/23).
