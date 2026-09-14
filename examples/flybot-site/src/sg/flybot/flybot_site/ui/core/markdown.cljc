@@ -182,17 +182,11 @@
                                 (str "<pre><code class=\"hljs\">" highlighted "</code></pre>")))))}}))
        m)))
 
-(defn- unescape-markdown [content]
-  #?(:clj content
-     :cljs (if (string? content)
-             (.replace content (js/RegExp. "\\\\([.()\\[\\]])" "g") "$1")
-             content)))
-
 (defn render-markdown
   "Markdown to hiccup. CLJ: the text in a pre (for RCT). CLJS: marked +
    highlight.js, with diagrams drawn once the element is in the DOM."
   [content]
-  (let [body (-> content db/strip-frontmatter unescape-markdown)]
+  (let [body (db/strip-frontmatter content)]
     #?(:clj [:pre body]
        :cljs (when (seq body)
                [:div {:innerHTML (.parse marked-instance body)

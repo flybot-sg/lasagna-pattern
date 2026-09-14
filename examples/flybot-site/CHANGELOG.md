@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- npm dependencies are pinned with a committed `package-lock.json`, so every build ships the same versions - [#28](https://github.com/flybot-sg/lasagna-pattern/issues/28).
+
+### Fixed
+
+- Code blocks lost backslashes before `.`, `(`, `)`, `[` and `]`, so `#"\d+\.\d+"` showed as `#"\d+.\d+"`; they now render as written - [#28](https://github.com/flybot-sg/lasagna-pattern/issues/28).
+
 ## [0.4.4] - 2026-09-14
 
 ### Added
