@@ -26,7 +26,7 @@
   serve
   {:doc "Build and serve release frontend on port 3000 (requires backend on 8080)"
    :task (do
-           (shell "npm install")
+           (shell "npm ci")
            (run 'vendor)
            (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
            ;; Render index-template.html with hashed asset paths
@@ -64,7 +64,7 @@
    :depends [clean]
    :task (do
            ;; Build frontend
-           (shell "npm install")
+           (shell "npm ci")
            (run 'vendor)
            (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
            ;; Build and push container
