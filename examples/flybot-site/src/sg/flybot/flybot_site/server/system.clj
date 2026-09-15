@@ -179,10 +179,10 @@
                                             (update "connect-src" conj "ws://localhost:*")))))
 
 (defn- wrap-security-headers
-  "Add `headers` to every response; handler headers win."
+  "Set `headers` on every response, overriding the handler."
   [handler headers]
   (fn [request]
-    (update (handler request) :headers #(merge headers %))))
+    (update (handler request) :headers merge headers)))
 
 ^:rct/test
 (comment
@@ -195,7 +195,7 @@
   (let [app (wrap-security-headers (fn [_] {:status 200 :headers {"X-Frame-Options" "SAMEORIGIN"}})
                                    {"X-Frame-Options" "DENY" "X-Content-Type-Options" "nosniff"})]
     (:headers (app {})))
-  ;=> {"X-Frame-Options" "SAMEORIGIN" "X-Content-Type-Options" "nosniff"}
+  ;=> {"X-Frame-Options" "DENY" "X-Content-Type-Options" "nosniff"}
   )
 
 (defn- wrap-cache-control
