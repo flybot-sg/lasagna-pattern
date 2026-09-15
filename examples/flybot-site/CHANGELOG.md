@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - npm dependencies are pinned with a committed `package-lock.json`, so every build ships the same versions - [#28](https://github.com/flybot-sg/lasagna-pattern/issues/28).
+- `shadow-cljs` npm package bumped to 3.3.5, matching `deps.edn`
 
 ### Fixed
 

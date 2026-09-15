@@ -28,7 +28,6 @@
              (println (str "Stamping version " version " into index.html"))
              (spit "resources/public/index.html" (str/replace index-tpl "{{version}}" version))
              (try
-               (shell "npm install")
                (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
                (shell "aws s3 sync resources/public" (str "s3://" bucket) "--delete")
                (finally
