@@ -8,6 +8,6 @@
     "clean": "rm -rf resources/public/js"
   },
   "devDependencies": {
-    "shadow-cljs": "^2.28.22"
+    "shadow-cljs": "^3.3.5"
   }
 }

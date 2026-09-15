@@ -1,4 +1,5 @@
 {:min-bb-version "1.0.0"
+ :deps-resolver :jvm
  :tasks
  {:requires [[babashka.fs :as fs]
              [clojure.string :as str]

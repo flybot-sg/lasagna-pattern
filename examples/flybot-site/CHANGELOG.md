@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- npm dependencies are pinned with a committed `package-lock.json`, so every build ships the same versions - [#28](https://github.com/flybot-sg/lasagna-pattern/issues/28).
+- `shadow-cljs` npm package bumped to 3.3.5, matching `deps.edn`
+
+### Fixed
+
+- Code blocks lost backslashes before `.`, `(`, `)`, `[` and `]`, so `#"\d+\.\d+"` showed as `#"\d+.\d+"`; they now render as written - [#28](https://github.com/flybot-sg/lasagna-pattern/issues/28).
+
+### Security
+
+- Post content is sanitized with DOMPurify before it is rendered.
+- Cross-origin API calls are only allowed from `BLOG_ALLOWED_ORIGINS` (empty by default) and never with credentials; other origins get no CORS headers.
+- Every response carries `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and `Strict-Transport-Security`.
+
 ## [0.4.4] - 2026-09-14
 
 ### Added

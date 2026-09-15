@@ -67,6 +67,7 @@ Environment variables (see `.env.example`):
 | `DATAHIKE_BACKEND` | `:mem`, `:file`, or `:s3` |
 | `GOOGLE_CLIENT_ID` | OAuth client ID |
 | `BLOG_OWNER_EMAILS` | Comma-separated owner emails |
+| `BLOG_ALLOWED_ORIGINS` | Comma-separated origins allowed to call `/api` from a browser; empty means none. Prod needs `https://pattern.flybot.sg` |
 
 ## Role-Based API
 

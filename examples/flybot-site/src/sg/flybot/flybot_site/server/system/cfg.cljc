@@ -9,7 +9,7 @@
    Config structure:
    ```clojure
    {:mode :prod  ; or :dev, :dev-with-oauth2
-    :server {:port 8080 :base-url \"http://localhost:8080\"}
+    :server {:port 8080 :base-url \"http://localhost:8080\" :allowed-origins #{\"https://pattern.flybot.sg\"}}
     :db {:backend :mem :id \"blog\"}
     :auth {:google-client-id \"...\" :google-client-secret \"...\"}
     :session {:secret \"32-hex-chars\" :timeout 43200}}
@@ -27,7 +27,8 @@
   {::server
    [:map
     [:port {:optional true} :int]
-    [:base-url {:optional true} :string]]})
+    [:base-url {:optional true} :string]
+    [:allowed-origins {:optional true} [:maybe [:or :string [:set :string]]]]]})
 
 (def db-registry
   {::db
@@ -182,8 +183,8 @@
 ;;=============================================================================
 
 #?(:clj
-   (defn parse-owner-emails
-     "Parse comma-separated emails to set."
+   (defn parse-set
+     "Comma-separated string or set to set."
      [s]
      (cond
        (set? s) s
@@ -217,7 +218,8 @@
   "Default configuration values."
   {:mode :prod
    :server {:port 8080
-            :base-url "http://localhost:8080"}
+            :base-url "http://localhost:8080"
+            :allowed-origins #{}}
    :db {:backend :mem
         :id "blog"}
    :auth {:owner-emails #{}}
@@ -257,7 +259,7 @@
 
       Environment variables:
       - BLOG_MODE (:prod, :dev, :dev-with-oauth2) - defaults to :prod
-      - BLOG_PORT, BLOG_BASE_URL
+      - BLOG_PORT, BLOG_BASE_URL, BLOG_ALLOWED_ORIGINS
       - DATAHIKE_BACKEND (:mem, :file, :s3), DATAHIKE_PATH, DATAHIKE_BUCKET, DATAHIKE_REGION, DATAHIKE_ID
       - GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
       - BLOG_OWNER_EMAILS, BLOG_ALLOWED_EMAILS
@@ -267,7 +269,8 @@
      []
      (cond->
       {:server {:port (some-> (get-env "BLOG_PORT") parse-long)
-                :base-url (get-env "BLOG_BASE_URL")}
+                :base-url (get-env "BLOG_BASE_URL")
+                :allowed-origins (get-env "BLOG_ALLOWED_ORIGINS")}
        :db {:backend (some-> (get-env "DATAHIKE_BACKEND") keyword)
             :path (get-env "DATAHIKE_PATH")
             :bucket (get-env "DATAHIKE_BUCKET")
@@ -296,16 +299,17 @@
       Validation is mode-aware (Malli schema enforces requirements per mode).
       Returns config ready for make-system."
      [cfg]
-     (let [merged (apply-defaults cfg)
-           with-parsed-emails (update-in merged [:auth :owner-emails] parse-owner-emails)]
-       (validate-cfg with-parsed-emails)
-       with-parsed-emails)))
+     (let [parsed (-> (apply-defaults cfg)
+                      (update-in [:auth :owner-emails] parse-set)
+                      (update-in [:server :allowed-origins] parse-set))]
+       (validate-cfg parsed)
+       parsed)))
 
 ^:rct/test
 (comment
   ;; Defaults
   (:mode defaults) ;=> :prod
-  (:server defaults) ;=> {:port 8080 :base-url "http://localhost:8080"}
+  (:server defaults) ;=> {:port 8080 :base-url "http://localhost:8080" :allowed-origins #{}}
 
   ;; Mode validation - :dev allows everything optional
   ((validator ::config) {:mode :dev}) ;=> true
@@ -336,14 +340,21 @@
 
   ;; Apply defaults
   (:mode (apply-defaults {})) ;=> :prod
-  (:server (apply-defaults {})) ;=> {:port 8080 :base-url "http://localhost:8080"}
+  (:server (apply-defaults {}))
+  ;=> {:port 8080 :base-url "http://localhost:8080" :allowed-origins #{}}
   (:server (apply-defaults {:server {:port 3000}}))
-  ;=> {:port 3000 :base-url "http://localhost:8080"}
+  ;=> {:port 3000 :base-url "http://localhost:8080" :allowed-origins #{}}
 
-  ;; Parse owner emails
-  (parse-owner-emails nil) ;=> #{}
-  (parse-owner-emails "") ;=> #{}
-  (parse-owner-emails "a@b.com") ;=> #{"a@b.com"}
-  (parse-owner-emails "a@b.com, c@d.com") ;=> #{"a@b.com" "c@d.com"}
-  (parse-owner-emails #{"already" "a-set"}) ;=> #{"already" "a-set"}
+  ;; Parse sets
+  (parse-set nil) ;=> #{}
+  (parse-set "") ;=> #{}
+  (parse-set "a@b.com") ;=> #{"a@b.com"}
+  (parse-set "a@b.com, c@d.com") ;=> #{"a@b.com" "c@d.com"}
+  (parse-set #{"already" "a-set"}) ;=> #{"already" "a-set"}
+
+  ;; Allowed origins
+  (get-in (prepare-cfg {:mode :dev}) [:server :allowed-origins]) ;=> #{}
+  (get-in (prepare-cfg {:mode :dev :server {:allowed-origins "https://a.test, https://b.test"}})
+          [:server :allowed-origins])
+  ;=> #{"https://a.test" "https://b.test"}
   )
