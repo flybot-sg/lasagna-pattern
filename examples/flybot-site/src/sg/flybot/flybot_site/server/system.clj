@@ -107,20 +107,43 @@
 ;;=============================================================================
 
 (defn- wrap-cors
-  "Add CORS headers for cross-origin requests."
-  [handler]
+  "CORS headers for requests from `origins`; other origins get none."
+  [handler origins]
   (fn [request]
-    (let [origin (get-in request [:headers "origin"] "*")]
-      (if (= :options (:request-method request))
+    (let [origin (get-in request [:headers "origin"])]
+      (cond
+        (not (contains? origins origin)) (handler request)
+
+        (= :options (:request-method request))
         {:status 204
          :headers {"Access-Control-Allow-Origin" origin
-                   "Access-Control-Allow-Methods" "GET, POST, PUT, DELETE, OPTIONS"
-                   "Access-Control-Allow-Headers" "Content-Type, Accept, Authorization"
-                   "Access-Control-Allow-Credentials" "true"
-                   "Access-Control-Max-Age" "86400"}}
-        (-> (handler request)
-            (assoc-in [:headers "Access-Control-Allow-Origin"] origin)
-            (assoc-in [:headers "Access-Control-Allow-Credentials"] "true"))))))
+                   "Access-Control-Allow-Methods" "GET, POST, OPTIONS"
+                   "Access-Control-Allow-Headers" "Content-Type, Accept"
+                   "Access-Control-Max-Age" "86400"
+                   "Vary" "Origin"}}
+
+        :else
+        (update (handler request) :headers assoc
+                "Access-Control-Allow-Origin" origin
+                "Vary" "Origin")))))
+
+^:rct/test
+(comment
+  (let [cors (wrap-cors (fn [_] {:status 200}) #{"https://pattern.flybot.sg"})
+        response (cors {:request-method :post :headers {"origin" "https://pattern.flybot.sg"}})]
+    (select-keys (:headers response) ["Access-Control-Allow-Origin" "Vary"]))
+  ;=> {"Access-Control-Allow-Origin" "https://pattern.flybot.sg" "Vary" "Origin"}
+
+  (let [cors (wrap-cors (fn [_] {:status 200}) #{"https://pattern.flybot.sg"})]
+    [(:headers (cors {:request-method :post :headers {"origin" "https://evil.test"}}))
+     (:headers (cors {:request-method :post}))])
+  ;=> [nil nil]
+
+  (let [cors (wrap-cors (fn [_] (throw (ex-info "called" {}))) #{"https://pattern.flybot.sg"})
+        response (cors {:request-method :options :headers {"origin" "https://pattern.flybot.sg"}})]
+    [(:status response) (get-in response [:headers "Access-Control-Allow-Methods"])])
+  ;=> [204 "GET, POST, OPTIONS"]
+  )
 
 (defn- wrap-cache-control
   "Set Cache-Control headers based on asset type.
@@ -227,7 +250,7 @@
   [config]
   (let [{:keys [server db auth session init log uploads]} (cfg/prepare-cfg config)
         ;; Extract validated config values (defaults already applied)
-        {:keys [port base-url]} server
+        {:keys [port base-url allowed-origins]} server
         {:keys [backend path id bucket region]} db
         {uploads-type :type uploads-bucket :bucket uploads-region :region uploads-dir :dir} uploads
         {:keys [owner-emails allowed-email-pattern
@@ -368,7 +391,7 @@
                  (wrap-session session-config)
                  wrap-keyword-params
                  wrap-params
-                 wrap-cors
+                 (wrap-cors allowed-origins)
                  wrap-error-handler)))
 
       ;;-----------------------------------------------------------------------

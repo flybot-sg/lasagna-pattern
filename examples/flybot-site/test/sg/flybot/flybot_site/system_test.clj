@@ -28,7 +28,8 @@
 (def test-config
   {:mode :dev
    :server {:port test-port
-            :base-url (str "http://localhost:" test-port)}
+            :base-url (str "http://localhost:" test-port)
+            :allowed-origins #{"https://allowed.test"}}
    :db {:backend :mem
         :id "test-blog"}
    :auth {:owner-emails #{"owner@test.com"}
@@ -126,6 +127,18 @@
       (is (= 200 status))
       (is (contains? body :schema) "Response has :schema")
       (is (contains? body :sample) "Response has :sample data"))))
+
+(deftest cors-test
+  (let [allow-origin (fn [origin]
+                       (-> (http/request {:url (str "http://localhost:" test-port "/api/_schema")
+                                          :method :get
+                                          :headers {"Origin" origin}
+                                          :throw-exceptions false})
+                           (get-in [:headers "Access-Control-Allow-Origin"])))]
+    (testing "an allowlisted origin is echoed"
+      (is (= "https://allowed.test" (allow-origin "https://allowed.test"))))
+    (testing "other origins get no CORS headers"
+      (is (nil? (allow-origin "https://evil.test"))))))
 
 (deftest posts-crud-test
   (testing "Create post via :member :posts collection"
