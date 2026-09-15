@@ -145,6 +145,59 @@
   ;=> [204 "GET, POST, OPTIONS"]
   )
 
+(def ^:private csp-sources
+  "CSP sources by directive. Inline styles are needed by mermaid SVGs and the editor."
+  {"default-src" ["'self'"]
+   "script-src" ["'self'"]
+   "style-src" ["'self'" "'unsafe-inline'" "https://fonts.googleapis.com" "https://uicdn.toast.com"]
+   "font-src" ["'self'" "https://fonts.gstatic.com"]
+   "img-src" ["'self'" "data:" "https:"]
+   "connect-src" ["'self'"]
+   "frame-ancestors" ["'none'"]
+   "form-action" ["'self'"]
+   "base-uri" ["'self'"]
+   "object-src" ["'none'"]})
+
+(defn- csp
+  "CSP header value for `sources`."
+  [sources]
+  (str/join "; " (for [[directive srcs] (sort sources)]
+                   (str/join " " (cons directive srcs)))))
+
+(def ^:private prod-security-headers
+  {"Content-Security-Policy" (csp csp-sources)
+   "X-Frame-Options" "DENY"
+   "X-Content-Type-Options" "nosniff"
+   "Referrer-Policy" "strict-origin-when-cross-origin"
+   "Strict-Transport-Security" "max-age=31536000; includeSubDomains"})
+
+(def ^:private dev-security-headers
+  "Prod headers with a CSP that admits shadow-cljs eval and websocket."
+  (assoc prod-security-headers
+         "Content-Security-Policy" (csp (-> csp-sources
+                                            (update "script-src" conj "'unsafe-eval'")
+                                            (update "connect-src" conj "ws://localhost:*")))))
+
+(defn- wrap-security-headers
+  "Add `headers` to every response; handler headers win."
+  [handler headers]
+  (fn [request]
+    (update (handler request) :headers #(merge headers %))))
+
+^:rct/test
+(comment
+  (get prod-security-headers "Content-Security-Policy")
+  ;=> "base-uri 'self'; connect-src 'self'; default-src 'self'; font-src 'self' https://fonts.gstatic.com; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https:; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://uicdn.toast.com"
+
+  (get dev-security-headers "Content-Security-Policy")
+  ;=> "base-uri 'self'; connect-src 'self' ws://localhost:*; default-src 'self'; font-src 'self' https://fonts.gstatic.com; form-action 'self'; frame-ancestors 'none'; img-src 'self' data: https:; object-src 'none'; script-src 'self' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://uicdn.toast.com"
+
+  (let [app (wrap-security-headers (fn [_] {:status 200 :headers {"X-Frame-Options" "SAMEORIGIN"}})
+                                   {"X-Frame-Options" "DENY" "X-Content-Type-Options" "nosniff"})]
+    (:headers (app {})))
+  ;=> {"X-Frame-Options" "SAMEORIGIN" "X-Content-Type-Options" "nosniff"}
+  )
+
 (defn- wrap-cache-control
   "Set Cache-Control headers based on asset type.
    - HTML: no-store (always fresh)
@@ -280,6 +333,7 @@
       ::base-url base-url
       ::db-cfg db-cfg
       ::owner-emails owner-emails
+      ::security-headers prod-security-headers
 
       ;;-----------------------------------------------------------------------
       ;; Logger (mulog)
@@ -358,7 +412,7 @@
       ;; Note: wrap-dev-user is a no-op when dev-user is nil
       ;;-----------------------------------------------------------------------
       ::ring-app
-      (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger ::db ::owner-emails]
+      (fnk [::api-fn ::session-config ::dev-user ::base-url ::upload-handler ::logger ::db ::owner-emails ::security-headers]
            (mu/log ::ring-app-building)
            (let [js-path    (or (read-js-path) "main.js")
                  css-ver    (or (asset-version "public/css/style.css") "0")
@@ -392,7 +446,8 @@
                  wrap-keyword-params
                  wrap-params
                  (wrap-cors allowed-origins)
-                 wrap-error-handler)))
+                 wrap-error-handler
+                 (wrap-security-headers security-headers))))
 
       ;;-----------------------------------------------------------------------
       ;; HTTP Server
@@ -447,7 +502,7 @@
             :roles roles}))))
 
 (defn make-dev-system
-  "Create dev system with auto-login user and insecure cookies.
+  "Create dev system with auto-login user, insecure cookies and dev CSP.
 
    Extends base system via assoc - the fun-map associative DI pattern.
    Use for local development without OAuth flow."
@@ -458,10 +513,11 @@
         session-key (cfg/parse-session-secret secret)]
     (-> (make-base-system config)
         (assoc ::session-config (make-dev-session-config session-key))
-        (assoc ::dev-user (make-dev-user-component dev-user-cfg)))))
+        (assoc ::dev-user (make-dev-user-component dev-user-cfg))
+        (assoc ::security-headers dev-security-headers))))
 
 (defn make-dev-oauth-system
-  "Create dev system with OAuth but insecure cookies.
+  "Create dev system with OAuth, insecure cookies and dev CSP.
 
    Extends base system via assoc - the fun-map associative DI pattern.
    Use for testing OAuth flow locally (no auto-login)."
@@ -470,7 +526,8 @@
         {:keys [secret]} session
         session-key (cfg/parse-session-secret secret)]
     (-> (make-base-system config)
-        (assoc ::session-config (make-dev-session-config session-key)))))
+        (assoc ::session-config (make-dev-session-config session-key))
+        (assoc ::security-headers dev-security-headers))))
 
 (defn make-system
   "Create the appropriate system based on :mode in config.

@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Post content is sanitized with DOMPurify before it is rendered.
 - Cross-origin API calls are only allowed from `BLOG_ALLOWED_ORIGINS` (empty by default) and never with credentials; other origins get no CORS headers.
+- Every response carries `Content-Security-Policy`, `X-Frame-Options`, `X-Content-Type-Options`, `Referrer-Policy` and `Strict-Transport-Security`.
 
 ## [0.4.4] - 2026-09-14
 

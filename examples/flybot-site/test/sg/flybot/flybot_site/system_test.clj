@@ -140,6 +140,17 @@
     (testing "other origins get no CORS headers"
       (is (nil? (allow-origin "https://evil.test"))))))
 
+(deftest security-headers-test
+  (doseq [path ["/" "/api/_schema"]]
+    (testing (str path " carries the security headers")
+      (let [{:keys [headers]} (http/request {:url (str "http://localhost:" test-port path)
+                                            :method :get
+                                            :throw-exceptions false})]
+        (is (= "DENY" (get headers "X-Frame-Options")))
+        (is (= "nosniff" (get headers "X-Content-Type-Options")))
+        (is (= "strict-origin-when-cross-origin" (get headers "Referrer-Policy")))
+        (is (str/includes? (get headers "Content-Security-Policy") "frame-ancestors 'none'"))))))
+
 (deftest posts-crud-test
   (testing "Create post via :member :posts collection"
     ;; Dev mode has all roles, so :member :posts is available
