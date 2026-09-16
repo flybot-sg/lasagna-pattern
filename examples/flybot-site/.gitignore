@@ -7,7 +7,6 @@ resources/public/vendor/
 
 # Node
 node_modules/
-package-lock.json
 
 # Editor
 .nrepl-port

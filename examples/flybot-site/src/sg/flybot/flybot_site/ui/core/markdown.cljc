@@ -1,9 +1,10 @@
 (ns sg.flybot.flybot-site.ui.core.markdown
-  "Runtime markdown rendering: marked + highlight.js, with ```mermaid fences
-   drawn by a lazily loaded, self-hosted mermaid."
+  "Markdown rendering: marked, highlight.js and DOMPurify, with ```mermaid
+   fences drawn by a lazily loaded, self-hosted mermaid."
   (:require [clojure.string :as str]
             [sg.flybot.flybot-site.ui.core.db :as db]
             #?(:cljs ["marked" :refer [Marked]])
+            #?(:cljs ["dompurify" :as DOMPurify])
             #?(:cljs ["highlight.js/lib/core" :as hljs])
             #?(:cljs ["highlight.js/lib/languages/clojure" :as hljs-clojure])
             #?(:cljs ["highlight.js/lib/languages/javascript" :as hljs-js])
@@ -63,22 +64,6 @@
 ;; mermaid (CLJS only)
 ;;=============================================================================
 
-(defn- escape-attr
-  "Escape s for a double-quoted HTML attribute value."
-  [s]
-  (-> s
-      (str/replace "&" "&amp;")
-      (str/replace "\"" "&quot;")
-      (str/replace "<" "&lt;")
-      (str/replace ">" "&gt;")))
-
-^:rct/test
-(comment
-  (escape-attr "A[\"start\"] --> B") ;=> "A[&quot;start&quot;] --&gt; B"
-  ;; & first, so its entities are not escaped again
-  (escape-attr "a & b<br/>") ;=> "a &amp; b&lt;br/&gt;"
-  )
-
 #?(:cljs
    (def ^:private mermaid-url "/vendor/mermaid.min.js"))
 
@@ -106,17 +91,23 @@
    (defonce ^:private diagram-counter (atom 0)))
 
 #?(:cljs
+   (defn- diagram-src
+     "Decoded data-src of a pre.mermaid node."
+     [node]
+     (js/decodeURIComponent (.getAttribute node "data-src"))))
+
+#?(:cljs
    (defn- show-source!
      "Show a diagram's definition as a code block when it cannot be drawn."
      [node]
-     (set! (.-textContent node) (.getAttribute node "data-src"))
+     (set! (.-textContent node) (diagram-src node))
      (.add (.-classList node) "mermaid-failed")))
 
 #?(:cljs
    (defn- render-diagram!
      "Draw one pre.mermaid node from its data-src. Never rejects."
      [^js mermaid node]
-     (-> (.render mermaid (str "mermaid-" (swap! diagram-counter inc)) (.getAttribute node "data-src"))
+     (-> (.render mermaid (str "mermaid-" (swap! diagram-counter inc)) (diagram-src node))
          (.then (fn [^js result]
                   (set! (.-innerHTML node) (.-svg result))
                   (.remove (.-classList node) "mermaid-failed")))
@@ -175,27 +166,27 @@
                           (let [code (.-text obj)
                                 lang (.-lang obj)]
                             (if (= lang "mermaid")
-                              (str "<pre class=\"mermaid\" data-src=\"" (escape-attr code) "\"></pre>")
+                              (str "<pre class=\"mermaid\" data-src=\"" (js/encodeURIComponent code) "\"></pre>")
                               (let [highlighted (if (and lang (hljs/getLanguage lang))
                                                   (.-value (hljs/highlight code #js {:language lang}))
                                                   (.-value (hljs/highlightAuto code)))]
                                 (str "<pre><code class=\"hljs\">" highlighted "</code></pre>")))))}}))
        m)))
 
-(defn- unescape-markdown [content]
-  #?(:clj content
-     :cljs (if (string? content)
-             (.replace content (js/RegExp. "\\\\([.()\\[\\]])" "g") "$1")
-             content)))
+#?(:cljs
+   (defn- md->html
+     "Markdown to sanitized HTML; post content is untrusted."
+     [s]
+     (.sanitize DOMPurify (.parse marked-instance s))))
 
 (defn render-markdown
   "Markdown to hiccup. CLJ: the text in a pre (for RCT). CLJS: marked +
    highlight.js, with diagrams drawn once the element is in the DOM."
   [content]
-  (let [body (-> content db/strip-frontmatter unescape-markdown)]
+  (let [body (db/strip-frontmatter content)]
     #?(:clj [:pre body]
        :cljs (when (seq body)
-               [:div {:innerHTML (.parse marked-instance body)
+               [:div {:innerHTML (md->html body)
                       :replicant/on-mount draw-diagrams!
                       :replicant/on-update draw-diagrams!}]))))
 
@@ -204,7 +195,7 @@
   [s]
   #?(:clj s
      :cljs (let [div (js/document.createElement "div")]
-             (set! (.-innerHTML div) (.parse marked-instance s))
+             (set! (.-innerHTML div) (md->html s))
              (-> (.-textContent div)
                  (str/replace #"\s+" " ")
                  str/trim))))

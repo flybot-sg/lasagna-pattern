@@ -6,16 +6,6 @@
           (defn current-env [] (into {} (System/getenv)))
           (def mermaid-bundle "node_modules/mermaid/dist/mermaid.min.js"))
 
-  dev
-  {:doc "Start nREPL for development. Connect editor, then (start!) for backend.
-         For CLJS: (shadow.cljs.devtools.api/watch :app) then (shadow.cljs.devtools.api/repl :app)"
-   :requires ([babashka.fs :as fs])
-   :task (do
-           (if (fs/exists? mermaid-bundle)
-             (run 'vendor)
-             (println "Skipping vendor: run 'npm install' to render mermaid diagrams (they show source until then)"))
-           (clojure {:env (current-env)} "-M:dev:cljs -m nrepl.cmdline --middleware \"[shadow.cljs.devtools.server.nrepl/middleware,cider.nrepl/cider-middleware]\""))}
-
   vendor
   {:doc "Copy the mermaid bundle from node_modules into resources/public/vendor"
    :requires ([babashka.fs :as fs])
@@ -23,11 +13,22 @@
            (fs/create-dirs dest)
            (fs/copy mermaid-bundle dest {:replace-existing true}))}
 
+  install
+  {:doc "Install npm packages from package-lock.json, then copy the mermaid bundle"
+   :task (do
+           (shell "npm ci")
+           (run 'vendor))}
+
+  dev
+  {:doc "Start nREPL for development. Connect editor, then (start!) for backend.
+         For CLJS: (shadow.cljs.devtools.api/watch :app) then (shadow.cljs.devtools.api/repl :app)"
+   :depends [install]
+   :task (clojure {:env (current-env)} "-M:dev:cljs -m nrepl.cmdline --middleware \"[shadow.cljs.devtools.server.nrepl/middleware,cider.nrepl/cider-middleware]\"")}
+
   serve
   {:doc "Build and serve release frontend on port 3000 (requires backend on 8080)"
+   :depends [install]
    :task (do
-           (shell "npm install")
-           (run 'vendor)
            (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
            ;; Render index-template.html with hashed asset paths
            (let [manifest (edn/read-string (slurp "resources/public/js/manifest.edn"))
@@ -44,12 +45,8 @@
 
   watch
   {:doc "Start shadow-cljs watch (alternative to REPL-based workflow)"
-   :requires ([babashka.fs :as fs])
-   :task (do
-           (if (fs/exists? mermaid-bundle)
-             (run 'vendor)
-             (println "Skipping vendor: run 'npm install' to render mermaid diagrams (they show source until then)"))
-           (shell "npx shadow-cljs -A:dev:cljs watch app"))}
+   :depends [install]
+   :task (shell "npx shadow-cljs -A:dev:cljs watch app")}
 
   test
   {:doc "Run tests (kaocha includes RCT via rct-test.clj)"
@@ -61,11 +58,8 @@
 
   deploy
   {:doc "Build and push container image to ECR (called by CI or manually)"
-   :depends [clean]
+   :depends [clean install]
    :task (do
-           ;; Build frontend
-           (shell "npm install")
-           (run 'vendor)
            (clojure "-M:cljs -m shadow.cljs.devtools.cli release app")
            ;; Build and push container
            (clojure "-T:jib build"))}}}

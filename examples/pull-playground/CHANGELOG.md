@@ -9,6 +9,11 @@ Releases before 0.3.0 predate this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Deploy no longer runs `npm install`, the build has no JS dependencies
+- `shadow-cljs` npm package bumped to 3.3.5, matching `deps.edn`
+
 ## [0.4.5] - 2026-04-24
 
 ### Fixed
