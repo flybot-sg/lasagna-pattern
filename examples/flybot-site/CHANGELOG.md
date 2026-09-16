@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-09-16
+
 ### Changed
 
 - npm dependencies are pinned with a committed `package-lock.json`, so every build ships the same versions - [#28](https://github.com/flybot-sg/lasagna-pattern/issues/28).
