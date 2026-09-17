@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `validated` moved to `sg.flybot.pullable.collection.malli` and `metosin/malli` is no longer a dependency. Add it to your deps to use `validated` or `sample` - [#31](https://github.com/flybot-sg/lasagna-pattern/issues/31).
+
 ## [0.1.3] - 2026-09-03
 
 ### Fixed
 
-- `read-only` and `wrap-mutable` implement `Seqable` and `Counted` only when the wrapped collection implements them. Wrapping a lookup-only collection (`lookup`, or any ILookup-only type) no longer sets `seqable?` to true and then throws on `seq` (#18)
+- `read-only` and `wrap-mutable` implement `Seqable` and `Counted` only when the wrapped collection implements them. Wrapping a lookup-only collection (`lookup`, or any ILookup-only type) no longer sets `seqable?` to true and then throws on `seq` - [#18](https://github.com/flybot-sg/lasagna-pattern/issues/18).
 
 ## [0.1.2] - 2026-09-03
 

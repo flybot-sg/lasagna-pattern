@@ -20,10 +20,10 @@ The key design insight is the **decorator pattern**: instead of writing separate
 (def posts (coll/collection (->MyDataSource conn) {:id-key :post/id}))
 
 ;; Same DataSource, different access levels
-(def public     (coll/read-only posts))                     ; no writes
-(def restricted (coll/wrap-mutable posts ownership-check))  ; custom mutation logic
-(def checked    (coll/validated restricted write-schemas))  ; Malli validation of input
-posts                                                       ; unrestricted
+(def public     (coll/read-only posts))                           ; no writes
+(def restricted (coll/wrap-mutable posts ownership-check))        ; custom mutation logic
+(def checked    (coll-malli/validated restricted write-schemas))  ; Malli validation of input
+posts                                                             ; unrestricted
 ```
 
 ## Installation
@@ -35,6 +35,8 @@ posts                                                       ; unrestricted
 ;; Leiningen
 [sg.flybot/lasagna-collection "RELEASE"]
 ```
+
+The only hard dependency is `org.clojure/clojure`. Add `metosin/malli` to use [`validated`](#validated).
 
 ## Quick Start
 
@@ -202,7 +204,7 @@ Custom mutation logic (e.g., authorization, field injection) while delegating re
 
 ### validated
 
-Malli validation of mutation input before it reaches the inner collection. Takes a map of schemas; any key omitted skips that check:
+Malli validation of mutation input before it reaches the inner collection. Requires `metosin/malli`. Takes a map of schemas; omitted keys are not checked:
 
 | Key | Checks | Applies to |
 |-----|--------|------------|
@@ -211,8 +213,10 @@ Malli validation of mutation input before it reaches the inner collection. Takes
 | `:update` | the value | UPDATE |
 
 ```clojure
+(require '[sg.flybot.pullable.collection.malli :as coll-malli])
+
 (def checked
-  (coll/validated restricted
+  (coll-malli/validated restricted
     {:query  [:map {:closed true} [:post/id :int]]
      :create [:map {:closed true} [:title :string] [:content :string]]
      :update [:map {:closed true} [:title {:optional true} :string]
@@ -223,9 +227,9 @@ Malli validation of mutation input before it reaches the inner collection. Takes
 (coll/mutate! checked {:post/id "1"} nil)                  ;=> {:error {:type :invalid-mutation ...}} — query checked first
 ```
 
-Invalid input returns `{:error {:type :invalid-mutation :message <humanized>}}` without touching the inner collection. Wrap outermost so it sees the raw client input, before other wrappers inject server-side fields.
+Invalid input returns `{:error {:type :invalid-mutation :message <humanized>}}` and never reaches the inner collection. Wrap outermost so it sees the raw client input, before other wrappers inject server-side fields.
 
-These schemas are the write policy — usually a closed subset of the entity schema (writable fields only, required-on-create), not the read schema.
+The schemas are the write policy: usually a closed subset of the entity schema, not the read schema.
 
 When serving over `remote`, map `:invalid-mutation` to a status in the `:codes` of the api-fn's `:errors` map, e.g. `{:errors {:detect :error :codes {:invalid-mutation 422}}}`. Unmapped codes fall back to 500.
 
@@ -279,7 +283,7 @@ Queries must match a declared index or include the `id-key`, otherwise throws `"
 | `atom-source` | `[]` or `[opts]` | Create atom-backed DataSource + TxSource |
 | `read-only` | `[coll]` | Wrap collection to disable mutations |
 | `wrap-mutable` | `[coll mutate-fn]` | Wrap collection with custom mutation logic |
-| `validated` | `[coll schemas]` | Wrap collection with Malli validation of mutation input |
+| `validated` | `[target schemas]` | Wrap collection with Malli validation of mutation input (`sg.flybot.pullable.collection.malli`) |
 | `lookup` | `[field-map]` | Create ILookup + Wireable from keyword→value map |
 | `mutate!` | `[coll query value]` | Protocol: create/update/delete |
 | `->wire` | `[x]` | Protocol: convert to serializable data |
