@@ -1,4 +1,4 @@
-(ns sg.flybot.pullable.collection.malli
+(ns ^:no-doc sg.flybot.pullable.collection.malli
   "Malli validation of mutation input. Requires metosin/malli."
   (:require [malli.core :as m]
             [malli.error :as me]
