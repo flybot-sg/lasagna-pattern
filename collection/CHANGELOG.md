@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `validated` moved to `sg.flybot.pullable.collection.malli` and `metosin/malli` is no longer a dependency. Add it to your deps to use `validated` or `sample` (#31)
+
 ## [0.1.3] - 2026-09-03
 
 ### Fixed

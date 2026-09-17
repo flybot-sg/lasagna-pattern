@@ -31,6 +31,7 @@
   (:require
    [sg.flybot.flybot-site.server.system.db :as db]
    [sg.flybot.pullable.collection :as coll]
+   [sg.flybot.pullable.collection.malli :as coll-malli]
    [sg.flybot.pullable.malli]
    [flybot.oie.authz :as oie-authz]
    [flybot.oie.core :as oie]
@@ -494,10 +495,10 @@
   [{:keys [conn]}]
   (let [posts       (db/posts conn)
         guest-posts (public-posts posts)
-        admin-posts (coll/validated posts post-writes)
+        admin-posts (coll-malli/validated posts post-writes)
         history     (public-history (db/post-history-lookup conn))
         users       (coll/read-only (db/users conn))
-        roles       (coll/validated (roles-lookup conn) role-writes)]
+        roles       (coll-malli/validated (roles-lookup conn) role-writes)]
     (fn [ring-request]
       (let [ident   (oie/get-identity ring-request)
             user-id (:user-id ident)]
@@ -508,8 +509,8 @@
 
           ;; Member: ILookups — DB calls only when pattern accesses them
           :member (with-role ident :member
-                    {:posts (coll/validated (member-posts posts user-id (:user-email ident))
-                                            post-writes)
+                    {:posts (coll-malli/validated (member-posts posts user-id (:user-email ident))
+                                                  post-writes)
                      :posts/history history
                      :me (me-lookup conn ident)
                      :me/profile (profile-lookup conn user-id)})
