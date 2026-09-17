@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-17
+
 ### Changed
 
 - `validated` moved to `sg.flybot.pullable.collection.malli` and `metosin/malli` is no longer a dependency. Add it to your deps to use `validated` or `sample` - [#31](https://github.com/flybot-sg/lasagna-pattern/issues/31).
+- `sg.flybot.pullable.collection.malli` marked `^:no-doc`, hidden from the cljdoc API listing - [#31](https://github.com/flybot-sg/lasagna-pattern/issues/31).
 
 ## [0.1.3] - 2026-09-03
 
