@@ -68,6 +68,21 @@
                (shell {:dir c} "bb" "test")
                (clojure {:dir c} "-M:dev:kaocha"))))}
 
+  -clr-components
+  {:depends [-components]
+   :task (filterv (fn [c] (fs/exists? (fs/file c "deps-clr.edn"))) -components)}
+
+  clr-test
+  {:doc "Run tests on ClojureCLR (needs cljr): bb clr-test [component]"
+   :depends [-clr-components -comp-task?]
+   :task (let [target (first *command-line-args*)
+               components (if target [target] -clr-components)]
+           (doseq [c components]
+             (println (str "\n=== " c " ==="))
+             (when (-comp-task? c "gen-clr-rct")
+               (shell {:dir c} "bb" "gen-clr-rct"))
+             (shell {:dir c} "cljr" "-X:test")))}
+
   dev
   {:doc "Start REPL: bb dev <component>"
    :depends [-comp-task? -load-env]

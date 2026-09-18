@@ -33,7 +33,21 @@ jobs:
           path: |
             ~/.m2/repository
             ~/.gitlibs
-          key: ${{ runner.os }}-deps-${{ hashFiles('**/deps.edn') }}
+          key: ${{ runner.os }}-deps-${{ hashFiles('**/deps.edn', '**/deps-clr.edn') }}
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Install ClojureCLR
+        run: |
+          dotnet tool install --global Clojure.Main --version 1.12.6
+          dotnet tool install --global Clojure.Cljr --version 0.1.0-beta1
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
 
       - name: Run all component tests
         run: bb test
+
+      - name: Run all suites on ClojureCLR
+        run: bb clr-test

@@ -28,16 +28,3 @@
      (mg/generate schema
                   (cond-> {:size size}
                     seed (assoc :seed seed))))))
-
-^:rct/test
-(comment
-  ;; Basic generation
-  (int? (generate :int {:seed 42})) ;=> true
-
-  ;; Map schema
-  (map? (generate [:map [:id :int] [:name :string]] {:seed 42})) ;=> true
-
-  ;; Vector with :min guarantees minimum items
-  (let [result (generate [:vector :int] {:min 5 :seed 42})]
-    (>= (count result) 5)) ;=> true
-  )

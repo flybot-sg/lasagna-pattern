@@ -118,22 +118,7 @@
                     {:query query :available-indexes indexes}))))
 
 (deftype Collection [data-source id-key indexes]
-  #?@(:clj
-      [clojure.lang.ILookup
-       (valAt [this query]
-              (.valAt this query nil))
-       (valAt [_ query not-found]
-              (lookup-by-query data-source id-key indexes query not-found))
-
-       clojure.lang.Seqable
-       (seq [_]
-            (seq (list-all data-source)))
-
-       clojure.lang.Counted
-       (count [_]
-              (count (list-all data-source)))]
-
-      :cljs
+  #?@(:cljs
       [ILookup
        (-lookup [this query]
                 (-lookup this query nil))
@@ -146,7 +131,22 @@
 
        ICounted
        (-count [_]
-               (count (list-all data-source)))]))
+               (count (list-all data-source)))]
+
+      :default
+      [clojure.lang.ILookup
+       (valAt [this query]
+              (.valAt this query nil))
+       (valAt [_ query not-found]
+              (lookup-by-query data-source id-key indexes query not-found))
+
+       clojure.lang.Seqable
+       (seq [_]
+            (seq (list-all data-source)))
+
+       clojure.lang.Counted
+       (count [_]
+              (count (list-all data-source)))]))
 
 (extend-type Collection
   Mutable
@@ -167,22 +167,7 @@
 ;;=============================================================================
 
 (deftype ReadOnly [coll]
-  #?@(:clj
-      [clojure.lang.ILookup
-       (valAt [_ query]
-              (get coll query))
-       (valAt [_ query not-found]
-              (get coll query not-found))
-
-       clojure.lang.Seqable
-       (seq [_]
-            (seq coll))
-
-       clojure.lang.Counted
-       (count [_]
-              (count coll))]
-
-      :cljs
+  #?@(:cljs
       [ILookup
        (-lookup [_ query]
                 (get coll query))
@@ -195,7 +180,22 @@
 
        ICounted
        (-count [_]
-               (count coll))]))
+               (count coll))]
+
+      :default
+      [clojure.lang.ILookup
+       (valAt [_ query]
+              (get coll query))
+       (valAt [_ query not-found]
+              (get coll query not-found))
+
+       clojure.lang.Seqable
+       (seq [_]
+            (seq coll))
+
+       clojure.lang.Counted
+       (count [_]
+              (count coll))]))
 
 (extend-type ReadOnly
   Wireable
@@ -203,19 +203,19 @@
     (->wire (.-coll this))))
 
 (deftype ReadOnlyLookup [coll]
-  #?@(:clj
-      [clojure.lang.ILookup
-       (valAt [_ query]
-              (get coll query))
-       (valAt [_ query not-found]
-              (get coll query not-found))]
-
-      :cljs
+  #?@(:cljs
       [ILookup
        (-lookup [_ query]
                 (get coll query))
        (-lookup [_ query not-found]
-                (get coll query not-found))]))
+                (get coll query not-found))]
+
+      :default
+      [clojure.lang.ILookup
+       (valAt [_ query]
+              (get coll query))
+       (valAt [_ query not-found]
+              (get coll query not-found))]))
 
 (extend-type ReadOnlyLookup
   Wireable
@@ -257,21 +257,21 @@
   (if (delay? v) @v v))
 
 (deftype FieldLookup [field-map]
-  #?@(:clj
-      [clojure.lang.ILookup
-       (valAt [this k]
-              (.valAt this k nil))
-       (valAt [_ k not-found]
-              (let [v (get field-map k ::not-found)]
-                (if (= v ::not-found) not-found (deref-if-delay v))))]
-
-      :cljs
+  #?@(:cljs
       [ILookup
        (-lookup [this k]
                 (-lookup this k nil))
        (-lookup [_ k not-found]
                 (let [v (get field-map k ::not-found)]
-                  (if (= v ::not-found) not-found (deref-if-delay v))))]))
+                  (if (= v ::not-found) not-found (deref-if-delay v))))]
+
+      :default
+      [clojure.lang.ILookup
+       (valAt [this k]
+              (.valAt this k nil))
+       (valAt [_ k not-found]
+              (let [v (get field-map k ::not-found)]
+                (if (= v ::not-found) not-found (deref-if-delay v))))]))
 
 (extend-type FieldLookup
   Wireable
@@ -307,22 +307,7 @@
 ;;=============================================================================
 
 (deftype MutableWrapper [coll mutate-fn]
-  #?@(:clj
-      [clojure.lang.ILookup
-       (valAt [_ query]
-              (get coll query))
-       (valAt [_ query not-found]
-              (get coll query not-found))
-
-       clojure.lang.Seqable
-       (seq [_]
-            (seq coll))
-
-       clojure.lang.Counted
-       (count [_]
-              (count coll))]
-
-      :cljs
+  #?@(:cljs
       [ILookup
        (-lookup [_ query]
                 (get coll query))
@@ -335,7 +320,22 @@
 
        ICounted
        (-count [_]
-               (count coll))]))
+               (count coll))]
+
+      :default
+      [clojure.lang.ILookup
+       (valAt [_ query]
+              (get coll query))
+       (valAt [_ query not-found]
+              (get coll query not-found))
+
+       clojure.lang.Seqable
+       (seq [_]
+            (seq coll))
+
+       clojure.lang.Counted
+       (count [_]
+              (count coll))]))
 
 (extend-type MutableWrapper
   Mutable
@@ -347,19 +347,19 @@
     (->wire (.-coll this))))
 
 (deftype MutableLookupWrapper [coll mutate-fn]
-  #?@(:clj
-      [clojure.lang.ILookup
-       (valAt [_ query]
-              (get coll query))
-       (valAt [_ query not-found]
-              (get coll query not-found))]
-
-      :cljs
+  #?@(:cljs
       [ILookup
        (-lookup [_ query]
                 (get coll query))
        (-lookup [_ query not-found]
-                (get coll query not-found))]))
+                (get coll query not-found))]
+
+      :default
+      [clojure.lang.ILookup
+       (valAt [_ query]
+              (get coll query))
+       (valAt [_ query not-found]
+              (get coll query not-found))]))
 
 (extend-type MutableLookupWrapper
   Mutable
