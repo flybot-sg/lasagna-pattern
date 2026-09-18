@@ -266,6 +266,7 @@
   "Returns true if x is a regex pattern"
   [x]
   #?(:clj (instance? java.util.regex.Pattern x)
+     :cljr (instance? System.Text.RegularExpressions.Regex x)
      :cljs (regexp? x)))
 
 (defn mor
@@ -336,8 +337,8 @@
            (fn [mr]
              (let [m (:val mr)
                    is-map? (map? m)]
-               (if-not #?(:clj  (instance? clojure.lang.ILookup m)
-                          :cljs (satisfies? ILookup m))
+               (if-not #?(:cljs (satisfies? ILookup m)
+                          :default (instance? clojure.lang.ILookup m))
                  (fail (str "expected map, got " (type m)) :map m)
                  (reduce
                   (fn [mr' [k mch]]
@@ -747,32 +748,33 @@
 ;;-----------------------------------------------------------------------------
 ;; Supports automatic SCI detection for sandboxed evaluation.
 ;; When SCI (org.babashka/sci) is on the classpath, it's used by default.
-;; Otherwise falls back to clojure.core/resolve and eval (CLJ only).
+;; Otherwise falls back to clojure.core/resolve and eval (CLJ/CLJR only).
 ;;
 ;; Users can override via :resolve and :eval-fn options in compile-pattern,
 ;; or by binding *resolve-sym* and *eval-form* directly.
 
 ;; Check at load time if SCI is available (no runtime penalty)
-;; CLJ: try to require sci.core
+;; CLJ/CLJR: try to require sci.core
 ;; CLJS: SCI must be configured explicitly via :resolve/:eval-fn options
-#?(:clj
+#?(:cljs
+   (def ^:private sci-available? false)
+   :default
    (def ^:private sci-available?
      (try
        (require 'sci.core)
        true
-       (catch Exception _ false)))
-   :cljs
-   (def ^:private sci-available? false))
+       (catch Exception _ false))))
 
 ;; Cached SCI context (created once at load time if SCI available)
-#?(:clj
+#?(:cljs
+   (def ^:private sci-ctx nil)
+   :default
    (def ^:private sci-ctx
      (when sci-available?
-       ((requiring-resolve 'sci.core/init) {})))
-   :cljs
-   (def ^:private sci-ctx nil))
+       ((requiring-resolve 'sci.core/init) {}))))
 
-#?(:clj
+#?(:cljs nil
+   :default
    (defn- sci-eval
      "Evaluate form using SCI. Only called when sci-available? is true."
      [form]
@@ -798,20 +800,20 @@
 (defn- default-resolve
   "Default symbol resolver. Uses SCI if available, else clojure.core/resolve."
   [sym]
-  #?(:clj (if sci-available?
-            (sci-eval sym)
-            (resolve sym))
-     :cljs (throw (ex-info "No symbol resolver. Add SCI to dependencies or provide :resolve option."
-                           {:symbol sym}))))
+  #?(:cljs (throw (ex-info "No symbol resolver. Add SCI to dependencies or provide :resolve option."
+                           {:symbol sym}))
+     :default (if sci-available?
+                (sci-eval sym)
+                (resolve sym))))
 
 (defn- default-eval
   "Default form evaluator. Uses SCI if available, else clojure.core/eval."
   [form]
-  #?(:clj (if sci-available?
-            (sci-eval form)
-            (eval form))
-     :cljs (throw (ex-info "No form evaluator. Add SCI to dependencies or provide :eval-fn option."
-                           {:form form}))))
+  #?(:cljs (throw (ex-info "No form evaluator. Add SCI to dependencies or provide :eval-fn option."
+                           {:form form}))
+     :default (if sci-available?
+                (sci-eval form)
+                (eval form))))
 
 (defn resolve-fn
   "Resolve a value to a function. Handles:
@@ -1132,7 +1134,8 @@
     ((fn walk [x]
        (cond
          (fn-form? x) x
-         (and (map? x) (not (record? x))) (apply-rules (update-vals x walk))
+         (and (map? x) (not (record? x)))
+         (apply-rules (reduce-kv (fn [m k v] (assoc m k (walk v))) (empty x) x))
          :else (apply-rules (walk/walk walk identity x))))
      ptn)))
 
@@ -1800,7 +1803,7 @@
                  *eval-form* (or eval-fn *eval-form*)]
          (cond-> (core->matcher rewritten)
            schema (wrap-with-schema-filter schema)))
-       (catch #?(:clj clojure.lang.ExceptionInfo :cljs ExceptionInfo) e
+       (catch #?(:cljs ExceptionInfo :default clojure.lang.ExceptionInfo) e
          (constantly (fail (ex-message e) :schema nil)))))))
 
 ;;-----------------------------------------------------------------------------
@@ -1947,13 +1950,15 @@
 ;;-----------------------------------------------------------------------------
 ;; Wrap match-fn rules to return nil instead of MatchFailure on non-match.
 
-#?(:clj
+#?(:cljs nil
+   :default
    (defn- schema-rule
      "Wrap match-fn to return nil on non-match (for schema rules)."
      [mf]
      (fn [s] (let [r (mf s)] (when-not (failure? r) r)))))
 
-#?(:clj
+#?(:cljs nil
+   :default
    (do
      (register-schema-rule! (schema-rule (match-fn [:= ?v] {:type (schema/infer-value-type ?v)})))
      (register-schema-rule! (schema-rule (match-fn [:map-of ?_ ?v] {:type :map :child-schema (constantly ?v)})))
@@ -2338,51 +2343,4 @@
 
   ;; Nested indexed lookup
   ((compile-pattern '{:data {{:id 1} ?x}}) (vmr {:data {{:id 1} 42}})) ;=>>
-  {:vars {'x 42}}
-
-  ;;-------------------------------------------------------------------
-  ;; Indexed lookup with :ilookup schema annotation (Malli)
-  ;;-------------------------------------------------------------------
-  ;; Collections that support ILookup (like database-backed collections) can
-  ;; be queried with map keys like {:id 1}. The :ilookup Malli property
-  ;; enables validation of indexed lookup patterns.
-  ;; Syntax: [:vector {:ilookup true} element-schema]
-
-  ;; Require malli for these tests
-  (require '[malli.core :as m])
-  (require '[sg.flybot.pullable.malli])
-
-  ;; Without :ilookup - indexed lookup pattern on seq schema returns failing matcher
-  (let [m (compile-pattern '{:users {{:id 1} ?u}}
-                           {:schema (m/schema [:map [:users [:vector [:map [:id :int] [:name :string]]]]])})]
-    m ;=>> fn?
-    (:matcher-type (m (vmr {})))) ;=> :schema
-
-  ;; With :ilookup true - indexed lookup pattern compiles
-  (compile-pattern '{:users {{:id 1} ?u}}
-                   {:schema (m/schema [:map [:users [:vector {:ilookup true}
-                                                     [:map [:id :int] [:name :string]]]]])})
-  ;=>> fn?
-
-  ;; Invalid field in indexed lookup value pattern returns failing matcher
-  (let [m (compile-pattern '{:users {{:id 1} {:invalid ?x}}}
-                           {:schema (m/schema [:map [:users [:vector {:ilookup true}
-                                                             [:map [:id :int] [:name :string]]]]])})]
-    m ;=>> fn?
-    (:matcher-type (m (vmr {})))) ;=> :schema
-
-  ;; Valid field in indexed lookup value pattern
-  (compile-pattern '{:users {{:id 1} {:name ?n}}}
-                   {:schema (m/schema [:map [:users [:vector {:ilookup true}
-                                                     [:map [:id :int] [:name :string]]]]])})
-  ;=>> fn?
-
-  ;; Deeply nested: indexed lookup inside indexed lookup
-  (compile-pattern '{:depts {{:id "eng"} {:members {{:id 1} ?member}}}}
-                   {:schema (m/schema [:map [:depts [:vector {:ilookup true}
-                                                     [:map
-                                                      [:id :string]
-                                                      [:members [:vector {:ilookup true}
-                                                                 [:map [:id :int] [:name :string]]]]]]]])}))
-  ;=>> fn?)
-
+  {:vars {'x 42}})

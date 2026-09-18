@@ -15,7 +15,7 @@ Extracting data from nested structures typically requires manual traversal code 
 - **Constraints** — Filter matches with predicates and defaults
 - **Lazy compatible** — Works with any `ILookup` implementation (databases, APIs, collections)
 - **Schema validation** — Optional compile-time validation with Malli
-- **Cross-platform** — `.cljc` throughout, runs on CLJ and CLJS
+- **Cross-platform** — `.cljc` throughout, runs on CLJ, CLJS and [ClojureCLR](https://github.com/clojure/clojure-clr)
 
 ## Installation
 
@@ -27,7 +27,7 @@ Extracting data from nested structures typically requires manual traversal code 
 [sg.flybot/lasagna-pattern "RELEASE"]
 ```
 
-Only hard dependency is `org.clojure/clojure`. Optional deps: `org.babashka/sci` (sandboxed eval, required for CLJS), `metosin/malli` (schema validation).
+Only hard dependency is `org.clojure/clojure`. Optional deps: `org.babashka/sci` (sandboxed eval, required for CLJS), `metosin/malli` (schema validation). Neither exists on ClojureCLR, which falls back to `resolve`/`eval` and the built-in schema rules.
 
 ## Usage
 
@@ -255,6 +255,7 @@ Schemas also act as **visibility control** — only declared keys are accessible
 bb test pattern    # Run full test suite (Kaocha + RCT)
 bb rct pattern     # Run RCT tests only
 bb dev pattern     # Start REPL
+bb clr-test pattern   # Run every suite on ClojureCLR (needs cljr)
 ```
 
 See `docs/internals.md` for core forms, extension handlers, symbol resolution, and gotchas, and `docs/performance-analysis.md` for complexity characteristics.

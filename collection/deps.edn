@@ -2,13 +2,16 @@
  :deps {org.clojure/clojure {:mvn/version "1.12.4"}}
  :aliases
  {:dev {:extra-paths ["notebook"]
-        :extra-deps {io.github.robertluo/rich-comment-tests {:mvn/version "1.1.78"}
+        :extra-deps {io.github.robertluo/rich-comment-tests {:mvn/version "1.1.82"}
+                     ;; bb gen-clr-rct
+                     sg.flybot/rct-clr {:mvn/version "0.1.2"}
                      nrepl/nrepl {:mvn/version "1.5.2"}
                      cider/cider-nrepl {:mvn/version "0.58.0"}
                      ;; Optional: Malli for sg.flybot.pullable.collection.malli and sample
                      metosin/malli {:mvn/version "0.20.0"}}}
-  :rct {:exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
-        :exec-args {:dirs #{"src"}}}
+  :rct {:extra-paths ["test"]
+        :exec-fn com.mjdowney.rich-comment-tests.test-runner/run-tests-in-file-tree!
+        :exec-args {:dirs #{"src" "test"}}}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.12"}
                  slipset/deps-deploy {:mvn/version "0.2.2"}}
           :ns-default build}}}

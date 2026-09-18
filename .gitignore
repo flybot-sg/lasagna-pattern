@@ -14,6 +14,9 @@
 target/
 classes/
 
+# generated CLR tests
+test-clr/
+
 # JS build artifacts
 .shadow-cljs/
 node_modules/
