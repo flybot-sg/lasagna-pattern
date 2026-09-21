@@ -10,4 +10,4 @@
          :exec-fn     cognitect.test-runner.api/test
          ;; JVM-only namespaces excluded
          :exec-args   {:dirs     ["test" "test-clr"]
-                       :patterns ["sg\\.flybot\\.(?!integrated-test$|pullable\\.malli-rct-test$).*"]}}}}
+                       :patterns ["sg\\.flybot\\.(?!rct-test$|pullable\\.malli-rct-test$).*"]}}}}
