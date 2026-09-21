@@ -1,12 +1,15 @@
 (ns sg.flybot.pullable-test
-  "ClojureScript-compatible tests for the pullable pattern matching library.
-   Uses standard clojure.test instead of RCT for cross-platform compatibility."
+  "clojure.test suite, runs on CLJ, CLJS and CLR."
   #?(:clj
      (:require
       [clojure.test :refer [deftest is testing]]
       [sg.flybot.pullable :as p :refer [match-fn rule apply-rules failure? get-schema-info]]
       [sg.flybot.pullable.malli]
       [malli.core :as m])
+     :cljr
+     (:require
+      [clojure.test :refer [deftest is testing]]
+      [sg.flybot.pullable :as p :refer [match-fn rule apply-rules failure? get-schema-info]])
      :cljs
      (:require
       [clojure.test :refer [deftest is testing]]
@@ -75,7 +78,8 @@
 (deftest match-fn-constrained-test
   ;; NOTE: :when requires runtime eval which needs SCI configured
   ;; Skip :when tests in CLJS for now, covered by Clojure RCT tests
-  #?(:clj
+  #?(:cljs nil
+     :default
      (testing ":when constraint"
        (is (= 4 ((match-fn (?x :when even?) ?x) 4)))
        (is (failure? ((match-fn (?x :when even?) ?x) 3)))))
@@ -133,14 +137,17 @@
 ;; Malli Schema Integration
 ;;=============================================================================
 
-(deftest malli-schema-test
-  (testing "malli schema info extraction"
-    (let [schema (m/schema [:map [:name :string] [:age :int]])
-          info (get-schema-info schema)]
-      (is (= :map (:type info)))
-      (is (= #{:name :age} (:valid-keys info)))))
+;; no Malli on the CLR
+#?(:cljr nil
+   :default
+   (deftest malli-schema-test
+     (testing "malli schema info extraction"
+       (let [schema (m/schema [:map [:name :string] [:age :int]])
+             info (get-schema-info schema)]
+         (is (= :map (:type info)))
+         (is (= #{:name :age} (:valid-keys info)))))
 
-  (testing "malli nested schema"
-    (let [schema (m/schema [:vector :string])
-          info (get-schema-info schema)]
-      (is (= :seq (:type info))))))
+     (testing "malli nested schema"
+       (let [schema (m/schema [:vector :string])
+             info (get-schema-info schema)]
+         (is (= :seq (:type info)))))))

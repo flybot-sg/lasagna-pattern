@@ -36,7 +36,7 @@ posts                                                             ; unrestricted
 [sg.flybot/lasagna-collection "RELEASE"]
 ```
 
-The only hard dependency is `org.clojure/clojure`. Add `metosin/malli` to use [`validated`](#validated).
+The only hard dependency is `org.clojure/clojure`. Add `metosin/malli` to use [`validated`](#validated). The core namespace runs on [ClojureCLR](https://github.com/clojure/clojure-clr); `validated` and `sample` need Malli, which has no CLR port.
 
 ## Quick Start
 
@@ -305,4 +305,5 @@ All commands are run from the **repository root** (see [root README](../README.m
 bb rct collection     # Run RCT tests only
 bb test collection    # Run full Kaocha test suite (RCT + integration)
 bb dev collection     # Start REPL
+bb cljr-test collection   # Run the RCT suite on ClojureCLR (needs cljr)
 ```

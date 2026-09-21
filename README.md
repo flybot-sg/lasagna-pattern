@@ -21,7 +21,7 @@ Traditional data access requires writing custom traversal code for each query sh
 - **Unified syntax**: same pattern language for reads and writes (CRUD)
 - **Local/remote parity**: same patterns work in-process and over HTTP
 - **Composable**: build complex queries from simple primitives
-- **Cross-platform**: works in Clojure and ClojureScript
+- **Cross-platform**: works in Clojure, ClojureScript and [ClojureCLR](https://github.com/clojure/clojure-clr)
 
 **By design**: reads support partial success (one branch can fail without failing the request), writes are one mutation per request. No subscriptions/streaming.
 
@@ -55,7 +55,7 @@ Each library is independent. Use one, two, or all three.
 
 ### pattern
 
-Core DSL. Compiles EDN patterns into matcher functions. Works with maps, sequences, and any `ILookup` implementation (databases, APIs, lazy data sources). Cross-platform CLJ/CLJS.
+Core DSL. Compiles EDN patterns into matcher functions. Works with maps, sequences, and any `ILookup` implementation (databases, APIs, lazy data sources). Cross-platform CLJ/CLJS/CLR.
 
 ```clojure
 (require '[sg.flybot.pullable :refer [match-fn]])
@@ -258,6 +258,7 @@ Each component versions and releases independently, so each keeps its own change
 - [Babashka](https://github.com/babashka/babashka) (for task running)
 - [Clojure CLI](https://clojure.org/guides/install_clojure) 1.11+
 - Java 11+
+- [`cljr`](https://github.com/clojure/clr.core.cli) (optional, ClojureCLR tests)
 
 ### Quick Start
 
@@ -290,6 +291,7 @@ All tasks are run from the repository root.
 | `bb rct <component>` | Run RCT tests for a specific component |
 | `bb test` | Run Kaocha tests for **all** components (includes RCT + integration tests) |
 | `bb test <component>` | Run Kaocha tests for a specific component |
+| `bb cljr-test [component]` | Run every suite on ClojureCLR (needs `cljr`) |
 | `bb dev <component>` | Start REPL with dev config |
 | `bb nrepl <component>` | Start nREPL server |
 | `bb clean` | Clean build artifacts for all components |
@@ -303,6 +305,21 @@ Each component has **Rich Comment Tests (RCT)** embedded in source files. Some c
 
 - `bb rct` - Fast feedback, runs only RCT assertions
 - `bb test` - Full test suite via Kaocha (RCT + integration tests)
+
+### ClojureCLR
+
+`pattern` and `collection` run on [ClojureCLR](https://github.com/clojure/clojure-clr). Install `cljr` (.NET 8 SDK):
+
+```bash
+dotnet tool install --global Clojure.Main --version 1.12.6
+dotnet tool install --global Clojure.Cljr --version 0.1.0-beta1
+```
+
+```bash
+bb cljr-test [component]   # generate the RCT test file, run every suite on ClojureCLR
+```
+
+`cljr` reads each component's `deps-clr.edn`. [rct-clr](https://github.com/flybot-sg/rct-clr) turns the RCT blocks under `src` into a `clojure.test` file in `test-clr/` (generated, not committed). Malli has no CLR port, so RCT blocks that need it live under `test/`. `remote` is JVM only.
 
 ### Documentation
 

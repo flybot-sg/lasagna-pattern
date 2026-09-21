@@ -5,4 +5,8 @@
 
   test
   {:doc "Run RCT (no kaocha needed)"
-   :task (clojure "-X:dev:rct")}}}
+   :task (clojure "-X:dev:rct")}
+
+  gen-clr-rct
+  {:doc "Generate the CLR test file from the RCT blocks"
+   :task (clojure "-M:dev -m rct-clr.gen -s src -o test-clr/sg/flybot/pullable_rct_generated_test.cljc -n sg.flybot.pullable-rct-generated-test")}}}

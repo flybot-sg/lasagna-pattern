@@ -64,6 +64,12 @@ Run the local gate first; CI runs the same checks:
 bb test
 ```
 
+With [`cljr`](https://github.com/clojure/clr.core.cli) installed, also run the ClojureCLR suites (CI does):
+
+```bash
+bb cljr-test
+```
+
 ## Commits
 
     <prefix>(<scope>): <description>
