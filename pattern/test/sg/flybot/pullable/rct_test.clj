@@ -1,4 +1,4 @@
-(ns sg.flybot.rct-test
+(ns sg.flybot.pullable.rct-test
   "Wrapper to run RCT tests alongside clojure.test"
   (:require
    [clojure.test :refer [deftest]]
