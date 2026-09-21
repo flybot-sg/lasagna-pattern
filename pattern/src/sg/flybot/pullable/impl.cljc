@@ -1134,6 +1134,7 @@
     ((fn walk [x]
        (cond
          (fn-form? x) x
+         ;; not update-vals: MAGIC runs Clojure 1.10
          (and (map? x) (not (record? x)))
          (apply-rules (reduce-kv (fn [m k v] (assoc m k (walk v))) (empty x) x))
          :else (apply-rules (walk/walk walk identity x))))
