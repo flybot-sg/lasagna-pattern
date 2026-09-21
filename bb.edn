@@ -72,8 +72,8 @@
   {:depends [-components]
    :task (filterv (fn [c] (fs/exists? (fs/file c "deps-clr.edn"))) -components)}
 
-  clr-test
-  {:doc "Run tests on ClojureCLR (needs cljr): bb clr-test [component]"
+  cljr-test
+  {:doc "Run tests on ClojureCLR (needs cljr): bb cljr-test [component]"
    :depends [-clr-components -comp-task?]
    :task (let [target (first *command-line-args*)
                components (if target [target] -clr-components)]

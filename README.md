@@ -291,7 +291,7 @@ All tasks are run from the repository root.
 | `bb rct <component>` | Run RCT tests for a specific component |
 | `bb test` | Run Kaocha tests for **all** components (includes RCT + integration tests) |
 | `bb test <component>` | Run Kaocha tests for a specific component |
-| `bb clr-test [component]` | Run every suite on ClojureCLR (needs `cljr`) |
+| `bb cljr-test [component]` | Run every suite on ClojureCLR (needs `cljr`) |
 | `bb dev <component>` | Start REPL with dev config |
 | `bb nrepl <component>` | Start nREPL server |
 | `bb clean` | Clean build artifacts for all components |
@@ -316,7 +316,7 @@ dotnet tool install --global Clojure.Cljr --version 0.1.0-beta1
 ```
 
 ```bash
-bb clr-test [component]   # generate the RCT test file, run every suite on ClojureCLR
+bb cljr-test [component]   # generate the RCT test file, run every suite on ClojureCLR
 ```
 
 `cljr` reads each component's `deps-clr.edn`. [rct-clr](https://github.com/flybot-sg/rct-clr) turns the RCT blocks under `src` into a `clojure.test` file in `test-clr/` (generated, not committed). Malli has no CLR port, so RCT blocks that need it live under `test/`. `remote` is JVM only.

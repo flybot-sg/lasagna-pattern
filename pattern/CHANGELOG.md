@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Runs on [ClojureCLR](https://github.com/clojure/clojure-clr); `bb clr-test pattern` runs both suites there. Malli and SCI stay JVM/JS only - [#34](https://github.com/flybot-sg/lasagna-pattern/issues/34).
+- Runs on [ClojureCLR](https://github.com/clojure/clojure-clr); `bb cljr-test pattern` runs both suites there. Malli and SCI stay JVM/JS only - [#34](https://github.com/flybot-sg/lasagna-pattern/issues/34).
 
 ## [0.1.3] - 2026-02-27
 

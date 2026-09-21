@@ -305,5 +305,5 @@ All commands are run from the **repository root** (see [root README](../README.m
 bb rct collection     # Run RCT tests only
 bb test collection    # Run full Kaocha test suite (RCT + integration)
 bb dev collection     # Start REPL
-bb clr-test collection   # Run the RCT suite on ClojureCLR (needs cljr)
+bb cljr-test collection   # Run the RCT suite on ClojureCLR (needs cljr)
 ```

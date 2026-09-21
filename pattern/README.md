@@ -255,7 +255,7 @@ Schemas also act as **visibility control** — only declared keys are accessible
 bb test pattern    # Run full test suite (Kaocha + RCT)
 bb rct pattern     # Run RCT tests only
 bb dev pattern     # Start REPL
-bb clr-test pattern   # Run every suite on ClojureCLR (needs cljr)
+bb cljr-test pattern   # Run every suite on ClojureCLR (needs cljr)
 ```
 
 See `docs/internals.md` for core forms, extension handlers, symbol resolution, and gotchas, and `docs/performance-analysis.md` for complexity characteristics.

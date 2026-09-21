@@ -67,7 +67,7 @@ bb test
 With [`cljr`](https://github.com/clojure/clr.core.cli) installed, also run the ClojureCLR suites (CI does):
 
 ```bash
-bb clr-test
+bb cljr-test
 ```
 
 ## Commits

@@ -50,4 +50,4 @@ jobs:
         run: bb test
 
       - name: Run all suites on ClojureCLR
-        run: bb clr-test
+        run: bb cljr-test
