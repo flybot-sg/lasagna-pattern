@@ -1,11 +1,13 @@
 ;; Read by cljr instead of deps.edn.
 {:paths ["src"]
  :aliases
- {:test {:extra-paths ["test-clr"]
+ {:test {:extra-paths ["test" "test-clr"]
          :extra-deps  {io.github.dmiller/test-runner {:git/tag "v0.5.3clr"
                                                       :git/sha "ae91dd2727bbf70eb3a6d869a19953de3819dfbc"}
                        ;; =>> in the generated RCT tests
                        flybot-sg/matcho              {:git/url "https://github.com/flybot-sg/matcho"
                                                       :git/sha "fba2a65485f4d5b1e0a69f94a3d06c467478f53f"}}
          :exec-fn     cognitect.test-runner.api/test
-         :exec-args   {:dirs ["test-clr"]}}}}
+         ;; JVM-only namespaces excluded
+         :exec-args   {:dirs     ["test" "test-clr"]
+                       :patterns ["sg\\.flybot\\.pullable\\.collection(?!\\.malli-rct-test$).*"]}}}}
