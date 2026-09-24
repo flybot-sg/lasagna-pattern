@@ -84,7 +84,7 @@
     [:post/updated-at {:doc "Last update timestamp"} :any]]))
 
 (def ^:private post-key
-  "One post by id. A plain form, not m/schema, so /api/_schema serializes it."
+  "One post by id. A form, not m/schema, so it serializes."
   [:map {:closed true} [:post/id :int]])
 
 (def ^:private guest-post-schema
@@ -124,8 +124,10 @@
   "Input schema for post CREATE: title and content required."
   (mu/required-keys post-update-input [:post/title :post/content]))
 
-(def ^:private post-policy
-  "Write policy for :member and :admin posts; member-posts adds ownership."
+(def ^:private post-writes
+  "Write policy for posts. Same for :member and :admin — the two differ in
+   *which* posts they may touch (ownership, enforced by member-posts), not
+   in which fields they may set."
   {:query  post-key
    :create post-create-input
    :update post-update-input})
@@ -140,16 +142,18 @@
              [:user/id :string]
              [:role/name role-name-schema]]))
 
-(def ^:private role-key
-  "Look up by :user/id; revoke also needs :role/name, checked by roles-lookup."
-  (m/schema [:map {:closed true}
-             [:user/id :string]
-             [:role/name {:optional true} role-name-schema]]))
+(def ^:private role-query
+  "Query schema for revoking a role (DELETE on :users/roles)."
+  role-grant-input)
 
-(def ^:private role-policy
+(def ^:private role-writes
   "Write policy for :users/roles: grant is CREATE, revoke is DELETE."
-  {:query  role-key
+  {:query  role-query
    :create role-grant-input})
+
+(def ^:private role-lookup-key
+  "Read key for :users/roles."
+  (m/schema [:map {:closed true} [:user/id :string]]))
 
 (def ^:private history-schema
   "Schema for post history lookup."
@@ -191,7 +195,7 @@
                              [:posts posts-schema]]])
    :owner (m/schema [:maybe [:map
                              [:users [:vector user-schema]]
-                             [:users/roles [:map-of role-key
+                             [:users/roles [:map-of role-lookup-key
                                             [:vector [:map [:role/name :keyword]]]]]]])})
 
 (def ^:private sample-data
@@ -297,7 +301,7 @@
                                         (pattern/vmr {}))))]
     [(check '{:guest {:posts {{:post/id "1"} ?p}}})
      (check '{:member {:posts/history {{:bogus 1} ?v}}})
-     (check '{:owner {:users/roles {{:user/id "u1" :role/name "admin"} ?r}}})])
+     (check '{:owner {:users/roles {{:user/id "u1" :role/name :admin} ?r}}})])
   ;=> [:schema :schema :schema]
   )
 
@@ -496,10 +500,10 @@
   [{:keys [conn]}]
   (let [posts       (db/posts conn)
         guest-posts (public-posts posts)
-        admin-posts (coll-malli/validated posts post-policy)
+        admin-posts (coll-malli/validated posts post-writes)
         history     (public-history (db/post-history-lookup conn))
         users       (coll/read-only (db/users conn))
-        roles       (coll-malli/validated (roles-lookup conn) role-policy)]
+        roles       (coll-malli/validated (roles-lookup conn) role-writes)]
     (fn [ring-request]
       (let [ident   (oie/get-identity ring-request)
             user-id (:user-id ident)]
@@ -511,7 +515,7 @@
           ;; Member: ILookups — DB calls only when pattern accesses them
           :member (with-role ident :member
                     {:posts (coll-malli/validated (member-posts posts user-id (:user-email ident))
-                                                  post-policy)
+                                                  post-writes)
                      :posts/history history
                      :me (me-lookup conn ident)
                      :me/profile (profile-lookup conn user-id)})
@@ -601,28 +605,28 @@
   ;=> :forbidden
 
   ;; CREATE: title and content required, nothing outside the writable set
-  (m/validate (:create post-policy) {:post/title "T" :post/content "C"}) ;=> true
-  (m/validate (:create post-policy) {:post/title "T"}) ;=> false
-  (m/validate (:create post-policy) {:post/title "T" :post/content "C" :post/titel "typo"}) ;=> false
+  (m/validate (:create post-writes) {:post/title "T" :post/content "C"}) ;=> true
+  (m/validate (:create post-writes) {:post/title "T"}) ;=> false
+  (m/validate (:create post-writes) {:post/title "T" :post/content "C" :post/titel "typo"}) ;=> false
 
   ;; UPDATE: any subset of writable fields, correctly typed
-  (m/validate (:update post-policy) {:post/title "T"}) ;=> true
-  (m/validate (:update post-policy) {:post/tags ["a"] :post/featured? true}) ;=> true
-  (m/validate (:update post-policy) {:post/title 123}) ;=> false
+  (m/validate (:update post-writes) {:post/title "T"}) ;=> true
+  (m/validate (:update post-writes) {:post/tags ["a"] :post/featured? true}) ;=> true
+  (m/validate (:update post-writes) {:post/title 123}) ;=> false
 
   ;; Server-generated fields are not writable by a client
-  (m/validate (:update post-policy) {:post/id 2}) ;=> false
-  (m/validate (:update post-policy) {:post/author "m1"}) ;=> false
-  (m/validate (:update post-policy) {:post/created-at #inst "2020"}) ;=> false
+  (m/validate (:update post-writes) {:post/id 2}) ;=> false
+  (m/validate (:update post-writes) {:post/author "m1"}) ;=> false
+  (m/validate (:update post-writes) {:post/created-at #inst "2020"}) ;=> false
 
-  (m/validate (:query post-policy) {:post/id 1}) ;=> true
-  (m/validate (:query post-policy) {:post/id "1"}) ;=> false
-  (m/validate (:query post-policy) {:post/author "alice"}) ;=> false
+  (m/validate (:query post-writes) {:post/id 1}) ;=> true
+  (m/validate (:query post-writes) {:post/id "1"}) ;=> false
+  (m/validate (:query post-writes) {:post/author "alice"}) ;=> false
 
-  (m/validate role-key {:user/id "u1"}) ;=> true
-  (m/validate role-key {:user/id "u1" :role/name :admin}) ;=> true
-  (m/validate role-key {:user/id "u1" :role/name :superadmin}) ;=> false
-  (m/validate role-key {:user/id 1}) ;=> false
+  (m/validate role-lookup-key {:user/id "u1"}) ;=> true
+  (m/validate role-lookup-key {:user/id "u1" :role/name :admin}) ;=> false
+  (m/validate role-query {:user/id "u1"}) ;=> false
+  (m/validate role-query {:user/id "u1" :role/name :admin}) ;=> true
 
   ;; Roles are an enum — a typo is not a role
   (m/validate role-grant-input {:user/id "u1" :role/name :admin}) ;=> true

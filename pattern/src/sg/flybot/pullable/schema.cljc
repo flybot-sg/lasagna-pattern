@@ -18,7 +18,7 @@
 (defn register-schema-rule!
   "Register a rule for schema type inference.
    Rule: (schema) -> {:type t, :child-schema fn, :valid-keys set, :key-error fn} | nil
-   `:key-error` (fn [k]) returns why map-pattern key `k` is invalid, or nil.
+   `:key-error` (fn [k]) -> why `k` is invalid, or nil.
    Return nil if rule doesn't apply. Rules tried in reverse order."
   [rule]
   (swap! schema-rules conj rule))

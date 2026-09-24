@@ -365,7 +365,9 @@
       (is (= [403 :schema-violation]
              (invalid? '{:member {:posts/history {{:post/id "1"} ?versions}}})))
       (is (= [403 :schema-violation]
-             (invalid? '{:owner {:users/roles {{:user/id 1} ?roles}}}))))
+             (invalid? '{:owner {:users/roles {{:user/id 1} ?roles}}})))
+      (is (= [403 :schema-violation]
+             (invalid? '{:owner {:users/roles {{:user/id "owner" :role/name :admin} ?roles}}}))))
 
     (testing "admin writes are validated on the same policy"
       (is (= [422 :invalid-mutation]

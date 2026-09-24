@@ -9,8 +9,7 @@
      (require '[sg.flybot.pullable.malli])
      (compile-pattern '{:name ?n} {:schema (m/schema [:map [:name :string]])})
 
-   {:ilookup <key-schema>} and [:map-of <key-schema> _] check lookup keys.
-   Give :ilookup a schema form, not an m/schema, so it serializes."
+   {:ilookup key-form} and [:map-of key-schema _] check lookup keys."
   (:require [sg.flybot.pullable.schema :as schema]
             #?(:cljs [malli.core :as m])
             #?(:cljs [malli.error :as me])))
