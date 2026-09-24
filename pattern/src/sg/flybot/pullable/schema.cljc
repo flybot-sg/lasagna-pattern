@@ -6,7 +6,7 @@
    - Pattern-schema validation (pre-compilation)
    - Value filtering based on schema structure
 
-   Schema rules are functions: (schema) -> {:type :child-schema :valid-keys} | nil
+   Schema rules are functions: (schema) -> {:type :child-schema :valid-keys :key-error} | nil
    Return nil to indicate the rule doesn't apply to this schema.")
 
 ;;=============================================================================
@@ -17,14 +17,16 @@
 
 (defn register-schema-rule!
   "Register a rule for schema type inference.
-   Rule: (schema) -> {:type t, :child-schema fn, :valid-keys set} | nil
+   Rule: (schema) -> {:type t, :child-schema fn, :valid-keys set, :key-error fn} | nil
+   `:key-error` (fn [k]) returns why map-pattern key `k` is invalid, or nil.
    Return nil if rule doesn't apply. Rules tried in reverse order."
   [rule]
   (swap! schema-rules conj rule))
 
 (defn get-schema-info
   "Get type info from a schema using registered rules.
-   Returns {:type keyword, :child-schema fn-or-nil, :valid-keys set-or-nil}."
+   Returns {:type keyword, :child-schema fn-or-nil, :valid-keys set-or-nil,
+            :key-error fn-or-nil}."
   [schema]
   (or (some #(% schema) (reverse @schema-rules))
       {:type :any}))
@@ -53,7 +55,7 @@
   [ptn schema core-pattern?]
   (when (and schema (core-pattern? ptn))
     (let [ptn-type (second ptn)
-          {:keys [type child-schema valid-keys indexed-lookup?]} (get-schema-info schema)
+          {:keys [type child-schema valid-keys indexed-lookup? key-error]} (get-schema-info schema)
           type-ok? (or (subseq-pattern-types ptn-type)
                        (case type
                          :any true
@@ -72,6 +74,9 @@
       (case ptn-type
         :map
         (doseq [[k child] (partition 2 (drop 2 ptn))]
+          (when-let [err (and key-error (key-error k))]
+            (throw (ex-info (str "Invalid key " (pr-str k) ": " (pr-str err))
+                            {:key k :error err})))
           (if (indexed-lookup-key? k)
             ;; Indexed lookup: schema must be :seq with :ilookup, validate child against element schema
             (when child-schema

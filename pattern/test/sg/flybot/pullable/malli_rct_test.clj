@@ -42,3 +42,47 @@
                                                                  [:map [:id :int] [:name :string]]]]]]]])})
   ;=>> fn?
   )
+
+^:rct/test
+(comment
+  (def keyed (m/schema [:map [:users [:vector {:ilookup [:map {:closed true} [:id :int]]}
+                                      [:map [:id :int] [:name :string]]]]]))
+
+  (:vars ((compile-pattern '{:users {{:id 1} ?u}} {:schema keyed})
+          (vmr {:users {{:id 1} {:id 1 :name "Alice"}}})))
+  ;=> {'u {:id 1 :name "Alice"}}
+
+  (:reason ((compile-pattern '{:users {{:id "1"} ?u}} {:schema keyed}) (vmr {})))
+  ;=> "Invalid key {:id \"1\"}: {:id [\"should be an integer\"]}"
+
+  (:reason ((compile-pattern '{:users {{:id 1 :x 2} ?u}} {:schema keyed}) (vmr {})))
+  ;=> "Invalid key {:id 1, :x 2}: {:x [\"disallowed key\"]}"
+  (:matcher-type ((compile-pattern '{:users {nil ?u}} {:schema keyed}) (vmr {})))
+  ;=> :schema
+  (:matcher-type ((compile-pattern '{:users {:admin ?u}} {:schema keyed}) (vmr {})))
+  ;=> :schema
+
+  (:reason ((compile-pattern '{:users {{:id "1"} {:name (?n :when string?)}}}
+                             {:schema keyed})
+            (vmr {})))
+  ;=> "Invalid key {:id \"1\"}: {:id [\"should be an integer\"]}"
+
+  (:vars ((compile-pattern '{:users ?all} {:schema keyed}) (vmr {:users [1 2]})))
+  ;=> {'all [1 2]}
+  (:vars ((compile-pattern '{:users {{:id "1"} ?u}}
+                           {:schema (m/schema [:map [:users [:vector {:ilookup true}
+                                                             [:map [:id :int]]]]])})
+          (vmr {:users {{:id "1"} {:id 1}}})))
+  ;=> {'u {:id 1}}
+
+  (def by-id (m/schema [:map [:history [:map-of [:map {:closed true} [:id :int]]
+                                        [:map [:title :string]]]]]))
+
+  (:vars ((compile-pattern '{:history {{:id 1} ?v}} {:schema by-id})
+          (vmr {:history {{:id 1} {:title "t"}}})))
+  ;=> {'v {:title "t"}}
+  (:reason ((compile-pattern '{:history {{:id "1"} ?v}} {:schema by-id}) (vmr {})))
+  ;=> "Invalid key {:id \"1\"}: {:id [\"should be an integer\"]}"
+  (:reason ((compile-pattern '{:history {{:id 1} {:bogus ?x}}} {:schema by-id}) (vmr {})))
+  ;=> "Key :bogus not in schema"
+  )

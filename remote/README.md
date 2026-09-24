@@ -155,7 +155,7 @@ A pattern is a mutation when it is a chain of single-key maps ending in `{query 
 
 ## Security
 
-Patterns are sandboxed: `:when` predicates are limited to a whitelist of type checks (`string?`, `int?`, ...), `fn` forms are rejected, nesting is capped at 100 levels, and with a `:schema` any undeclared key fails with `:schema-violation` (403).
+Patterns are sandboxed: `:when` predicates are limited to a whitelist of type checks (`string?`, `int?`, ...), `fn` forms are rejected, nesting is capped at 100 levels, and with a `:schema` any undeclared key or invalid lookup key fails with `:schema-violation` (403).
 
 ## Public API
 

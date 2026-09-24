@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Runs on [ClojureCLR](https://github.com/clojure/clojure-clr); `bb cljr-test pattern` runs both suites there. Malli and SCI stay JVM/JS only - [#34](https://github.com/flybot-sg/lasagna-pattern/issues/34).
+- `{:ilookup <key-schema>}` and `[:map-of <key-schema> V]` reject a non-conforming lookup key at compile time. Schema rules can return `:key-error` - [#38](https://github.com/flybot-sg/lasagna-pattern/issues/38).
+
+### Changed
+
+- Malli `[:map-of K V]` is typed as a map, not `:any`, so value patterns are checked against `V` - [#38](https://github.com/flybot-sg/lasagna-pattern/issues/38).
 
 ### Fixed
 
