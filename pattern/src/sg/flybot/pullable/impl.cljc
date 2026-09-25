@@ -1475,11 +1475,11 @@
 ;;-----------------------------------------------------------------------------
 
 (def register-schema-rule!
-  "Register a schema rule. Rule: (schema) -> {:type :child-schema :valid-keys} | nil"
+  "Register a schema rule. Rule: (schema) -> {:type :child-schema :valid-keys :key-error} | nil"
   schema/register-schema-rule!)
 
 (def get-schema-info
-  "Get schema info: {:type :child-schema :valid-keys}"
+  "Get schema info: {:type :child-schema :valid-keys :key-error}"
   schema/get-schema-info)
 
 (def infer-schema-type

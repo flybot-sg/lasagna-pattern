@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Reading `:users/roles` with `:role/name` in the key is a 403 `:schema-violation`; the extra key used to be ignored - [#38](https://github.com/flybot-sg/lasagna-pattern/issues/38).
+
 ### Fixed
 
-- A malformed lookup key is a 403 `:schema-violation` instead of a silent `nil` or a 500 - [#38](https://github.com/flybot-sg/lasagna-pattern/issues/38).
+- A malformed lookup key, or a post field the schema does not declare, is a 403 `:schema-violation` instead of a silent `nil` or a 500 - [#38](https://github.com/flybot-sg/lasagna-pattern/issues/38).
 
 ## [0.4.5] - 2026-09-16
 
