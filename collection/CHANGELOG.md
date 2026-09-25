@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] - 2026-09-25
+
 ### Added
 
 - Runs on [ClojureCLR](https://github.com/clojure/clojure-clr); the wrappers implement `ILookup`, `Seqable` and `Counted` there too, and `bb cljr-test collection` runs the RCT suite. `validated` and `sample` stay JVM/JS only (Malli) - [#34](https://github.com/flybot-sg/lasagna-pattern/issues/34).
