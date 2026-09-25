@@ -75,6 +75,12 @@
           (vmr {:users {{:id "1"} {:id 1}}})))
   ;=> {'u {:id 1}}
 
+  (def bad-key (m/schema [:map [:a :int] [:xs [:vector {:ilookup 42} :any]]]))
+  (:vars ((compile-pattern '{:a ?x} {:schema bad-key}) (vmr {:a 1 :xs [1]})))
+  ;=> {'x 1}
+  (:reason ((compile-pattern '{:xs {{:id 1} ?v}} {:schema bad-key}) (vmr {})))
+  ;=> ":malli.core/invalid-schema"
+
   (def by-id (m/schema [:map [:history [:map-of [:map {:closed true} [:id :int]]
                                         [:map [:title :string]]]]]))
 

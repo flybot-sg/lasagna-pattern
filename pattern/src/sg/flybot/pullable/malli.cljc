@@ -29,8 +29,8 @@
 (defn- key-error-fn
   "(fn [k]) -> why `k` fails `key-schema`, or nil."
   [m-explainer humanize key-schema]
-  (let [explain (m-explainer key-schema)]
-    (fn [k] (some-> (explain k) humanize))))
+  (let [explain (delay (m-explainer key-schema))]
+    (fn [k] (some-> (@explain k) humanize))))
 
 (defn- make-malli-rule
   "Create a schema rule for Malli schemas."
