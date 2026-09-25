@@ -144,8 +144,8 @@
   (doseq [path ["/" "/api/_schema"]]
     (testing (str path " carries the security headers")
       (let [{:keys [headers]} (http/request {:url (str "http://localhost:" test-port path)
-                                            :method :get
-                                            :throw-exceptions false})]
+                                             :method :get
+                                             :throw-exceptions false})]
         (is (= "DENY" (get headers "X-Frame-Options")))
         (is (= "nosniff" (get headers "X-Content-Type-Options")))
         (is (= "strict-origin-when-cross-origin" (get headers "Referrer-Policy")))
@@ -355,6 +355,19 @@
              (invalid? {:member {:posts {{:bogus 1} nil}}})))
       (is (= [422 :invalid-mutation]
              (invalid? {:member {:posts {{:post/id "1"} nil}}}))))
+
+    (testing "a malformed read key is a 403, not a 500 or a silent nil"
+      (is (= [403 :schema-violation] (invalid? '{:guest {:posts {{:post/id "1"} ?p}}})))
+      (is (= [403 :schema-violation] (invalid? '{:guest {:posts {{:bogus 1} ?p}}})))
+      (is (= [403 :schema-violation] (invalid? '{:guest {:posts {nil ?p}}})))
+      (is (= [403 :schema-violation]
+             (invalid? '{:guest {:posts {{:post/id "1"} {:post/title (?t :when string?)}}}})))
+      (is (= [403 :schema-violation]
+             (invalid? '{:member {:posts/history {{:post/id "1"} ?versions}}})))
+      (is (= [403 :schema-violation]
+             (invalid? '{:owner {:users/roles {{:user/id 1} ?roles}}})))
+      (is (= [403 :schema-violation]
+             (invalid? '{:owner {:users/roles {{:user/id "owner" :role/name :admin} ?roles}}}))))
 
     (testing "admin writes are validated on the same policy"
       (is (= [422 :invalid-mutation]

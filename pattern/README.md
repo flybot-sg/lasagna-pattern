@@ -216,7 +216,14 @@ Optional compile-time validation using `:schema` option:
 ;; Now both patterns are valid:
 '{:users ?all}              ; LIST — always valid
 '{:users {{:id 1} ?user}}   ; GET — requires :ilookup true
+
+;; A key schema instead of true also checks each key
+(m/schema [:map [:users [:vector {:ilookup [:map {:closed true} [:id :int]]}
+                         [:map [:id :int] [:name :string]]]]])
+'{:users {{:id "1"} ?user}}  ; :schema failure — :id should be an integer
 ```
+
+`[:map-of K V]` checks keys against `K` the same way. Give `:ilookup` a schema form, not an `m/schema`, so the schema serializes.
 
 Schemas also act as **visibility control** — only declared keys are accessible to patterns. Undeclared keys become effectively private.
 

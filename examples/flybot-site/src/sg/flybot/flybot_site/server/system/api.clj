@@ -83,12 +83,9 @@
     [:post/created-at {:doc "Creation timestamp"} :any]
     [:post/updated-at {:doc "Last update timestamp"} :any]]))
 
-(def post-query
-  "Query schema for post lookup (indexed fields)."
-  (m/schema
-   [:or
-    [:map [:post/id :int]]
-    [:map [:post/author :string]]]))
+(def ^:private post-key
+  "One post by id. A form, not m/schema, so it serializes."
+  [:map {:closed true} [:post/id :int]])
 
 (def ^:private guest-post-schema
   "Schema for a post as seen by guests (no author PII)."
@@ -105,11 +102,11 @@
 
 (def ^:private guest-posts-schema
   "Schema for guest posts collection."
-  (m/schema [:or [:vector guest-post-schema] [:map-of post-query guest-post-schema]]))
+  (m/schema [:vector {:ilookup post-key} guest-post-schema]))
 
 (def ^:private posts-schema
   "Schema for posts collection (list or lookup)."
-  (m/schema [:or [:vector post-schema] [:map-of post-query post-schema]]))
+  (m/schema [:vector {:ilookup post-key} post-schema]))
 
 (def ^:private writable-post-keys
   "Fields a client may set through the API. Server-generated fields
@@ -127,17 +124,11 @@
   "Input schema for post CREATE: title and content required."
   (mu/required-keys post-update-input [:post/title :post/content]))
 
-(def ^:private post-write-query
-  "Query schema for post UPDATE/DELETE. Writes address exactly one post by
-   id — :post/author is a read-only index (it matches an arbitrary one of
-   an author's posts, which is meaningless for a write)."
-  (m/schema [:map {:closed true} [:post/id :int]]))
-
 (def ^:private post-writes
   "Write policy for posts. Same for :member and :admin — the two differ in
    *which* posts they may touch (ownership, enforced by member-posts), not
    in which fields they may set."
-  {:query  post-write-query
+  {:query  post-key
    :create post-create-input
    :update post-update-input})
 
@@ -160,9 +151,13 @@
   {:query  role-query
    :create role-grant-input})
 
+(def ^:private role-lookup-key
+  "Read key for :users/roles."
+  (m/schema [:map {:closed true} [:user/id :string]]))
+
 (def ^:private history-schema
   "Schema for post history lookup."
-  (m/schema [:map-of post-query [:vector version-schema]]))
+  (m/schema [:map-of post-key [:vector version-schema]]))
 
 (def ^:private me-schema
   "Schema for current user info."
@@ -200,8 +195,7 @@
                              [:posts posts-schema]]])
    :owner (m/schema [:maybe [:map
                              [:users [:vector user-schema]]
-                             [:users/roles [:map-of
-                                            [:map [:user/id :string]]
+                             [:users/roles [:map-of role-lookup-key
                                             [:vector [:map [:role/name :keyword]]]]]]])})
 
 (def ^:private sample-data
@@ -290,14 +284,25 @@
 
 ^:rct/test
 (comment
+  (require '[sg.flybot.pullable.impl :as pattern])
+
   (m/schema? post-schema) ;=> true
-  (m/schema? post-query) ;=> true
   (m/schema? version-schema) ;=> true
   (m/schema? (:guest schema)) ;=> true
   (m/schema? (:member schema)) ;=> true
 
   (m/validate [:map [:guest (:guest schema)] [:member (:member schema)]]
               sample-data) ;=> true
+
+  (:vars ((pattern/compile-pattern '{:guest {:posts {{:post/id 1} ?p}}} {:schema schema})
+          (pattern/vmr {:guest {:posts {{:post/id 1} :hit}}})))
+  ;=> {'p :hit}
+  (let [check (fn [ptn] (:matcher-type ((pattern/compile-pattern ptn {:schema schema})
+                                        (pattern/vmr {}))))]
+    [(check '{:guest {:posts {{:post/id "1"} ?p}}})
+     (check '{:member {:posts/history {{:bogus 1} ?v}}})
+     (check '{:owner {:users/roles {{:user/id "u1" :role/name :admin} ?r}}})])
+  ;=> [:schema :schema :schema]
   )
 
 ;;=============================================================================
@@ -614,10 +619,14 @@
   (m/validate (:update post-writes) {:post/author "m1"}) ;=> false
   (m/validate (:update post-writes) {:post/created-at #inst "2020"}) ;=> false
 
-  ;; Writes address one post by id — :post/author is a read-only index
   (m/validate (:query post-writes) {:post/id 1}) ;=> true
   (m/validate (:query post-writes) {:post/id "1"}) ;=> false
   (m/validate (:query post-writes) {:post/author "alice"}) ;=> false
+
+  (m/validate role-lookup-key {:user/id "u1"}) ;=> true
+  (m/validate role-lookup-key {:user/id "u1" :role/name :admin}) ;=> false
+  (m/validate role-query {:user/id "u1"}) ;=> false
+  (m/validate role-query {:user/id "u1" :role/name :admin}) ;=> true
 
   ;; Roles are an enum — a typo is not a role
   (m/validate role-grant-input {:user/id "u1" :role/name :admin}) ;=> true

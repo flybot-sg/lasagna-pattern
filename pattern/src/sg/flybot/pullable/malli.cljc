@@ -7,9 +7,12 @@
    Usage:
      (require '[malli.core :as m])
      (require '[sg.flybot.pullable.malli])
-     (compile-pattern '{:name ?n} {:schema (m/schema [:map [:name :string]])})"
+     (compile-pattern '{:name ?n} {:schema (m/schema [:map [:name :string]])})
+
+   {:ilookup key-form} and [:map-of key-schema _] check lookup keys."
   (:require [sg.flybot.pullable.schema :as schema]
-            #?(:cljs [malli.core :as m])))
+            #?(:cljs [malli.core :as m])
+            #?(:cljs [malli.error :as me])))
 
 (def ^:private type-mapping
   {:string :string, :int :number, :double :number, :number :number
@@ -23,9 +26,15 @@
    :enum :any, := :any, :maybe :any, :or :any, :and :any
    :not :any, :re :string, :fn :any, :ref :any, :schema :any, :=> :any, :-> :any})
 
+(defn- key-error-fn
+  "(fn [k]) -> why `k` fails `key-schema`, or nil."
+  [m-explainer humanize key-schema]
+  (let [explain (delay (m-explainer key-schema))]
+    (fn [k] (some-> (@explain k) humanize))))
+
 (defn- make-malli-rule
   "Create a schema rule for Malli schemas."
-  [m-schema? m-type m-children m-entries m-properties]
+  [m-schema? m-type m-children m-entries m-properties m-explainer humanize]
   (fn malli-rule [s]
     (when (m-schema? s)
       (let [t (m-type s)
@@ -38,10 +47,17 @@
                   :valid-keys (when (seq em) (set (keys em)))})
           :tuple {:type :seq :child-schema #(nth (m-children s) % nil)}
           (:vector :sequential :set :seqable :every)
-          (let [cs (m-children s)]
-            {:type :seq
-             :child-schema (when (seq cs) (constantly (first cs)))
-             :indexed-lookup? (:ilookup props)})
+          (let [cs (m-children s)
+                ilookup (:ilookup props)]
+            (cond-> {:type :seq
+                     :child-schema (when (seq cs) (constantly (first cs)))
+                     :indexed-lookup? ilookup}
+              (and ilookup (not (true? ilookup)))
+              (assoc :key-error (key-error-fn m-explainer humanize ilookup))))
+          :map-of (let [[k v] (m-children s)]
+                    {:type :map
+                     :child-schema (constantly v)
+                     :key-error (key-error-fn m-explainer humanize k)})
           ;; Unwrap :malli.core/val wrapper (used for map entries with properties)
           :malli.core/val (malli-rule (last (m-children s)))
           :maybe (when-let [inner (first (m-children s))] (malli-rule inner))
@@ -66,7 +82,9 @@
            @(requiring-resolve 'malli.core/type)
            @(requiring-resolve 'malli.core/children)
            @(requiring-resolve 'malli.core/entries)
-           @(requiring-resolve 'malli.core/properties)))
+           @(requiring-resolve 'malli.core/properties)
+           @(requiring-resolve 'malli.core/explainer)
+           @(requiring-resolve 'malli.error/humanize)))
          ;; Extend Wireable for serialization if collection is available
          (when (try (require 'sg.flybot.pullable.collection) true (catch Exception _ false))
            (let [wireable-protocol @(requiring-resolve 'sg.flybot.pullable.collection/Wireable)]
@@ -79,4 +97,5 @@
 ;; that has both malli and collection as dependencies
 #?(:cljs
    (schema/register-schema-rule!
-    (make-malli-rule m/schema? m/type m/children m/entries m/properties)))
+    (make-malli-rule m/schema? m/type m/children m/entries m/properties
+                     m/explainer me/humanize)))

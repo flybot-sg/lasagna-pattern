@@ -8,7 +8,7 @@ Reference specification for the remote pull wire protocol. For usage and API doc
 |------|-------------|-------------|
 | `:invalid-request` | 400 | Malformed request structure |
 | `:decode-error` | 400 | Failed to decode request body |
-| `:schema-violation` | 403 | Pattern requests disallowed key |
+| `:schema-violation` | 403 | Pattern requests disallowed key or invalid lookup key |
 | `:binding-conflict` | 422 | Same variable bound to different values |
 | `:match-failure` | 422 | Pattern failed to match data |
 | `:invalid-collection` | 404 | Collection not found or unavailable |
@@ -67,7 +67,7 @@ Schema documentation uses Malli's hiccup syntax with inline properties on each f
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `:ilookup` | boolean | Enables indexed lookup patterns `{{:query} ?result}` |
+| `:ilookup` | `true` or key schema | Enables indexed lookup patterns `{{:query} ?result}`; a key schema also checks keys |
 | `:operations` | map | Documents CRUD operations (for tooling/introspection) |
 
 ### Examples
@@ -100,7 +100,7 @@ Collection schema with ILookup and operation docs:
      post-schema]))
 ```
 
-The `:ilookup` property tells the pattern compiler that this collection supports indexed lookup patterns like `{{:id 1} ?post}`. Without this annotation, such patterns are rejected at compile time.
+The `:ilookup` property tells the pattern compiler that this collection supports indexed lookup patterns like `{{:id 1} ?post}`. Without this annotation, such patterns are rejected at compile time. With a key schema instead of `true`, e.g. `{:ilookup [:map {:closed true} [:id :int]]}`, `{{:id "1"} ?post}` fails with `:schema-violation`. `[:map-of <key-schema> <value-schema>]` does the same.
 
 Nested schema:
 

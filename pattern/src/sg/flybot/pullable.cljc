@@ -46,12 +46,14 @@
 (def register-schema-rule!
   "Register a rule for schema type inference and validation.
 
-   Rule is a function: (schema) -> {:type t, :child-schema fn, :valid-keys set} | nil
+   Rule is a function:
+     (schema) -> {:type t, :child-schema fn, :valid-keys set, :key-error fn} | nil
 
    Return map fields:
    - :type        - Schema type keyword (:map, :seq, :string, :number, etc.)
    - :child-schema - (optional) fn: (key-or-index) -> sub-schema for children
    - :valid-keys   - (optional) set of allowed keys (for record schemas)
+   - :key-error    - (optional) fn: (key) -> why a pattern key is invalid, or nil
 
    Use match-fn to define rules that pattern-match the schema structure.
    Rules are tried in reverse order (last registered wins).
@@ -72,6 +74,7 @@
    - :type        - Schema type keyword (:map, :seq, :string, :number, etc.)
    - :child-schema - (optional) fn: (key-or-index) -> sub-schema for children
    - :valid-keys   - (optional) set of allowed keys (for record schemas)
+   - :key-error    - (optional) fn: (key) -> why a pattern key is invalid, or nil
 
    Example:
      (get-schema-info {:name :string :age :number})
