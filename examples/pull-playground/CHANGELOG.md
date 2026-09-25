@@ -9,6 +9,8 @@ Releases before 0.3.0 predate this file.
 
 ## [Unreleased]
 
+## [0.4.6] - 2026-09-25
+
 ### Changed
 
 - Deploy no longer runs `npm install`, the build has no JS dependencies
